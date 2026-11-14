@@ -34,7 +34,6 @@ from .state import (
     record_remote_start_and_mark_applied,
     refund_automation_attempt,
     restore_unattended_busy_plan,
-    save_plan,
 )
 from .workflow import RemotePlanRefusal, execute_remote_plan
 
@@ -346,11 +345,25 @@ def _record_unverified_receipt(
             outcome="unverified",
             reason=f"apply interrupted: {type(error).__name__}",
         )
-        save_plan(state_path, plan, receipt_path=receipt)
     except Exception as receipt_exc:
         print(
             "vps-maint warning: unverified receipt write failed: "
             f"{type(receipt_exc).__name__}",
+            file=sys.stderr,
+        )
+        return
+    # Attach the pointer through the monotonic, metadata-only path. The plan
+    # argument here is the PRE-apply snapshot while the stored row may already
+    # be "applied" (workflow persists that BEFORE the adapter runs), so a
+    # save_plan() call is refused by the backward-transition guard and silently
+    # drops the pointer -- an interrupted apply then left a receipt file on
+    # disk that nothing referenced.
+    try:
+        record_plan_receipt(state_path, plan_id=plan.plan_id, receipt_path=receipt)
+    except Exception as link_exc:
+        print(
+            "vps-maint warning: unverified receipt pointer failed: "
+            f"{type(link_exc).__name__}",
             file=sys.stderr,
         )
 

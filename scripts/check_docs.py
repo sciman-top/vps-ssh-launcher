@@ -12,8 +12,18 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# Every current doc surface: runbooks, audits and any future docs/ subtree,
+# except the historical receipts. docs/audits was outside this list while the
+# AGENTS contract claimed "docs-only changes run check_docs.py", so a broken
+# path in an audit note passed both the local gate and CI.
+CURRENT_DOC_TREES = (ROOT / "docs",)
+EXCLUDED_DOC_DIRS = {ROOT / "docs" / "change-evidence"}
 DOCS = [ROOT / "README.md", ROOT / "README.en.md", ROOT / "AGENTS.md"]
-DOCS.extend(sorted((ROOT / "docs" / "runbooks").glob("*.md")))
+for tree in CURRENT_DOC_TREES:
+    for doc in sorted(tree.rglob("*.md")):
+        if any(excluded in doc.parents for excluded in EXCLUDED_DOC_DIRS):
+            continue
+        DOCS.append(doc)
 # The HG-03 handoff kit moved out of the repository (2026-11-14 ruling:
 # workplace-network material on a public repo is metadata exposure). It now
 # lives in the operator's private workspace; when present locally the docs

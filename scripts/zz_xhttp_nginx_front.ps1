@@ -77,8 +77,11 @@ if [ -f "$MAINTAINED" ] &&
         # every other write in this lane it must wait for -Apply. Dry-run
         # only reports the pending retirement so the operator can schedule it.
         if [ "$APPLY" != '1' ]; then
+            # Report the pending retirement without touching STATUS_FILE: a
+            # read-only pass must not overwrite the last real apply's
+            # result=success/failed. The branch below (line ~313) already
+            # declares that rule for its own dry run.
             echo 'zz_xhttp_superseded_pending=maintained_front'
-            write_status success 0
             exit 0
         fi
         exec 9>"$LOCK_FILE"

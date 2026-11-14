@@ -60,6 +60,21 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertNotIn("xray.service", text)
         self.assertNotIn("sing-box", text)
 
+    def test_apply_activates_the_written_configuration(self) -> None:
+        # The http-level error_page drop-in only takes effect after nginx loads
+        # it. Apply used to run `nginx -t` alone, so the first apply left the
+        # running master on the stock 404 while the drift gate (file presence)
+        # reported green.
+        payload = _payload(self.text)
+        self.assertIn("VPS_CAMOUFLAGE_NGINX_RELOAD:-systemctl reload nginx", payload)
+        self.assertIn("if ! $NGINX_RELOAD_CMD; then", payload)
+        self.assertIn("NGINX_RELOAD_FAILED", payload)
+        self.assertLess(
+            payload.index("if ! $NGINX_TEST_CMD; then"),
+            payload.index("if ! $NGINX_RELOAD_CMD; then"),
+            "the config test must gate the reload",
+        )
+
     def _bash(self) -> str:
         bash = self._resolve_bash()
         if bash is None:
@@ -69,14 +84,11 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
     def _run(
         self, bash: str, payload: str, env: dict[str, str]
     ) -> "subprocess.CompletedProcess[str]":
-        return subprocess.run(
-            self._bash_command(bash, "-c", payload),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-            env={**os.environ, **env},
-        )
+        # Through a file, not `bash -c`: Git Bash truncates a -c script at
+        # ~8192 bytes and still exits 0, so this payload (19 KiB) only ran its
+        # first ~8 KiB and every read-only assertion silently covered less than
+        # it claimed.
+        return self._run_bash_payload(bash, payload, env=env, timeout=30)
 
     def _paths(self, bash: str, tmp: str, root: Path) -> dict[str, str]:
         return {
@@ -87,6 +99,9 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             "VPS_CAMOUFLAGE_STATUS_DIR": self._bash_path(bash, Path(tmp) / "status"),
             "VPS_CAMOUFLAGE_BACKUP_DIR": self._bash_path(bash, Path(tmp)),
             "VPS_CAMOUFLAGE_LOCK_FILE": self._bash_path(bash, Path(tmp) / "lock"),
+            # The payload reloads nginx after a passing config test; the harness
+            # has no nginx master, so both commands are stubbed.
+            "VPS_CAMOUFLAGE_NGINX_RELOAD": "true",
             "VPS_CAMOUFLAGE_DPKG_CONF": self._bash_path(
                 bash, Path(tmp) / "dpkg" / "vps-launcher-camouflage"
             ),

@@ -38,6 +38,9 @@ NGINX_ROOT="${VPS_CAMOUFLAGE_NGINX_ROOT:-/usr/share/nginx/html}"
 STATUS_DIR="${VPS_CAMOUFLAGE_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-status}"
 BACKUP_PARENT="${VPS_CAMOUFLAGE_BACKUP_DIR:-/var/backups}"
 NGINX_TEST_CMD="${VPS_CAMOUFLAGE_NGINX_TEST:-nginx -t}"
+# Reload is a separate, overridable command for the same reason the config test
+# is: the harness exercises the payload against a temporary root with no nginx.
+NGINX_RELOAD_CMD="${VPS_CAMOUFLAGE_NGINX_RELOAD:-systemctl reload nginx}"
 NGINX_CONF_DIR="${VPS_CAMOUFLAGE_NGINX_CONF_DIR:-/etc/nginx}"
 DECOY_DIR="$NGINX_ROOT/en"
 ROOT_INDEX="$NGINX_ROOT/index.html"
@@ -442,6 +445,15 @@ fi
 
 if ! $NGINX_TEST_CMD; then
     echo 'NGINX_TEST_FAILED' >&2
+    rollback
+fi
+# Activate, do not just validate. The branded 404 drop-in is http-scope
+# configuration: a config test parses it but the running master keeps serving
+# the stock error page until a reload. Without this the first apply looked
+# successful while the drift gate (which only checks file presence) stayed
+# green. A failing reload is a real regression and rolls back.
+if ! $NGINX_RELOAD_CMD; then
+    echo 'NGINX_RELOAD_FAILED' >&2
     rollback
 fi
 if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then

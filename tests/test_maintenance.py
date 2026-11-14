@@ -52,6 +52,7 @@ from vps_ssh_launcher.maintenance.models import (
 )
 from vps_ssh_launcher.maintenance.planner import build_plan
 from vps_ssh_launcher.maintenance.resources import RESOURCES, ResourceSpec
+from vps_ssh_launcher.maintenance import state as state_module
 from vps_ssh_launcher.maintenance.receipt import write_receipt
 from vps_ssh_launcher.maintenance.state import (
     list_plans,
@@ -66,8 +67,10 @@ from vps_ssh_launcher.maintenance.state import (
     save_plan_if_absent,
 )
 from vps_ssh_launcher.maintenance.apply import (
+    ApplyExecution,
     _apply_outcome,
     _execute_remote_plan,
+    _record_interrupted_apply,
     _record_unverified_receipt,
 )
 from vps_ssh_launcher.maintenance_cli import (
@@ -2636,6 +2639,58 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     0,
                 )
                 connect.assert_not_called()
+
+    def test_interrupted_apply_links_its_receipt_from_an_applied_plan(self) -> None:
+        # The stored row is already "applied" when the adapter dies: workflow
+        # persists that BEFORE the remote write, precisely so a crash cannot
+        # make the action retryable. The interruption path therefore must not
+        # go through save_plan() with its pre-apply snapshot -- the
+        # backward-transition guard drops that write and the receipt file it
+        # just wrote becomes an orphan with no pointer from the plan row.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._xray_upgrade_policy(root))
+            state_path = root / "state.db"
+            planned = MaintenancePlan(
+                plan_id="plan-" + "e" * 16,
+                created_at="2026-11-14T00:00:00+00:00",
+                policy_fingerprint=policy.fingerprint,
+                inventory_fingerprint="fixture",
+                actions=(
+                    MaintenanceAction(
+                        "bwg", "xray", "upgrade", "26.3.26", "planned", "fixture"
+                    ),
+                ),
+                status="planned",
+            )
+            save_plan(state_path, planned)
+            applied = replace(
+                planned,
+                status="applied",
+                actions=(replace(planned.actions[0], status="applied"),),
+            )
+            save_plan(state_path, applied)
+
+            execution = ApplyExecution(plan=planned, outcome="", reason="", code=0)
+            _record_interrupted_apply(
+                execution, state_path, root / "receipts", RuntimeError("drop")
+            )
+
+            stored = load_plan(state_path)
+            self.assertEqual(stored.status, "applied")
+            self.assertEqual(stored.actions[0].status, "applied")
+            with state_module._connect(state_path) as connection:
+                receipt_path = connection.execute(
+                    "SELECT receipt_path FROM plans WHERE plan_id = ?",
+                    (planned.plan_id,),
+                ).fetchone()[0]
+            self.assertIsNotNone(
+                receipt_path,
+                "an interrupted apply must keep a receipt pointer even when the "
+                "stored action already advanced to applied",
+            )
+            payload = json.loads(Path(str(receipt_path)).read_text(encoding="utf-8"))
+            self.assertEqual(payload["outcome"], "unverified")
 
     def test_apply_interrupted_mid_remote_writes_unverified_receipt(self) -> None:
         # A transport drop or hard timeout after the adapter started must leave

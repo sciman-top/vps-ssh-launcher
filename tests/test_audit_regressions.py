@@ -19,6 +19,51 @@ from scripts import (
 )
 
 
+def test_docs_gate_covers_every_current_docs_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # docs/audits was outside DOCS while AGENTS promised that a docs-only
+    # change runs check_docs.py, so a broken path in an audit note passed both
+    # the local gate and CI. The tree-derived scope must cover it and must keep
+    # excluding the historical receipts.
+    docs = Path(__file__).resolve().parents[1] / "docs"
+    scanned = {doc.resolve() for doc in check_docs.DOCS}
+    audits = sorted((docs / "audits").glob("*.md"))
+    assert audits, "docs/audits should hold at least one current note"
+    for note in audits:
+        assert note.resolve() in scanned, note
+    evidence = list((docs / "change-evidence").glob("*.md"))
+    if evidence:
+        assert not any(doc.resolve() in scanned for doc in evidence)
+
+    # A wrong path in an audit note is now a finding instead of silence.
+    note = tmp_path / "audit.md"
+    note.write_text(
+        "Run `scripts/definitely_not_present.py` first.\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(check_docs, "DOCS", [note])
+    errors = check_docs.check()
+    assert any("inline path does not exist" in error for error in errors), errors
+
+
+def test_docs_workflow_watches_the_docs_tree_it_checks() -> None:
+    # Two dead edges: HG03_Final_v4/** left the repository on 2026-11-14 (the
+    # glob could never match), and docs/audits/** was checked by neither the
+    # workflow paths nor check_docs.DOCS.
+    import yaml
+
+    text = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "docs.yml"
+    ).read_text(encoding="utf-8")
+    triggers = yaml.safe_load(text)
+    if True in triggers and "on" not in triggers:
+        triggers["on"] = triggers.pop(True)
+    for event in ("push", "pull_request"):
+        paths = triggers["on"][event]["paths"]
+        assert "HG03_Final_v4/**" not in paths, event
+        assert "docs/**" in paths, event
+
+
 def test_catalog_check_fails_closed_on_an_empty_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

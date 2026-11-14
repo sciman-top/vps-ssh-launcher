@@ -30,11 +30,38 @@ class ZzXhttpFrontTests(ScriptValidationMixin, unittest.TestCase):
         # "pending" on a dry-run (it once deleted the legacy conf in
         # read-only mode).
         self.assertIn("zz_xhttp_superseded_pending=maintained_front", text)
-        self.assertIn(
-            "if [ \"$APPLY\" != '1' ]; then\n"
-            "            echo 'zz_xhttp_superseded_pending=maintained_front'",
-            text,
-        )
+        pending = text.index("zz_xhttp_superseded_pending=maintained_front")
+        gate = text.rindex("if [ \"$APPLY\" != '1' ]; then", 0, pending)
+        # The read-only branch prints the marker and stops; it must not reach
+        # write_status, which would replace the last real apply's result with a
+        # synthetic success for a run that changed nothing.
+        branch = text[gate : text.index("        fi", gate)]
+        self.assertNotIn("write_status", branch)
+        self.assertIn("exit 0", branch)
+
+    def test_credential_files_are_owner_only(self) -> None:
+        # The token names a URL that resolves every lane credential, and the
+        # URL file spells it out. Both used to be written with a bare
+        # Set-Content that inherits the parent directory ACL, so any local
+        # account could read them.
+        text = (SCRIPTS / "merged_subscription_lane.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Protect-MergedSubscriptionFile", text)
+        self.assertIn("icacls $Path /inheritance:r /grant:r @grantSpecs", text)
+        for path in ("$tokenStore", "$urlFile"):
+            with self.subTest(path=path):
+                self.assertIn(f"Protect-MergedSubscriptionFile -Path {path}", text)
+        # Each write must be followed by the tightening call.
+        for write, tighten in (
+            ("Set-Content -LiteralPath $tokenStore", "-Path $tokenStore"),
+            ("Set-Content -LiteralPath $urlFile", "-Path $urlFile"),
+        ):
+            with self.subTest(write=write):
+                written = text.index(write)
+                self.assertGreater(
+                    text.rindex(f"Protect-MergedSubscriptionFile {tighten}"),
+                    written,
+                    "the ACL must be tightened after the credential is written",
+                )
 
     def test_published_port_stays_on_the_xray_wrapper(self) -> None:
         text = self.text

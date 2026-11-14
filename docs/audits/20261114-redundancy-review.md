@@ -59,3 +59,29 @@
 ## 6. 未覆盖
 
 `scripts/remote/` 逐函数审查、`cockpit_provider_health.py` / `cpa_status.py` / `cpa_natural_traffic_audit.py` 完整性、mutation 检验（未评估"测试是否真能失败"）。
+## 7. 2026-11-15 追加批次（第二轮深审 → 修复）
+
+第二轮只读深审（读真实代码 + 隔离复现）发现 4 个"门禁看不到"的真实缺陷，已全部修复并各自补回归测试：
+
+| # | 缺陷 | 依据（复现） | 修复 |
+|---|---|---|---|
+| 1 | `vps_ssh_launcher/maintenance/apply.py` 的中断收据指针被前向转移守卫静默丢弃，磁盘留下没人引用的收据 | 真实 `save_plan` 路径复现：修复前 AFTER 仍为 `applied` 且 `receipt_path` 为空 | 改走 `record_plan_receipt`（只挂指针），新增 `test_interrupted_apply_links_its_receipt_from_an_applied_plan`（撤掉修复必红） |
+| 2 | `scripts/remote/cpa-guardrail-apply.sh` 只 trap EXIT/INT/TERM：SIGHUP 时 bash 仍执行 EXIT trap 但 `$?==0`，恢复被跳过却报成功 | bash 探针实测 `exit_trap_rc=0` + `outer_rc=129`，`RESTORE_RAN` 未打印 | 补 `trap 'exit 129' HUP`；回滚判据改为事务阶段 `MUTATED`；新增真实发 HUP 的行为测试 |
+| 3 | `tests/script_validation_support.py` 的 `LANE_SCRIPTS` 手写 14 条，而 `scripts/` 有 16 个投影 `-Apply` lane，`cpa_workbuddy_*` 完全在写安全契约之外 | 目录扫描实测 16 vs 14 | 注册表改为目录派生 + 带理由的显式豁免表，并断言"派生集合必须等于树" |
+| 4 | `scripts/check_docs.py` 不覆盖 `docs/audits/`；`.github/workflows/docs.yml` 仍写已迁出的 `HG03_Final_v4/**` | 实测 `DOCS` 40 篇不含 audits；该目录已不在仓内 | 文档扫描改为 `docs/**`（排除 `change-evidence`）；CI 触发面同步，新增两条回归 |
+
+同批修掉的小缺陷（各有回归测试）：
+
+- `scripts/reality_alt_sni_lane.ps1` 用私有 `/run/vps-ssh-launcher-alt-sni.lock`，而它同样重写 xray/nginx 并重启 xray → 改用共享维护锁；`test_lock_registry.py` 收缩为"单一锁"。
+- `scripts/zz_xhttp_nginx_front.ps1` 的 dry-run 分支写 `write_status success`，会覆盖上一次真实 apply 的结果 → 只读分支不再写状态。
+- `scripts/merged_subscription_lane.ps1` 的 `merged-sub-token.txt` 与 URL 文件用裸 `Set-Content`（继承父目录 ACL）→ 用 `icacls /inheritance:r` 收紧并复核。
+- `scripts/nginx_camouflage_site.ps1` 只 `nginx -t` 不 reload，http 级 404 drop-in 首次 apply 不生效而漂移门仍绿 → 补 reload（可覆盖，harness 用 stub）。
+- `scripts/remote/frp_bwg_relay.py` 的 `config-contract` 恒定打印 PASS → 真正读取并校验，失败非零退出。
+
+### 7.1 顺带发现的测试基础设施缺陷（影响面更大）
+
+Git Bash 对 `bash -c` 的脚本在约 8192 字节处**静默截断且仍返回 0**。`nginx_camouflage_site.ps1` 的 19 KiB payload 因此在行为测试里只跑了前 8 KiB——测试一直是绿的，但尾部（含本轮新增的 reload）从未被覆盖。已在 `ScriptValidationMixin._spill_long_script` 统一处理：超过 8000 字节的 `-c` 脚本落到临时文件再执行，所有 lane harness 自动受益。
+
+### 7.2 验证
+
+`pwsh -NoProfile -File scripts/run_gates.ps1 -Profile Full`：`1672 passed, 31 skipped`，catalog / ruff / format / mypy / bandit 全绿。

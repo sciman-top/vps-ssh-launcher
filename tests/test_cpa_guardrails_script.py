@@ -3330,6 +3330,111 @@ foreach ($case in @(
             completed.stdout.decode(),
         )
 
+    def test_apply_rolls_back_on_hup_when_no_exit_status_is_set(self) -> None:
+        # A dropped SSH channel Hangups the remote payload. bash still runs the
+        # EXIT trap on an untrapped fatal signal, but with $? == 0, so an
+        # EXIT-only rollback silently keeps a half-applied host AND reports
+        # success. The trap set must therefore cover HUP itself, and the
+        # rollback decision must key off the transaction phase.
+        source = read_guardrail_source()
+        self.assertIn("trap 'exit 129' HUP", source)
+        self.assertIn('if [ "$rc" -ne 0 ] || [ "$MUTATED" -eq 1 ]; then', source)
+        self.assertIn("MUTATED=1", source)
+        self.assertGreaterEqual(source.count("trap - EXIT HUP INT TERM"), 2)
+
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        payload = source[
+            source.index("rollback_on_exit() {") : source.index("\nif ! grep -Eq")
+        ]
+        prelude = (
+            "set -Eeuo pipefail\n"
+            "MUTATED=0\n"
+            "ROLLBACK_DONE=0\n"
+            "restore_all() { echo RESTORE_RAN; }\n" + payload
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            # 1. The real signal path. The probe signals ITSELF from a
+            # subshell: Python on Windows has no SIGHUP to deliver, and the
+            # contract under test is bash-side. `sleep & wait` keeps the trap
+            # dispatch immediate instead of deferring it to the end of the
+            # foreground command.
+            harness = Path(tmp) / "hup_probe.sh"
+            harness.write_text(
+                prelude + "trap rollback_on_exit EXIT\n"
+                "trap 'exit 129' HUP\n"
+                "trap 'exit 130' INT\n"
+                "trap 'exit 143' TERM\n"
+                "MUTATED=1\n"
+                "echo MUTATED_AND_RUNNING\n"
+                "( sleep 1; kill -HUP $$ ) &\n"
+                # A builtin loop, not `sleep 30 & wait`: bash defers a trapped
+                # signal until the running foreground command returns, and a
+                # blocked `wait` on this shell never returns early, so the
+                # probe would burn the full timeout before the trap fired.
+                "for _ in $(seq 1 400); do sleep 0.05; done\n"
+                "echo UNEXPECTED_CONTINUATION\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                self._bash_command(bash, str(harness)),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                check=False,
+            )
+            self.assertNotIn("UNEXPECTED_CONTINUATION", completed.stdout)
+            self.assertIn("RESTORE_RAN", completed.stdout, completed.stderr)
+            self.assertIn(
+                "ROLLBACK transaction_failed", completed.stdout, completed.stderr
+            )
+            self.assertNotEqual(completed.returncode, 0)
+
+            # 2. The phase guard on its own: an untrapped fatal signal runs the
+            # EXIT trap with $? == 0. Restoring must not depend on the status.
+            bare = self._run_rollback_probe(bash, tmp, "zero_status", "MUTATED=1")
+            self.assertEqual(bare.returncode, 0, bare.stderr)
+            self.assertIn("RESTORE_RAN", bare.stdout)
+            self.assertIn("ROLLBACK transaction_failed", bare.stdout)
+
+            # 3. Before the mutation phase nothing is restored on a clean exit.
+            untouched = self._run_rollback_probe(bash, tmp, "clean", "MUTATED=0")
+            self.assertEqual(untouched.returncode, 0, untouched.stderr)
+            self.assertNotIn("RESTORE_RAN", untouched.stdout)
+
+    def _run_rollback_probe(
+        self, bash: str, directory: str, name: str, mutated: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the real rollback_on_exit() around one no-op body."""
+        source = read_guardrail_source()
+        payload = source[
+            source.index("rollback_on_exit() {") : source.index("\nif ! grep -Eq")
+        ]
+        script = Path(directory) / f"{name}_probe.sh"
+        script.write_text(
+            "set -Eeuo pipefail\n"
+            "ROLLBACK_DONE=0\n"
+            "restore_all() { echo RESTORE_RAN; }\n"
+            + payload
+            + "trap rollback_on_exit EXIT\n"
+            f"{mutated}\n"
+            "true\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            self._bash_command(bash, str(script)),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+        return completed
+
     def test_cpa_apply_public_route_reads_keep_named_rollback_reasons(self) -> None:
         """The post-mutation public-route greps keep their named ROLLBACK
         reasons reachable: the EXIT trap restores either way, but only a

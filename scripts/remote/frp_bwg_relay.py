@@ -165,9 +165,31 @@ def check_aliyun(client: Any) -> None:
     print("ALIYUN_FRP_LOG=" + _recent_log_summary(run))
 
 
+def config_contract(path: Path | None = None) -> dict[str, str]:
+    """Validate the pinned frpc.toml shape; return the reviewed proxy mapping.
+
+    The previous implementation printed PASS unconditionally, so a token-shape
+    drift or a widened proxy scope (a second remotePort, a non-loopback
+    landing) still reported a green contract. The parser existed and was only
+    exercised by its unit test, never by the entry point.
+    """
+    target = path or Path(PROTECTED_PATH)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RelayCheckError("FRP_CONFIG=UNREADABLE") from exc
+    proxy = _parse_proxy(text)
+    return proxy
+
+
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) == 2 else ""
     if mode == "config-contract":
+        try:
+            config_contract()
+        except RelayCheckError as exc:
+            print(f"FRP_CONFIG_CONTRACT=FAIL:{exc}")
+            raise SystemExit(1) from None
         print("FRP_CONFIG_CONTRACT=PASS")
         return
     if mode in {"bwg", "aliyun"}:

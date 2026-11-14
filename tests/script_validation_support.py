@@ -1,5 +1,6 @@
 """Shared helpers for the split script-validation test modules."""
 
+import atexit
 import base64
 import json
 import os
@@ -15,6 +16,12 @@ from typing import Any, cast
 from cpa_catalog_expectations import (
     PROVIDER_MATRIX_TAIL,
 )
+
+
+# Oversized `bash -c` payloads are spilled here (see _spill_long_script). One
+# process-wide directory, cleaned up at interpreter exit.
+_SPILL_DIR = Path(tempfile.mkdtemp(prefix="dsh-bash-spill-"))
+atexit.register(shutil.rmtree, _SPILL_DIR, ignore_errors=True)
 
 
 # socketserver.serve_forever polls its shutdown flag once per poll_interval,
@@ -178,29 +185,50 @@ class ScriptValidationMixin:
         '.Replace("__APPLY__", $applyLiteral)',
     )
 
-    # The projected shell lanes that expose -Apply. One registry instead of the
-    # same name list copied into thirteen test files: adding a lane is one line
-    # here, and every lane-wide contract below covers it automatically.
-    LANE_SCRIPTS = (
-        "cdn_fallback_lane",
-        "cdn_origin_cert_sync",
-        "zz_subscription_republish",
-        "merged_subscription_lane",
-        "reality_alt_sni_lane",
-        "xhttp_nginx_front",
-        "zz_xhttp_nginx_front",
-        "nginx_tls_stealth",
-        "nginx_camouflage_site",
-        "hysteria2_masquerade_lane",
-        "hysteria2_obfs_lane",
-        "reality_shortid_harden",
-        "stale_firewall_hygiene",
-        "firewall_baseline",
+    # The remote payload of a lane may delegate its dry-run gate to the Python
+    # block it embeds (`if not apply: ... exit 0`) instead of a bash `if`. That
+    # is the same contract enforced one layer later, so it gets its own pin set
+    # rather than a silent exemption.
+    APPLY_OPT_IN_PYTHON_PINS = (
+        "[switch]$Apply",
+        'APPLY="__APPLY__"',
+        "if not apply:",
+        '.Replace("__APPLY__", $applyLiteral)',
     )
+    LANE_OPT_IN_FORM: dict[str, str] = {
+        "cpa_workbuddy_login_region": "python",
+        "cpa_workbuddy_model_pins": "python",
+    }
 
     # Lanes that serialize writes with their own descriptor and rollback
     # marker; their shape is pinned in the lane's own module.
-    LANE_WRITE_SAFETY_EXEMPT: frozenset[str] = frozenset({"reality_alt_sni_lane"})
+    LANE_WRITE_SAFETY_EXEMPT: frozenset[str] = frozenset(
+        {
+            "reality_alt_sni_lane",
+            # These two rewrite config.yaml in place and restore the exact
+            # pre-write bytes on any failure inside the same Python block, then
+            # print SHA256_BEFORE/SHA256_AFTER. They never emit the
+            # ROLLBACK_VERIFIED marker, so pinning that literal here would
+            # assert a shape the lane deliberately does not have.
+            "cpa_workbuddy_login_region",
+            "cpa_workbuddy_model_pins",
+        }
+    )
+
+    @staticmethod
+    def projected_lane_scripts(root: Path | None = None) -> frozenset[str]:
+        """Every scripts/*.ps1 that renders an -Apply switch into a payload.
+
+        Derived from the tree, not hand-listed: the previous registry named 14
+        lanes while 16 scripts carried the marker, so two lanes silently fell
+        out of every lane-wide write-safety contract the moment they were added.
+        """
+        directory = (root or repo_root()) / "scripts"
+        return frozenset(
+            path.stem
+            for path in directory.glob("*.ps1")
+            if 'APPLY="__APPLY__"' in path.read_text(encoding="utf-8")
+        )
 
     # Fleet-wide write serialization and the verified rollback marker. Every
     # lane pinned these two literals in its own test file, which turned one
@@ -210,9 +238,19 @@ class ScriptValidationMixin:
         "ROLLBACK_VERIFIED",
     )
 
-    def assert_apply_is_opt_in(self: Any, text: str) -> None:
+    def opt_in_pins_for(self: Any, lane: str) -> tuple[str, ...]:
+        """The dry-run pins that lane must carry, in whichever layer gates it."""
+        pins: tuple[str, ...] = (
+            self.APPLY_OPT_IN_PYTHON_PINS
+            if self.LANE_OPT_IN_FORM.get(lane) == "python"
+            else self.APPLY_OPT_IN_PINS
+        )
+        return pins
+
+    def assert_apply_is_opt_in(self: Any, text: str, lane: str | None = None) -> None:
         """Every projected shell lane must refuse writes without -Apply."""
-        for pin in self.APPLY_OPT_IN_PINS:
+        pins = self.opt_in_pins_for(lane) if lane else self.APPLY_OPT_IN_PINS
+        for pin in pins:
             self.assertIn(pin, text)
 
     def assert_lane_write_safety(self: Any, text: str) -> None:
@@ -392,9 +430,34 @@ class ScriptValidationMixin:
 
         return shutil.which("bash")
 
-    @staticmethod
-    def _bash_command(bash: str, *args: str) -> list[str]:
+    _SPILL_COUNTER: int = 0
+
+    @classmethod
+    def _spill_long_script(cls, args: tuple[str, ...]) -> tuple[str, ...]:
+        """Move an oversized `bash -c` script into a file.
+
+        Git Bash on Windows silently truncates a `-c` script at ~8192 bytes and
+        still exits 0, so a behavioural harness that passes a 19 KiB lane
+        payload inline only executes its first ~8 KiB -- and passes. Writing
+        the script to a file keeps the same invocation shape for short probes
+        and makes long ones actually run to the end.
+        """
+        if len(args) < 2 or args[0] != "-c" or len(args[1]) <= 8000:
+            return args
+        counter = cls._SPILL_COUNTER
+        cls._SPILL_COUNTER += 1
+        spilled = _SPILL_DIR / f"script-{counter:04d}.sh"
+        spilled.write_text(
+            args[1].replace("\r\n", "\n"), encoding="utf-8", newline="\n"
+        )
+        # A forward-slash path is understood by every bash on this host; the
+        # raw Win32 form is not a valid script argument.
+        return (spilled.as_posix(), *args[2:])
+
+    @classmethod
+    def _bash_command(cls, bash: str, *args: str) -> list[str]:
         """Give Git Bash the login environment its Unix utilities require."""
+        args = cls._spill_long_script(tuple(args))
         if os.name == "nt" and "git" in {
             part.lower() for part in Path(bash).resolve().parts
         }:
@@ -483,6 +546,37 @@ class ScriptValidationMixin:
         available = probe.returncode == 0
         cls._BASH_FLOCK_AVAILABLE[bash] = available
         return available
+
+    def _run_bash_payload(
+        self: Any,
+        bash: str,
+        payload: str,
+        *,
+        env: dict[str, str] | None = None,
+        timeout: int = 60,
+    ) -> "subprocess.CompletedProcess[str]":
+        """Run a lane payload from a file, never through `bash -c`.
+
+        Git Bash on Windows truncates a `-c` script at ~8192 bytes and keeps
+        going with exit code 0, so a behavioural harness that passed the whole
+        payload inline only executed its first ~8 KiB -- the test still passed,
+        which hid both the missing coverage and a genuinely broken tail.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "payload.sh"
+            script.write_text(
+                payload.replace("\r\n", "\n"),
+                encoding="utf-8",
+                newline="\n",
+            )
+            return subprocess.run(
+                self._bash_command(bash, self._bash_path(bash, script)),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env={**os.environ, **(env or {})},
+            )
 
     def _require_flock(self: Any, bash: str) -> None:
         if not self._bash_has_flock(bash):

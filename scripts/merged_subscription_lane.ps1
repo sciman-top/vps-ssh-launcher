@@ -46,9 +46,50 @@ $lanes = @{
 }
 $lane = $lanes[$Profile]
 $tokenStore = Join-Path $configDir "merged-sub-token.txt"
+
+function Protect-MergedSubscriptionFile {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  # Both files this lane writes locally are credentials: the token store names
+  # a URL that resolves every lane credential, and the URL file spells that URL
+  # out. A plain Set-Content inherits the parent directory ACL, so any local
+  # process running as another account could read them. Remove inheritance and
+  # keep only LocalSystem, Administrators and the current user, then verify the
+  # resulting DACL instead of assuming icacls succeeded.
+  if ($IsWindows -eq $false) {
+    return
+  }
+  $secretSids = @(
+    [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18").Value
+    [System.Security.Principal.SecurityIdentifier]::new("S-1-5-32-544").Value
+    [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  )
+  $grantSpecs = @($secretSids | ForEach-Object { "*${_}:F" })
+  $icaclsOutput = & icacls $Path /inheritance:r /grant:r @grantSpecs 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to set a private ACL on $Path`: $icaclsOutput"
+  }
+  $verified = Get-Acl -LiteralPath $Path
+  $actualSids = @(
+    foreach ($rule in @($verified.Access)) {
+      $rule.IdentityReference.Translate(
+        [System.Security.Principal.SecurityIdentifier]
+      ).Value
+    }
+  )
+  if ($verified.AreAccessRulesProtected -ne $true -or
+      (($actualSids | Sort-Object) -join ",") -ne (($secretSids | Sort-Object) -join ",")) {
+    throw "Refusing to keep a credential file with an unverifiable private ACL: $Path"
+  }
+}
+
 if (-not $Token) {
   if (Test-Path -LiteralPath $tokenStore -PathType Leaf) {
     $Token = (Get-Content -LiteralPath $tokenStore -Raw).Trim()
+    Protect-MergedSubscriptionFile -Path $tokenStore
   } else {
     # The path is the only credential protecting every lane's UUID and
     # Hysteria2 password, so it must come from a CSPRNG rather than the
@@ -57,6 +98,7 @@ if (-not $Token) {
     [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
     $Token = [Convert]::ToHexString($tokenBytes).ToLowerInvariant()
     Set-Content -LiteralPath $tokenStore -Value $Token -Encoding utf8NoBOM
+    Protect-MergedSubscriptionFile -Path $tokenStore
   }
 }
 if ($Token -notmatch '^[0-9a-f]{16,64}$') {
@@ -512,4 +554,5 @@ $urls = @(
   "$($lane.Standby)/s/merged/$Token"
 ) -join "`n"
 Set-Content -LiteralPath $urlFile -Value $urls -Encoding utf8NoBOM
+Protect-MergedSubscriptionFile -Path $urlFile
 Write-Output "merged_sub_url_file=$urlFile"

@@ -1,10 +1,13 @@
-"""One fleet-wide lock path, one alt-sni exception, no invented third lock.
+"""One fleet-wide lock path, no lane-private exception, no invented second lock.
 
 Every remote write lane serialises on /run/vps-ssh-launcher-maintenance.lock and
 that identity is what makes two wrappers mutually exclusive on the same host.
 A new lock name silently splits the fleet into two writers that both believe
 they hold the lock, so the set is enumerated here instead of being discovered
-by a collision on a live host.
+by a collision on a live host. The alt-SNI lane used to own a private
+/run/vps-ssh-launcher-alt-sni.lock while it rewrote xray serverNames, the
+vhosts and restarted xray -- exactly the state every other lane protects -- so
+it now takes the shared lock like every other writer.
 """
 
 from __future__ import annotations
@@ -17,8 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
 MAINTENANCE_LOCK = "/run/vps-ssh-launcher-maintenance.lock"
-ALT_SNI_LOCK = "/run/vps-ssh-launcher-alt-sni.lock"
-ALLOWED_LOCKS = {MAINTENANCE_LOCK, ALT_SNI_LOCK}
+ALLOWED_LOCKS = {MAINTENANCE_LOCK}
 
 _LOCK = re.compile(r"/run/[A-Za-z0-9._-]+\.lock")
 # The two files below are the lock owner: the shared Powershell transport and
@@ -53,9 +55,17 @@ class MaintenanceLockRegistryTests(unittest.TestCase):
             "they hold the lock; register it here and in the runbook first",
         )
 
-    def test_the_alt_sni_lock_stays_scoped_to_its_lane(self) -> None:
-        owners = {path.name for path, text in _script_texts() if ALT_SNI_LOCK in text}
-        self.assertEqual(owners, {"reality_alt_sni_lane.ps1"})
+    def test_the_alt_sni_lane_shares_the_fleet_lock(self) -> None:
+        # It rewrites xray serverNames, both vhosts and restarts xray. A private
+        # lock let it run beside a kernel/firewall lane that holds the shared
+        # one, so two writers could re-render xray and nginx at the same time.
+        text = (SCRIPTS / "reality_alt_sni_lane.ps1").read_text(encoding="utf-8")
+        self.assertIn(
+            'LOCK_FILE="${VPS_ALT_SNI_LOCK_FILE:-' + MAINTENANCE_LOCK + '}"',
+            text,
+        )
+        self.assertIn('exec 9>"$LOCK_FILE"', text)
+        self.assertIn("flock -n 9", text)
 
     def test_the_fixed_shell_owners_are_frozen_and_explained(self) -> None:
         # These seven sites open the lock inside the generated/projected shell

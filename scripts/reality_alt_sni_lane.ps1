@@ -149,9 +149,14 @@ if [ "$APPLY" != '1' ]; then
     exit 0
 fi
 
-LOCK_FILE="${VPS_ALT_SNI_LOCK_FILE:-/run/vps-ssh-launcher-alt-sni.lock}"
-exec 8>"$LOCK_FILE"
-if ! flock -n 8; then
+# The shared maintenance lock, not a lane-private one: this payload rewrites
+# xray serverNames, the vhosts and then restarts xray. A private lock let it run
+# concurrently with every other lane (kernel/cron/firewall ones all take the
+# shared lock) and two writers could rewrite xray/nginx at the same time.
+# VPS_ALT_SNI_LOCK_FILE stays overridable for tests.
+LOCK_FILE="${VPS_ALT_SNI_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
     echo "REFUSE busy lock=$LOCK_FILE" >&2
     exit 75
 fi

@@ -4,11 +4,14 @@ on:
   push:
     branches:
       - main
+    # HG03_Final_v4/** was removed: the kit left the repository on 2026-11-14,
+    # so the glob could never match. docs/** now covers runbooks, audits and
+    # every future docs subtree except the historical receipts (which
+    # check_docs.py deliberately excludes).
     paths:
       - "README.md"
-      - "HG03_Final_v4/**"
       - "README.en.md"
-      - "docs/runbooks/**"
+      - "docs/**"
       - "AGENTS.md"
       - "CLAUDE.md"
       - "GEMINI.md"
@@ -17,9 +20,8 @@ on:
   pull_request:
     paths:
       - "README.md"
-      - "HG03_Final_v4/**"
       - "README.en.md"
-      - "docs/runbooks/**"
+      - "docs/**"
       - "AGENTS.md"
       - "CLAUDE.md"
       - "GEMINI.md"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts.remote import frp_bwg_relay
@@ -41,6 +43,46 @@ def test_nonloopback_landing_is_rejected() -> None:
                 'localIP = "127.0.0.1"', 'localIP = "144.34.229.116"'
             )
         )
+
+
+def test_config_contract_reports_failures_instead_of_a_constant_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    # The entry point used to print FRP_CONFIG_CONTRACT=PASS without reading
+    # anything, so a widened proxy scope or a malformed token still reported a
+    # green contract.
+    protected = tmp_path / "frpc.toml"
+    protected.write_text(_valid_config(), encoding="utf-8")
+    monkeypatch.setattr(frp_bwg_relay, "PROTECTED_PATH", str(protected))
+    monkeypatch.setattr(
+        frp_bwg_relay.sys, "argv", ["frp_bwg_relay.py", "config-contract"]
+    )
+    frp_bwg_relay.main()
+    assert "FRP_CONFIG_CONTRACT=PASS" in capsys.readouterr().out
+
+    protected.write_text(
+        _valid_config().replace("remotePort = 52443", "remotePort = 52444"),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        frp_bwg_relay.main()
+    assert exit_info.value.code == 1
+    assert "FRP_CONFIG_CONTRACT=FAIL" in capsys.readouterr().out
+
+
+def test_config_contract_fails_closed_on_a_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        frp_bwg_relay, "PROTECTED_PATH", str(tmp_path / "absent-frpc.toml")
+    )
+    monkeypatch.setattr(
+        frp_bwg_relay.sys, "argv", ["frp_bwg_relay.py", "config-contract"]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        frp_bwg_relay.main()
+    assert exit_info.value.code == 1
+    assert "FRP_CONFIG=UNREADABLE" in capsys.readouterr().out
 
 
 def test_health_check_fails_closed_on_inactive_service() -> None:

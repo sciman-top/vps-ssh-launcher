@@ -240,7 +240,7 @@ ROLLBACK_DONE=0
 restore_all() {
   if [ "$ROLLBACK_DONE" -eq 1 ]; then return 0; fi
   ROLLBACK_DONE=1
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   set +e
   rollback_failed=0
   # Both generations bind 8318. Stop the current process before restoring the
@@ -440,10 +440,14 @@ migrate_legacy_admission() {
 
 rollback_on_exit() {
   rc=$?
-  trap - EXIT INT TERM
-  if [ "$rc" -ne 0 ]; then
+  trap - EXIT HUP INT TERM
+  # A signal that reaches the EXIT trap without a handler leaves $? at 0
+  # (SIGHUP did exactly that: the remote half-applied state was kept and the
+  # transaction reported success). The rollback decision therefore keys off the
+  # transaction phase, never off $? alone.
+  if [ "$rc" -ne 0 ] || [ "$MUTATED" -eq 1 ]; then
     restore_all
-    echo "ROLLBACK transaction_failed"
+    echo "ROLLBACK transaction_failed rc=$rc"
   fi
   exit "$rc"
 }
@@ -643,11 +647,19 @@ if [ -z "$KEY" ]; then
   echo "REFUSE missing_client_key"
   exit 1
 fi
-# Arm before the first mutation. EXIT also covers unguarded set -e failures;
-# signals exit nonzero and follow the same rollback path.
+# Arm before the first mutation. EXIT also covers unguarded set -e failures.
+# HUP must be trapped explicitly: an untrapped SIGHUP still runs the EXIT trap,
+# but with $? == 0, which is why the rollback decision cannot depend on it
+# alone. MUTATED tracks the phase from the first backup of live state onwards.
+MUTATED=0
 trap rollback_on_exit EXIT
+# The backup directory is armed earlier, but nothing on the host has changed
+# yet. From here the transaction starts rewriting live state; restore_all only
+# becomes valid after the backup set holds every path it rewrites.
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+MUTATED=1
 
 if ! python3 - <<'PY'
 from base64 import b64decode
@@ -2568,7 +2580,9 @@ if ! logrotate -d /etc/logrotate.conf >"$BK/cpa-logrotate-test.log" 2>&1; then
   exit 1
 fi
 
-trap - EXIT INT TERM
+# The transaction is committed: disarm every handler before reporting.
+MUTATED=0
+trap - EXIT HUP INT TERM
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
 sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_health_runtime.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" "$ADMISSION_UNIT" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \

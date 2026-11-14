@@ -206,17 +206,50 @@ if ($failed) { exit 1 }
             self.assertEqual(report["StandardErrorLines"], ["err-1", "err-2"])
 
     def test_apply_is_opt_in_for_every_projected_shell_lane(self) -> None:
-        # One registry, not thirteen copies: a new lane is one table entry in
-        # script_validation_support.LANE_SCRIPTS, and both write-safety checks
-        # below pick it up automatically.
-        for lane in self.LANE_SCRIPTS:
+        # The registry is DERIVED from scripts/*.ps1, never hand-listed: the
+        # hand-written table named 14 lanes while 16 scripts rendered the
+        # __APPLY__ marker, so two lanes were silently outside every lane-wide
+        # write-safety contract. A new lane is now covered the moment it is
+        # added, and a lane that drops the marker fails here.
+        lanes = self.projected_lane_scripts()
+        self.assertGreaterEqual(len(lanes), 15)
+        for lane in sorted(lanes):
             with self.subTest(lane=lane):
                 self.assert_apply_is_opt_in(
-                    _lane_script(repo_root(), lane).read_text(encoding="utf-8")
+                    _lane_script(repo_root(), lane).read_text(encoding="utf-8"),
+                    lane=lane,
                 )
 
+    def test_projected_lane_registry_matches_the_tree(self) -> None:
+        # The derivation is the contract: every scripts/*.ps1 that renders an
+        # -Apply switch into a remote payload must appear in it, and nothing
+        # else may pretend to be one.
+        scripts = repo_root() / "scripts"
+        expected = {
+            path.stem
+            for path in scripts.glob("*.ps1")
+            if 'APPLY="__APPLY__"' in path.read_text(encoding="utf-8")
+        }
+        self.assertEqual(self.projected_lane_scripts(), expected)
+        self.assertTrue(expected, "no projected -Apply lane was found at all")
+
+    def test_local_apply_gate_still_guards_the_frp_install(self) -> None:
+        # frp_relay -Setup runs a real install with no remote payload marker, so
+        # its -Apply gate lives on the host side and must stay reachable only
+        # under the explicit switch.
+        source = (repo_root() / "scripts" / "frp_relay.ps1").read_text(encoding="utf-8")
+        self.assertIn("[switch]$Apply", source)
+        # The dispatch is the gate: the install branch is only reachable from
+        # inside the -Apply arm of the Setup parameter set.
+        dispatch = source[source.index("if ($Setup) {") :]
+        self.assertLess(
+            dispatch.index("if ($Apply) {"),
+            dispatch.index("Install-FrpSetup"),
+            "the install must stay behind the -Apply gate",
+        )
+
     def test_every_apply_lane_serializes_writes_and_verifies_rollback(self) -> None:
-        for lane in self.LANE_SCRIPTS:
+        for lane in sorted(self.projected_lane_scripts()):
             if lane in self.LANE_WRITE_SAFETY_EXEMPT:
                 continue
             with self.subTest(lane=lane):
