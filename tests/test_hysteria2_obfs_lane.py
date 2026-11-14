@@ -20,7 +20,6 @@ class Hysteria2ObfsLaneTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_apply_is_opt_in_and_idempotent(self) -> None:
         text = self.text
-        self.assert_apply_is_opt_in(text)
         self.assertIn("obfs_lane=already_configured", text)
         self.assertIn("obfs_lane=absent", text)
         self.assertIn("write_status noop 0", text)

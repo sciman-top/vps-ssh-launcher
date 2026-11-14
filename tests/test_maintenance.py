@@ -76,6 +76,27 @@ from vps_ssh_launcher.maintenance_cli import (
 )
 
 
+def _fixed_clock(now_value: datetime) -> type:
+    """Stand-in for the datetime module at one pinned instant.
+
+    The unattended guards read the clock through `datetime.now()` and parse
+    stored ISO stamps through `datetime.fromisoformat()`; those two are the
+    whole surface, so a stub avoids fighting mypy over datetime subclass
+    overrides.
+    """
+
+    class Clock:
+        @staticmethod
+        def now(tz: Any = None) -> datetime:
+            return now_value
+
+        @staticmethod
+        def fromisoformat(value: str) -> datetime:
+            return datetime.fromisoformat(value)
+
+    return Clock
+
+
 class MaintenanceControlPlaneTests(unittest.TestCase):
     XRaySha256 = "a" * 64
     DockerDigest = "sha256:" + "b" * 64
@@ -1210,16 +1231,7 @@ docker = "upgrade"
             state_path = root / "state.db"
             plan, fixed_now, _ = self._unattended_plan(policy_path, state_path)
 
-            class _FixedClock:
-                # automation.py only needs now() and fromisoformat(); a stub
-                # avoids fighting mypy over datetime subclass overrides.
-                @staticmethod
-                def now(tz: Any = None) -> datetime:
-                    return fixed_now
-
-                @staticmethod
-                def fromisoformat(value: str) -> datetime:
-                    return datetime.fromisoformat(value)
+            _FixedClock = _fixed_clock(fixed_now)
 
             with (
                 mock.patch(
@@ -1285,16 +1297,7 @@ docker = "upgrade"
                 encoding="utf-8",
             )
 
-            class _FixedClock:
-                # automation.py only needs now() and fromisoformat(); a stub
-                # avoids fighting mypy over datetime subclass overrides.
-                @staticmethod
-                def now(tz: Any = None) -> datetime:
-                    return fixed_now
-
-                @staticmethod
-                def fromisoformat(value: str) -> datetime:
-                    return datetime.fromisoformat(value)
+            _FixedClock = _fixed_clock(fixed_now)
 
             client = mock.MagicMock()
             with (
@@ -1376,14 +1379,7 @@ docker = "upgrade"
                 encoding="utf-8",
             )
 
-            class _FixedClock:
-                @staticmethod
-                def now(tz: Any = None) -> datetime:
-                    return fixed_now
-
-                @staticmethod
-                def fromisoformat(value: str) -> datetime:
-                    return datetime.fromisoformat(value)
+            _FixedClock = _fixed_clock(fixed_now)
 
             with (
                 mock.patch(
@@ -2400,14 +2396,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                 encoding="utf-8",
             )
 
-            class _FixedClock:
-                @staticmethod
-                def now(tz: Any = None) -> datetime:
-                    return fixed_now
-
-                @staticmethod
-                def fromisoformat(value: str) -> datetime:
-                    return datetime.fromisoformat(value)
+            _FixedClock = _fixed_clock(fixed_now)
 
             with (
                 mock.patch(
@@ -3116,14 +3105,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             state_path = root / "state.db"
             plan, fixed_now, _ = self._unattended_plan(policy_path, state_path)
 
-            class _FixedClock:
-                @staticmethod
-                def now(tz: Any = None) -> datetime:
-                    return fixed_now
-
-                @staticmethod
-                def fromisoformat(value: str) -> datetime:
-                    return datetime.fromisoformat(value)
+            _FixedClock = _fixed_clock(fixed_now)
 
             with (
                 mock.patch(
@@ -3213,14 +3195,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                 encoding="utf-8",
             )
 
-            class _FixedClock:
-                @staticmethod
-                def now(tz: Any = None) -> datetime:
-                    return fixed_now
-
-                @staticmethod
-                def fromisoformat(value: str) -> datetime:
-                    return datetime.fromisoformat(value)
+            _FixedClock = _fixed_clock(fixed_now)
 
             client = mock.MagicMock()
             with (
@@ -3400,9 +3375,14 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
 
 
 class UnattendedLockTest(unittest.TestCase):
-    """unattended_lock is the last fail-closed gate before remote writes; the
-    stale-recovery path in particular silently depended on os.kill(pid, 0)
-    semantics that do not hold on Windows, so every branch gets a test."""
+    """Cross-process behaviour of unattended_lock.
+
+    The single-process contention, stale-owner and owner-file validation
+    branches live in tests/test_maintenance_lock.py. What remains here needs a
+    real child process: Windows has no meaningful os.kill(pid, 0) liveness
+    probe, so guard release and pid liveness are only observable across a
+    process boundary.
+    """
 
     @staticmethod
     def _confirmed_dead_pid() -> int | None:
@@ -3420,21 +3400,6 @@ class UnattendedLockTest(unittest.TestCase):
             json.dumps({"pid": pid, "created_at": created.isoformat()}),
             encoding="utf-8",
         )
-
-    def test_acquires_and_releases_cleanly(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "unattended.lock"
-            with unattended_lock(lock):
-                self.assertTrue(lock.exists())
-            self.assertFalse(lock.exists())
-
-    def test_refuses_second_holder_while_owner_alive(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "unattended.lock"
-            with unattended_lock(lock):
-                with self.assertRaises(ValueError):
-                    with unattended_lock(lock):
-                        pass
 
     def test_native_guard_blocks_a_process_after_owner_file_disappears(self) -> None:
         child = (
@@ -3490,20 +3455,6 @@ class UnattendedLockTest(unittest.TestCase):
                 self.assertTrue(lock.exists())
             self.assertFalse(lock.exists())
 
-    def test_recovers_stale_lock_from_dead_owner(self) -> None:
-        dead = self._confirmed_dead_pid()
-        if dead is None:
-            self.skipTest("could not observe a dead pid")
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "unattended.lock"
-            self._write_lock(lock, dead, minutes_ago=181)
-            owner = json.loads(lock.read_text(encoding="utf-8"))
-            owner["token"] = "c" * 32
-            lock.write_text(json.dumps(owner), encoding="utf-8")
-            with unattended_lock(lock):
-                self.assertTrue(lock.exists())
-            self.assertFalse(lock.exists())
-
     def test_recovery_never_deletes_a_replaced_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "unattended.lock"
@@ -3545,25 +3496,6 @@ class UnattendedLockTest(unittest.TestCase):
             for candidate in Path(tmp).glob(f".{lock.name}.recovery-*"):
                 candidate.unlink()
 
-    def test_legacy_dead_owner_requires_manual_review(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "unattended.lock"
-            self._write_lock(lock, 999999999, minutes_ago=181)
-            with self.assertRaisesRegex(ValueError, "legacy dead lock owner"):
-                with unattended_lock(lock):
-                    self.fail(
-                        "An unfenced legacy owner cannot be deleted automatically."
-                    )
-            self.assertTrue(lock.exists())
-
-    def test_refuses_stale_lock_with_live_owner(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "unattended.lock"
-            self._write_lock(lock, os.getpid(), minutes_ago=181)
-            with self.assertRaises(ValueError):
-                with unattended_lock(lock):
-                    pass
-
     def test_refuses_fresh_lock_from_dead_owner(self) -> None:
         dead = self._confirmed_dead_pid()
         if dead is None:
@@ -3571,14 +3503,6 @@ class UnattendedLockTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "unattended.lock"
             self._write_lock(lock, dead, minutes_ago=0)
-            with self.assertRaises(ValueError):
-                with unattended_lock(lock):
-                    pass
-
-    def test_unreadable_lock_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "unattended.lock"
-            lock.write_bytes(b"\x00\x01not-json")
             with self.assertRaises(ValueError):
                 with unattended_lock(lock):
                     pass

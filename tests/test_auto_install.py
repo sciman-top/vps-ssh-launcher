@@ -2,12 +2,12 @@ import io
 import os
 import sys
 import unittest
-from collections.abc import Iterator, MutableMapping
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any
 from unittest import mock
 
 import auto_install
+from launcher_fakes import patch_env
 
 
 class FakePexpect:
@@ -59,24 +59,6 @@ class FakeSpawnChild(FakeChild):
     def close(self, force: bool = False) -> None:
         _ = force
         super().close()
-
-
-@contextmanager
-def patch_env(
-    mapping: MutableMapping[str, str],
-    values: dict[str, str],
-    *,
-    clear: bool = False,
-) -> Iterator[None]:
-    original = dict(mapping)
-    if clear:
-        mapping.clear()
-    mapping.update(values)
-    try:
-        yield
-    finally:
-        mapping.clear()
-        mapping.update(original)
 
 
 class AutoInstallPromptTests(unittest.TestCase):

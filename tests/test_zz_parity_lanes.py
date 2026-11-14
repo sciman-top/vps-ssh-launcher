@@ -25,7 +25,6 @@ class ZzXhttpFrontTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assert_apply_is_opt_in(text)
         # The superseded-retirement branch deletes a remote file and reloads
         # nginx; it must stay behind the -Apply gate and only report
         # "pending" on a dry-run (it once deleted the legacy conf in

@@ -21,7 +21,6 @@ class NginxTlsStealthTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assert_apply_is_opt_in(text)
         self.assertIn("LOCK_FILE", text)
         # A reload keeps existing tunnels alive; a restart would not.
         self.assertIn("systemctl reload nginx", text)

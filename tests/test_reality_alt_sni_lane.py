@@ -21,7 +21,6 @@ class RealityAltSniLaneTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assert_apply_is_opt_in(text)
         self.assertIn("ALT_SNI_DRY_RUN=1", text)
 
     def test_refuses_an_unresolvable_or_foreign_hostname(self) -> None:

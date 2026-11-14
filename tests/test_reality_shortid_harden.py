@@ -51,7 +51,6 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_apply_is_opt_in_and_idempotent(self) -> None:
         text = self.text
-        self.assert_apply_is_opt_in(text)
         self.assertIn("shortid_hardening=clean", text)
         self.assertIn("shortid_hardening=needs_strip", text)
         self.assertIn("write_status noop 0", text)

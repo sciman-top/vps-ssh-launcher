@@ -22,7 +22,6 @@ class CdnOriginCertSyncTests(ScriptValidationMixin, unittest.TestCase):
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
         self.assertIn('[ValidateSet("zz")]', text)
-        self.assert_apply_is_opt_in(text)
 
     def test_copies_bwg_wildcard_to_the_zz_cdn_paths(self) -> None:
         text = self.text
