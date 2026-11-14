@@ -34,6 +34,24 @@ class CpaStatusDeployScriptTests(unittest.TestCase):
         push_index = self.text.index("base64 -d > '$remoteFile'")
         self.assertLess(backup_index, push_index)
 
+    def test_backup_stamp_is_expanded_by_the_remote_shell(self) -> None:
+        # Regression: the stamp used to sit in a PowerShell single-quoted
+        # segment as a literal "$(date ...)", so every deploy wrote the same
+        # backup name and the second one destroyed the rollback point. The
+        # stamp must be a remote shell expansion and the copy must be
+        # verified before the overwrite.
+        self.assertIn("stamp=`$(date +%Y%m%d%H%M%S)", self.text)
+        self.assertNotIn("'$remoteFile.bak.`$(date", self.text)
+        self.assertIn('test -f \'$remoteFile.bak.\'"', self.text)
+        self.assertIn("status page backup failed before overwrite", self.text)
+
+    def test_install_restarts_an_already_active_unit(self) -> None:
+        # `systemctl enable --now` does nothing to a running unit, so the
+        # source push alone left the old process serving the old code.
+        self.assertIn("systemctl restart cpa-status.service", self.text)
+        self.assertNotIn("enable --now cpa-status.service", self.text)
+        self.assertIn("CPA_STATUS_SERVICE_SOURCE=", self.text)
+
     def test_push_verifies_sha256(self) -> None:
         self.assertIn("sha256 mismatch after push", self.text)
         self.assertIn("Get-FileHash", self.text)

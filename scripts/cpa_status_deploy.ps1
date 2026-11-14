@@ -67,12 +67,24 @@ function Get-LocalSha256 {
 function Send-StatusSource {
   # Backup, push (chunked mode-600 transport), verify sha256.
   $localSha = Get-LocalSha256
+  # The backup name must be expanded by the remote shell. A literal
+  # '$remoteFile.bak.<timestamp>' in a single-quoted PS string is never
+  # interpolated, so every deploy reused one backup name and the second
+  # overwrote the retention point the rollback path looks for. Emit the
+  # stamp remotely and fail closed if the backup did not appear.
   $prepare = @"
 umask 022; mkdir -p '$remoteDir';
-if [ -f '$remoteFile' ]; then cp -a '$remoteFile' '$remoteFile.bak.`$(date +%Y%m%d%H%M%S)'; fi;
+if [ -f '$remoteFile' ]; then
+  stamp=`$(date +%Y%m%d%H%M%S)
+  cp -a '$remoteFile' '$remoteFile.bak.'"`$stamp" || exit 1
+  test -f '$remoteFile.bak.'"`$stamp" || exit 1
+fi;
 exit 0
 "@
-  Invoke-Remote -Command $prepare | Out-Null
+  $prepared = Invoke-Remote -Command $prepare -Capture
+  if ($prepared.ExitCode -ne 0) {
+    throw "status page backup failed before overwrite: $($prepared.Lines -join '; ')"
+  }
   $sourceText = [IO.File]::ReadAllText($sourcePath)
   $sourceSha = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sourceText))
   $push = (
@@ -88,6 +100,8 @@ exit 0
 }
 
 function Install-StatusUnit {
+  # Recompute here: $localSha lives in Send-StatusSource's scope.
+  $localSha = Get-LocalSha256
   $unit = @"
 [Unit]
 Description=CPA status page (read-only per-model/channel view)
@@ -111,21 +125,35 @@ ProtectHome=read-only
 WantedBy=multi-user.target
 "@
   $unitB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($unit))
+  # enable --now is a no-op on an already-active unit, so a deploy that only
+  # replaced the source file left the old process serving the old code. Restart
+  # unconditionally after the unit is written: this is the only step that makes
+  # the pushed bytes live.
   $install = (
     "umask 022; printf %s '$unitB64' | base64 -d > '$unitPath' && " +
-    "systemctl daemon-reload && systemctl enable --now cpa-status.service"
+    "systemctl daemon-reload && systemctl enable cpa-status.service && " +
+    "systemctl restart cpa-status.service"
   )
   Invoke-Remote -Command $install | Out-Null
   Start-Sleep -Seconds 2
+  # The health probe must also prove the restarted daemon serves the new
+  # bytes: /json alone succeeded against the previous process too, which is
+  # exactly how the stale-daemon deploy looked healthy.
   $health = Invoke-Remote -Capture -Command (
     "systemctl is-active cpa-status.service && " +
-    "curl -fsS http://127.0.0.1:$servicePort/json | head -c 40"
+    "curl -fsS http://127.0.0.1:$servicePort/json | head -c 40 && echo && " +
+    "sha256sum '$remoteFile' | cut -d' ' -f1"
   )
   $state = ($health.Lines | Select-Object -First 1)
   if ($health.ExitCode -ne 0) {
     throw "service health check failed: $($health.Lines -join '; ')"
   }
+  $liveSha = ($health.Lines | Select-Object -Last 1)
+  if ($liveSha -ne $localSha) {
+    throw "deployed source does not match the local file: local=$localSha remote=$liveSha"
+  }
   Write-Output "CPA_STATUS_SERVICE_ACTIVE=$state"
+  Write-Output "CPA_STATUS_SERVICE_SOURCE=$liveSha"
 }
 
 function Add-NginxLocation {
