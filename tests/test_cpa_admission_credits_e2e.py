@@ -29,6 +29,7 @@ from typing import Any, cast
 
 
 from test_cpa_admission import config, lane
+from script_validation_support import server_thread
 
 MODULE = runpy.run_path(
     str(Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.py")
@@ -56,7 +57,7 @@ def _credits_body(code: int = 6008) -> bytes:
 def _serve(handler: Any) -> tuple[Any, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = server_thread(server)
     thread.start()
     return server, thread
 
@@ -116,8 +117,8 @@ def _run(
     )
     proxy = AdmissionProxy(loaded, workbuddy_state_path=state_path)
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
+    admission_worker = server_thread(server)
+    admission_worker.start()
     responses: list[bytes] = []
     try:
         for model in models:
@@ -127,7 +128,7 @@ def _run(
         upstream.shutdown()
         server.server_close()
         upstream.server_close()
-        server_thread.join(timeout=3)
+        admission_worker.join(timeout=3)
         upstream_thread.join(timeout=3)
     state = json.loads(state_path.read_text(encoding="utf-8"))
     return responses, {"calls": calls, "state": state}

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from script_validation_support import server_thread
 
 
 ROOT = Path(__file__).parents[1]
@@ -22,7 +23,7 @@ load_config = cast(Any, MODULE["load_config"])
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = server_thread(server)
     thread.start()
     return server, thread
 
@@ -74,7 +75,7 @@ def test_glm_provider_errors_forward_status_body_and_retry_after_unchanged(
     proxy = AdmissionProxy(loaded)
     state = proxy.lanes["zhipu-coding-plan"]
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
+    admission_thread = server_thread(admission)
     admission_thread.start()
     client = http.client.HTTPConnection(
         "127.0.0.1", admission.server_address[1], timeout=5

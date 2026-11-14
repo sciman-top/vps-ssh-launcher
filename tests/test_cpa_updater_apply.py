@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -23,6 +22,7 @@ from script_validation_support import (
     ScriptValidationMixin,
     claude_route_headers,
     read_guardrail_source,
+    server_thread,
 )
 
 WSL_BASH_TIMEOUT_SECONDS = 60
@@ -379,7 +379,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 self.wfile.write(body)
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        server_thread(server).start()
         try:
             # The stub reports one fixed lock; only the env side varies, so
             # the second case exercises the mismatch refusal.

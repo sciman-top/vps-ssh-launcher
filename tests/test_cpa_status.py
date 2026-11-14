@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from typing import Any
+from script_validation_support import server_thread
 
 _MODULE_PATH = Path(__file__).parents[1] / "scripts" / "cpa_status.py"
 _spec = importlib.util.spec_from_file_location("cpa_status", _MODULE_PATH)
@@ -834,7 +835,6 @@ class ServePageTests(unittest.TestCase):
     def test_remote_serve_serves_in_process_documents(self) -> None:
         # The on-host daemon swaps the document loader for in-process
         # collection; everything else (page, /json, loopback guard) is shared.
-        import threading
         import urllib.request
 
         calls: list[int] = []
@@ -849,7 +849,7 @@ class ServePageTests(unittest.TestCase):
                 cpa_status._SnapshotCache(None, ttl_seconds=0.0, loader=loader)
             ),
         )
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread = server_thread(server)
         thread.start()
         try:
             port = server.server_address[1]

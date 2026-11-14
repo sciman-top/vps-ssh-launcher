@@ -25,6 +25,7 @@ from script_validation_support import (
     cpa_test_generation_response,
     cpa_test_probe_budget,
     read_guardrail_source,
+    server_thread,
 )
 
 
@@ -1459,7 +1460,6 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         # state must come from the manifest's whole OAuth alias set.
         import http.server
         import socket
-        import threading
 
         import yaml
 
@@ -1513,7 +1513,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 return
 
         server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        server_thread(server).start()
         # addCleanup is LIFO: register the close first so shutdown runs before
         # the listening socket disappears from under serve_forever.
         self.addCleanup(server.server_close)

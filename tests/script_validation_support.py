@@ -9,11 +9,37 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, cast
 from cpa_catalog_expectations import (
     PROVIDER_MATRIX_TAIL,
 )
+
+
+# socketserver.serve_forever polls its shutdown flag once per poll_interval,
+# 0.5s by default, so every `server.shutdown()` burns up to ~498ms doing
+# nothing (measured on this host: 0.5s -> 498ms, 0.05s -> 51ms, 0.01s -> 4ms).
+# The admission suite alone tears down two servers per test. A shorter interval
+# changes no behaviour -- shutdown() still waits for the in-flight handler and
+# the loop still honours the flag -- it only stops the teardown from idling.
+SHUTDOWN_POLL_INTERVAL = 0.02
+
+
+def server_thread(server: Any, name: str | None = None) -> threading.Thread:
+    """Return an *unstarted* daemon thread running `server.serve_forever`.
+
+    Deliberately returns the thread instead of starting it: every call site
+    already owns its `.start()` and, in several places, starts a list of
+    mixed threads together. Starting here would double-start the ones this
+    replaces and silently drop the others.
+    """
+    return threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": SHUTDOWN_POLL_INTERVAL},
+        daemon=True,
+        name=name,
+    )
 
 
 def repo_root() -> Path:
