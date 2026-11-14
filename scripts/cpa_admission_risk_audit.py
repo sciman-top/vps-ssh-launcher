@@ -236,6 +236,18 @@ def advertised_aliases(routes: dict[str, Any]) -> dict[str, str]:
             alias = model.get("alias")
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
+    for route in routes.get("codex_api_key_routes", []):
+        label = f"codex-key:{route.get('name', route.get('base-url'))}"
+        for model in route.get("models", []):
+            alias = model.get("alias") or model.get("name")
+            if isinstance(alias, str) and alias:
+                owners.setdefault(alias, label)
+    for route in routes.get("claude_api_key_routes", []):
+        label = f"claude-key:{route.get('name', route.get('base-url'))}"
+        for model in route.get("models", []):
+            alias = model.get("alias") or model.get("name")
+            if isinstance(alias, str) and alias:
+                owners.setdefault(alias, label)
     for route in routes.get("oauth_routes", []):
         label = f"oauth:{route.get('name')}"
         for model in route.get("models", []):
@@ -256,6 +268,18 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
         label = f"slot{provider.get('slot')}:{provider.get('name')}"
         for model in provider.get("models", []):
             alias = model.get("alias")
+            if isinstance(alias, str) and alias:
+                seen.setdefault(alias, []).append(label)
+    for route in routes.get("codex_api_key_routes", []):
+        label = f"codex-key:{route.get('name', route.get('base-url'))}"
+        for model in route.get("models", []):
+            alias = model.get("alias") or model.get("name")
+            if isinstance(alias, str) and alias:
+                seen.setdefault(alias, []).append(label)
+    for route in routes.get("claude_api_key_routes", []):
+        label = f"claude-key:{route.get('name', route.get('base-url'))}"
+        for model in route.get("models", []):
+            alias = model.get("alias") or model.get("name")
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
     for route in routes.get("oauth_routes", []):
@@ -341,6 +365,32 @@ def _declared_lane_coverage(
         ]
         entries.append(
             (f"slot{provider.get('slot')}:{provider.get('name')}", lane, aliases)
+        )
+    for route in routes.get("codex_api_key_routes", []):
+        lane = route.get("admission_lane")
+        if not isinstance(lane, str) or not lane:
+            continue
+        aliases = [
+            model["alias"] or model["name"]
+            for model in route.get("models", [])
+            if isinstance(model, dict)
+            and isinstance(model.get("alias") or model.get("name"), str)
+        ]
+        entries.append(
+            (f"codex-key:{route.get('name', route.get('base-url'))}", lane, aliases)
+        )
+    for route in routes.get("claude_api_key_routes", []):
+        lane = route.get("admission_lane")
+        if not isinstance(lane, str) or not lane:
+            continue
+        aliases = [
+            model["alias"] or model["name"]
+            for model in route.get("models", [])
+            if isinstance(model, dict)
+            and isinstance(model.get("alias") or model.get("name"), str)
+        ]
+        entries.append(
+            (f"claude-key:{route.get('name', route.get('base-url'))}", lane, aliases)
         )
     for route in routes.get("oauth_routes", []):
         lane = route.get("admission_lane")
@@ -859,7 +909,15 @@ def audit_posture(
 ) -> list[Finding]:
     findings: list[Finding] = []
     owners = advertised_aliases(routes)
-    retired_models = set(routes.get("retired_models") or [])
+    # retired_models is a per-provider tombstone list in the manifest (matching
+    # the exclusion sets each provider block carries), not a top-level key.
+    retired_models = {
+        model
+        for provider in routes.get("providers", [])
+        if isinstance(provider, dict)
+        for model in provider.get("retired_models") or ()
+        if isinstance(model, str) and model
+    }
     total, errors = observed_totals(db_path, hours)
     window = f"the {hours:g}h window ending at the newest client row"
     if total == 0:

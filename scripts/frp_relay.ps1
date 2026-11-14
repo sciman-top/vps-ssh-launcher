@@ -7,16 +7,21 @@ param(
   [switch]$Status,
   [Parameter(ParameterSetName = 'Acceptance')]
   [switch]$Acceptance,
-  [Parameter(ParameterSetName = 'Setup')]
+  # The acceptance port triple. All three default to the historical 5200 and
+  # must be overridable on -Acceptance (runbook: current terminal state is
+  # ECS 27000 control / 52443 mapping). -ProfilePort also serves the -Status
+  # listener probe, so it binds in both parameter sets.
+  [Parameter(ParameterSetName = 'Acceptance')]
   [ValidateRange(1, 65535)]
   [int]$ServerPort = 5200,
-  [Parameter(ParameterSetName = 'Setup')]
+  [Parameter(ParameterSetName = 'Acceptance')]
   [ValidateRange(1, 65535)]
   [int]$HomePort = 5200,
   [Parameter(ParameterSetName = 'Acceptance')]
   [string]$AcceptanceCommand,
   [Parameter(ParameterSetName = 'Acceptance')]
   [string]$ExpectedEgress,
+  [Parameter(ParameterSetName = 'Status')]
   [Parameter(ParameterSetName = 'Acceptance')]
   [ValidateRange(1, 65535)]
   [int]$ProfilePort = 5200,

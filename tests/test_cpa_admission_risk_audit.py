@@ -123,6 +123,12 @@ def routes_manifest(
         oauth_exclusions = ["gpt-6.1-sol-input"]
     if key_exclusions is None:
         key_exclusions = ["gpt-6.1-sol-input", "gpt-6-luna"]
+    if retired_models:
+        # The manifest nests retired_models inside the provider block that
+        # used to serve the name (slot 1), not at the top level.
+        providers = [
+            dict(providers[0], retired_models=list(retired_models))
+        ] + providers[1:]
     return {
         "version": 1,
         "providers": providers,
@@ -130,7 +136,6 @@ def routes_manifest(
         "oauth_exclusions": oauth_exclusions,
         "codex_api_key_exclusions": key_exclusions,
         "pooled_aliases": pooled_aliases or [],
-        "retired_models": retired_models or [],
     }
 
 
@@ -669,8 +674,14 @@ class DataStalenessTests(unittest.TestCase):
         write_db(self.db, self._failing_rows(newest))
         findings = audit_posture(
             routes_manifest(
-                providers=[],
-                retired_models=["gpt-6.1-sol-input"],
+                providers=[
+                    {
+                        "slot": 1,
+                        "name": "ai.input.im",
+                        "models": [],
+                        "retired_models": ["gpt-6.1-sol-input"],
+                    }
+                ],
             ),
             self.db,
             24,

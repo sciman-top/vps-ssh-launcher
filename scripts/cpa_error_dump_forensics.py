@@ -215,7 +215,12 @@ def _remote_payload() -> str:
     return base64.b64encode(source).decode("ascii")
 
 
-def _analyse_remotely(profile: str) -> tuple[int, str]:
+def _analyse_remotely(profile: str) -> tuple[int, str, str]:
+    """Run the self-transport probe; returns (exit, stdout, stderr) separated.
+
+    stdout stays alone because the caller slices a JSON document out of it;
+    ssh banner/remote stderr noise must not ride the same stream.
+    """
     command = (
         "umask 077; tmp=$(mktemp /tmp/cpa-dump-forensics.XXXXXXXXXX.py) || exit 1; "
         "trap 'rm -f -- \"$tmp\"' EXIT; "
@@ -237,7 +242,7 @@ def _analyse_remotely(profile: str) -> tuple[int, str]:
         text=True,
         check=False,
     )
-    return completed.returncode, completed.stdout + completed.stderr
+    return completed.returncode, completed.stdout, completed.stderr
 
 
 def _load_vocabulary(path: pathlib.Path) -> tuple[frozenset[str], frozenset[int]]:
@@ -329,11 +334,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = list(args.file)
 
     if args.ssh_profile:
-        returncode, output = _analyse_remotely(args.ssh_profile)
-        if returncode != 0 and not output.strip().startswith("{"):
-            print(output.strip(), file=sys.stderr)
+        returncode, stdout, stderr = _analyse_remotely(args.ssh_profile)
+        if returncode != 0 and not stdout.strip().startswith("{"):
+            print(stdout.strip(), file=sys.stderr)
+            print(stderr.strip(), file=sys.stderr)
             return 2
-        print(output.strip())
+        print(stdout.strip())
+        if stderr.strip():
+            print(stderr.strip(), file=sys.stderr)
         return returncode if returncode in (0, 1, 2) else 1
 
     try:

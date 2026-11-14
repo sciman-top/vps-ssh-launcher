@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import subprocess
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -941,9 +942,26 @@ class TransportTests(unittest.TestCase):
                 side_effect=AssertionError("ssh must not be spawned"),
             ),
         ):
-            returncode, output = cpa_status.run_remote(None)
+            returncode, stdout, stderr = cpa_status.run_remote(None)
         self.assertEqual(returncode, 2)
-        self.assertIn("CreateProcess", output)
+        self.assertIn("CreateProcess", stderr)
+        self.assertEqual(stdout, "")
+
+    def test_run_remote_keeps_stderr_out_of_the_document_stream(self) -> None:
+        # The self-transport used to return stdout+stderr concatenated, so a
+        # successful collection followed by any ssh/remote stderr tail made
+        # _parse_document raise "Extra data" and look like a failed run.
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"schema": 1}\n',
+            stderr="Permanently added 'host' to the list of known hosts.\n",
+        )
+        with mock.patch.object(cpa_status.subprocess, "run", return_value=completed):
+            returncode, stdout, stderr = cpa_status.run_remote(None)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(cpa_status._parse_document(stdout)["schema"], 1)
+        self.assertIn("Permanently added", stderr)
 
     def test_parse_document_skips_ssh_banner_noise(self) -> None:
         document = cpa_status._parse_document('banner line\n{"schema": 1}\n')

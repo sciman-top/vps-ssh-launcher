@@ -90,7 +90,8 @@ def _prune_model_object_list(
     removed = 0
     for item in items:
         if isinstance(item, dict) and any(
-            item.get(key) in retired_models for key in MODEL_OBJECT_ID_KEYS
+            isinstance(item.get(key), str) and item.get(key) in retired_models
+            for key in MODEL_OBJECT_ID_KEYS
         ):
             removed += 1
         else:
@@ -115,7 +116,14 @@ def prune_json(value: Any, retired_models: set[str]) -> tuple[Any, int]:
     out: dict[str, Any] = {}
     for key, child in value.items():
         if key in MODEL_LIST_KEYS and isinstance(child, list):
-            kept = [item for item in child if item not in retired_models]
+            # A non-string member cannot be a retired ID; keep it rather than
+            # letting `in retired_models` raise TypeError on an unhashable
+            # value (plan_json in cockpit_retired_models guards the same way).
+            kept = [
+                item
+                for item in child
+                if not (isinstance(item, str) and item in retired_models)
+            ]
             removed += len(child) - len(kept)
             out[key] = kept
             continue

@@ -598,6 +598,11 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
         for kind, key in (
             ("oauth", "oauth_routes"),
             ("plugin", "plugin_routes"),
+            # Managed key routes are API-key upstreams like the providers: no
+            # auth-file credential matching exists for them, so they share the
+            # direct verdict path instead of the oauth/plugin one.
+            ("direct", "codex_api_key_routes"),
+            ("direct", "claude_api_key_routes"),
             ("direct", "providers"),
         ):
             section = manifest.get(key)
@@ -633,9 +638,9 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                 raw_model
                 if isinstance(raw_model, str)
                 else (
-                    raw_model.get("alias")
+                    raw_model.get("alias") or raw_model.get("name")
                     if isinstance(raw_model, dict)
-                    and isinstance(raw_model.get("alias"), str)
+                    and isinstance(raw_model.get("alias") or raw_model.get("name"), str)
                     else None
                 )
             )
@@ -955,12 +960,11 @@ _VERDICT_CSS = {
 
 def collect_document(profile: str | None) -> dict[str, Any]:
     """One end-to-end collection over SSH; raises ValueError on failure."""
-    returncode, output = run_remote(profile)
+    returncode, stdout, stderr = run_remote(profile)
     if returncode != 0:
-        raise ValueError(
-            f"remote execution failed (exit {returncode}): {output[-200:]}"
-        )
-    return _parse_document(output)
+        detail = (stdout or stderr or "")[-200:]
+        raise ValueError(f"remote execution failed (exit {returncode}): {detail}")
+    return _parse_document(stdout)
 
 
 def _collection_failure_document(message: str) -> dict[str, Any]:
@@ -1242,17 +1246,24 @@ def _remote_command() -> str:
     )
 
 
-def run_remote(profile: str | None) -> tuple[int, str]:
+def run_remote(profile: str | None) -> tuple[int, str, str]:
+    """Run the self-transport collection; returns (exit, stdout, stderr).
+
+    The streams stay separated: ssh warnings (banner, "Permanently added")
+    and remote stderr land in the third element, so a successful collection
+    followed by any stderr tail cannot poison the JSON document that
+    _parse_document slices out of stdout.
+    """
     try:
         command = _remote_command()
     except ValueError as exc:
-        return 2, f"cpa_status: {exc}"
+        return 2, "", f"cpa_status: {exc}"
     argv = [sys.executable, str(pathlib.Path(__file__).parent.parent / "ssh_tool.py")]
     if profile:
         argv.extend(["--profile", profile])
     argv.extend(["run", "--command", command])
     completed = subprocess.run(argv, capture_output=True, text=True, check=False)
-    return completed.returncode, completed.stdout + completed.stderr
+    return completed.returncode, completed.stdout, completed.stderr
 
 
 def _parse_document(output: str) -> dict[str, Any]:
@@ -1326,18 +1337,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.serve:
         return serve(args.profile, args.port)
 
-    returncode, output = run_remote(args.profile)
+    returncode, stdout, stderr = run_remote(args.profile)
     if returncode != 0:
         print(
             f"cpa_status: remote execution failed (exit {returncode})", file=sys.stderr
         )
-        print(output, file=sys.stderr)
+        print(stdout, file=sys.stderr)
+        print(stderr, file=sys.stderr)
         return 2
     try:
-        document = _parse_document(output)
+        document = _parse_document(stdout)
     except ValueError as exc:
         print(f"cpa_status: {exc}", file=sys.stderr)
-        print(output, file=sys.stderr)
+        print(stdout, file=sys.stderr)
+        print(stderr, file=sys.stderr)
         return 2
     if args.json:
         print(json.dumps(document, ensure_ascii=False, indent=1))
