@@ -530,54 +530,39 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
 $updaterTimeoutConfBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($updaterTimeoutConfText))
 $updaterTimeoutConfSha256 = Get-LfNormalizedSha256 -Text $updaterTimeoutConfText
 
-$projectionSourcePaths = @(
-  "connect.ps1",
-  "scripts/cpa_bwg_guardrails.ps1",
-  "scripts/remote/cpa-auto-update.sh",
-  "scripts/remote/cpa-health.py",
-  "scripts/remote/cpa_health_runtime.py",
-  "scripts/remote/cpa_policy.py",
-  "scripts/remote/cpa_provider_routes.json",
-  "scripts/remote/cpa-admission.py",
-  "scripts/remote/cpa-admission.json",
-  "scripts/remote/cpa-admission.service",
-  "scripts/remote/cpa-admission-integrity-check.sh",
-  "scripts/remote/cpa-admission-launch.sh",
-  "scripts/remote/cpa_admission_bootstrap.py",
-  "scripts/remote/cpa_request_guard.py",
-  "scripts/remote/cpa-admission-integrity.conf",
-  "scripts/remote/cpa-admission-integrity-pin.txt",
-  "scripts/remote/cpa-update-timeout.conf",
-  "scripts/remote/cpa-fail2ban-filter.conf",
-  "scripts/remote/cpa-fail2ban-jail.conf",
-  "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
-)
-$projectionSourceHashes = [ordered]@{
-  "connect.ps1" = Get-LfNormalizedSha256 -Text $connectText
-  "scripts/cpa_bwg_guardrails.ps1" = Get-LfNormalizedSha256 -Text ((Get-Content -LiteralPath $PSCommandPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n"))
-  "scripts/remote/cpa-auto-update.sh" = $updaterSha256
-  "scripts/remote/cpa-health.py" = $healthSha256
-  "scripts/remote/cpa_health_runtime.py" = $healthRuntimeSha256
-  "scripts/remote/cpa_policy.py" = $policySha256
-  "scripts/remote/cpa_provider_routes.json" = $providerRoutesSha256
-  "scripts/remote/cpa-admission.py" = $admissionSha256
-  "scripts/remote/cpa-admission.json" = $admissionConfigSha256
-  "scripts/remote/cpa-admission.service" = $admissionUnitSha256
-  "scripts/remote/cpa-admission-integrity-check.sh" = $admissionIntegrityCheckSha256
-  "scripts/remote/cpa-admission-launch.sh" = $admissionLauncherSha256
-  "scripts/remote/cpa_admission_bootstrap.py" = Get-LfNormalizedSha256 -Text $admissionBootstrapText
-  "scripts/remote/cpa_request_guard.py" = Get-LfNormalizedSha256 -Text $admissionRequestGuardText
-  "scripts/remote/cpa-admission-integrity.conf" = $admissionIntegrityDropinSha256
-  "scripts/remote/cpa-admission-integrity-pin.txt" = $admissionIntegrityPinSha256
-  "scripts/remote/cpa-update-timeout.conf" = $updaterTimeoutConfSha256
-  "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterSha256
-  "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailSha256
-  "scripts/remote/cpa-guardrail-workbuddy-version-check.sh" = $workBuddyVersionCheckSha256
+# Keep the clean-tree and hash checks driven by one source registry. The
+# individual text variables above remain named because later preparation steps
+# consume them directly, while this registry prevents a newly projected file
+# from being added to one list and forgotten in the other.
+$projectionSources = [ordered]@{
+  "connect.ps1" = $connectText
+  "scripts/cpa_bwg_guardrails.ps1" = (Get-Content -LiteralPath $PSCommandPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  "scripts/remote/cpa-auto-update.sh" = $updaterText
+  "scripts/remote/cpa-health.py" = $healthText
+  "scripts/remote/cpa_health_runtime.py" = $healthRuntimeText
+  "scripts/remote/cpa_policy.py" = $policyText
+  "scripts/remote/cpa_provider_routes.json" = $providerRoutesText
+  "scripts/remote/cpa-admission.py" = $admissionText
+  "scripts/remote/cpa-admission.json" = $admissionConfigText
+  "scripts/remote/cpa-admission.service" = $admissionUnitText
+  "scripts/remote/cpa-admission-integrity-check.sh" = $admissionIntegrityCheckText
+  "scripts/remote/cpa-admission-launch.sh" = $admissionLauncherText
+  "scripts/remote/cpa_admission_bootstrap.py" = $admissionBootstrapText
+  "scripts/remote/cpa_request_guard.py" = $admissionRequestGuardText
+  "scripts/remote/cpa-admission-integrity.conf" = $admissionIntegrityDropinText
+  "scripts/remote/cpa-admission-integrity-pin.txt" = $admissionIntegrityPinText
+  "scripts/remote/cpa-update-timeout.conf" = $updaterTimeoutConfText
+  "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterText
+  "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailText
+  "scripts/remote/cpa-guardrail-workbuddy-version-check.sh" = $workBuddyVersionCheckText
 }
-
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
-  $projectionSourcePaths += $entry.Value
-  $projectionSourceHashes[$entry.Value] = Get-LfNormalizedSha256 -Text $guardrailTemplateTexts[$entry.Key]
+  $projectionSources[$entry.Value] = $guardrailTemplateTexts[$entry.Key]
+}
+$projectionSourcePaths = @($projectionSources.Keys)
+$projectionSourceHashes = [ordered]@{}
+foreach ($entry in $projectionSources.GetEnumerator()) {
+  $projectionSourceHashes[$entry.Key] = Get-LfNormalizedSha256 -Text $entry.Value
 }
 
 function Assert-ProjectionSourcesUnchanged {
