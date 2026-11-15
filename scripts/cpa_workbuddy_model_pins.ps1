@@ -4,7 +4,7 @@ param(
   [ValidateSet("bwg")]
   [string]$Profile = "bwg",
   [string]$Config = "",
-  [string]$ModelsCn = "deepseek-v4.1-flash,hy4free",
+  [string]$ModelsCn = "deepseek-v4.1-flash",
   [string]$ModelsIntl = "deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free",
   [switch]$Apply
 )

@@ -1,8 +1,7 @@
 {
   "version": 1,
   "pooled_aliases": [
-    "deepseek-v4.1-flash",
-    "hy4free"
+    "deepseek-v4.1-flash"
   ],
   "probe_lint_rules": [
     "F",
@@ -291,10 +290,9 @@
       "provider": "workbuddy",
       "realm": "cn",
       "models": [
-        "deepseek-v4.1-flash",
-        "hy4free"
+        "deepseek-v4.1-flash"
       ],
-      "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn",
+      "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn. 2026-11-15: hy4free is removed from models_cn and stays exclusive to the intl realm. It is a zero-cost (x0.00 credits) fallback, so keeping it off the CN credentials leaves them carrying only the paid primary and keeps failure attribution per realm clean. The upstream id is the same hy4-free on both realms, so this narrows the candidate pool; it does not declare a new model.",
       "shared_consumption": true,
       "admission_lane": "workbuddy-oauth"
     },

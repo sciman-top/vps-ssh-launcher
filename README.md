@@ -602,6 +602,23 @@ BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability pa
 
 口径与读法见 [故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
 
+### 会话内缓存冷重启归因 (`cpa_cache_reset_probe.py`)
+
+同一 `client_request_hash` 的相邻轮次共享一个上游会话。本工具按会话回溯，把"前缀
+已建立、下一轮却 `usage_cached=0`"的冷重启归因到 `rebind`（换了实例）、
+`model_switch`（客户端换了模型）、`lane_switch`（换了车道）、`cache_eviction`
+（同实例同模型，前缀仍被丢弃）或 `unattributed`（上一轮无 usage 可比）。只读日志，
+不发请求，不输出提示词或凭据。命中率同时给两个口径：全体，以及剔除探活/标题类
+小请求后的 `eligible_cache_hit_ratio`。
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cpa_cache_reset_probe.py --file adm48.log
+.\.venv\Scripts\python.exe scripts/cpa_cache_reset_probe.py --ssh-profile bwg --hours 48 --json
+```
+
+当两者差距明显时，先看 `turns_with_usage` 与 `cache_eligible_turns` 的探活占比，
+再判断该车道是否真的"缓存很差"。
+
 统一执行工作流入口见 [CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
 
 ```powershell
@@ -855,6 +872,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 - **证据分级管理**：例行测试、只读探针与常规巡检结果直接附于 Commit Message 或现有工单中；仅当发生真实远端变更、故障排障或版本 Release 时，才在 `docs/change-evidence/` 生成归档收据。
 - 同一任务的 Full、CI 或 lane receipt 只收集一次；修复后先验证真实失败，再做一次最终收口，不重复完整全套。历史追溯用的旧证据应迁往仓外归档或只读归档分支。
 - **交接书**：[20261108-bwg-cpa-handoff.md](docs/change-evidence/20261108-bwg-cpa-handoff.md)。接手 CPA 风控/性能工作时**先读这一篇**：它记录当前真实状态、可直接复用的结论、已更正的错误归因、未完成项（P1 arena 碎片 / P2 容器内存记账 / P3 v8.0.60 / P4 客户端行为），以及本会话踩过的操作陷阱与明确的禁止清单。
+- **最新增量复审**：[20261115-bwg-cpa-risk-review.md](docs/change-evidence/20261115-bwg-cpa-risk-review.md)。封号潮再起后的只读复审：24h 零账号级信号、6004 的 CN/INTL 跨 realm 扩散量化、缓存命中率的探活人口污染、以及大上下文会话的冷重启形态。**读交接书之后读这一篇**，它只写增量，不推翻交接书。
 
 ---
 

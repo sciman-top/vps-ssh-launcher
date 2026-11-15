@@ -98,7 +98,11 @@ ADMISSION_LANE_MODELS = {
 # route manifest so a CN/INTL swap is caught instead of silently accepted by
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
-    "cn": ["deepseek-v4.1-flash", "hy4free"],
+    # 2026-11-15: hy4free is a zero-cost (x0.00 credits) fallback and is now
+    # exclusive to intl, so the CN pool carries only the paid primary. Both
+    # realms answer the same upstream id hy4-free, so this narrows the
+    # candidate pool; it does not declare a new model.
+    "cn": ["deepseek-v4.1-flash"],
     "intl": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "hy4free"],
 }
 
