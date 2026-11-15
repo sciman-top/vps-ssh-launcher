@@ -311,7 +311,7 @@ Runtime dependencies are pinned to validated Paramiko 5.x, deprecating insecure 
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
 ```
 

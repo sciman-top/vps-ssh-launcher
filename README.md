@@ -373,7 +373,7 @@ SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` �
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
 ```
 

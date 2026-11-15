@@ -1160,7 +1160,7 @@ try {
         self.assertNotIn("-IntegrationExpected", run_text)
         install_text = steps["Install dependencies"]["run"]
         self.assertIn(
-            "python -m pip install --requirement requirements-dev.lock",
+            "python -m pip install --require-hashes --requirement requirements-dev.lock",
             install_text,
         )
         self.assertIn(
