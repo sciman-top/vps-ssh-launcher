@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import sqlite3
 import stat
 import sys
@@ -15,20 +13,18 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .models import (
-    PLAN_STATUSES,
     MaintenancePlan,
 )
 from .planner import updated_plan
 from ..safe_files import open_private_file, prepare_private_parent
+from .state_codec import (
+    plan_from_json as _plan_from_json,
+    plan_from_row as _plan_from_row,
+    serialize_plan as _serialize_plan,
+    validate_plan_id as _validate_plan_id,
+)
 
-_PLAN_ID_RE = re.compile(r"^plan-[0-9a-f]{16}$")
 _PRIVATE_FILE_MODE = 0o600
-
-
-def _validate_plan_id(value: Any) -> str:
-    if not isinstance(value, str) or _PLAN_ID_RE.fullmatch(value) is None:
-        raise ValueError("Stored maintenance plan id has an invalid format.")
-    return value
 
 
 SCHEMA = """
@@ -165,19 +161,15 @@ def save_plan(
     receipt_path: Path | None = None,
 ) -> None:
     plan_id = _validate_plan_id(plan.plan_id)
-    serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
+    serialized = _serialize_plan(plan)
     with _connect(path) as connection:
         target = connection.execute(
             "SELECT plan_json FROM plans WHERE plan_id = ?",
             (plan_id,),
         ).fetchone()
         if target is not None:
-            previous_value = json.loads(str(target[0]))
-            if not isinstance(previous_value, dict):
-                connection.rollback()
-                raise ValueError("Stored plan root is invalid.")
             try:
-                previous = _plan_from_dict(previous_value)
+                previous = _plan_from_json(str(target[0]))
             except ValueError:
                 connection.rollback()
                 raise
@@ -247,7 +239,7 @@ def save_plan_if_absent(
         ).to_dict()
     )
     plan_id = _validate_plan_id(plan.plan_id)
-    serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
+    serialized = _serialize_plan(plan)
     with _connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         cursor = connection.execute(
@@ -267,13 +259,7 @@ def save_plan_if_absent(
         ).fetchone()
         if row is None:
             raise ValueError("Stored maintenance plan could not be read after save.")
-        row_plan_id = _validate_plan_id(str(row[0]))
-        value = json.loads(str(row[1]))
-        if not isinstance(value, dict):
-            raise ValueError("Stored plan root is invalid.")
-        existing = _plan_from_dict(value)
-        if existing.plan_id != row_plan_id:
-            raise ValueError("Stored plan id does not match its database key.")
+        existing = _plan_from_row(row)
         if (
             existing.policy_fingerprint != plan.policy_fingerprint
             or existing.inventory_fingerprint != plan.inventory_fingerprint
@@ -312,23 +298,12 @@ def save_plan_if_absent(
                 "UPDATE plans SET created_at = ?, plan_json = ? WHERE plan_id = ?",
                 (
                     existing.created_at,
-                    json.dumps(existing.to_dict(), ensure_ascii=True, sort_keys=True),
+                    _serialize_plan(existing),
                     plan_id,
                 ),
             )
         connection.commit()
     return existing, False
-
-
-def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
-    # The status diagnostic is pinned ("status is invalid"); from_dict covers
-    # the remaining shape checks, including per-action status validation.
-    status = value.get("status")
-    if not isinstance(status, str) or status not in PLAN_STATUSES:
-        raise ValueError("Stored maintenance plan status is invalid.")
-    plan = MaintenancePlan.from_dict(value)
-    _validate_plan_id(plan.plan_id)
-    return plan
 
 
 def load_plan(path: Path, plan_id: str | None = None) -> MaintenancePlan:
@@ -344,14 +319,7 @@ def load_plan(path: Path, plan_id: str | None = None) -> MaintenancePlan:
             ).fetchone()
     if row is None:
         raise ValueError("No stored maintenance plan was found.")
-    row_plan_id = _validate_plan_id(str(row[0]))
-    value = json.loads(str(row[1]))
-    if not isinstance(value, dict):
-        raise ValueError("Stored plan root is invalid.")
-    plan = _plan_from_dict(value)
-    if plan.plan_id != row_plan_id:
-        raise ValueError("Stored plan id does not match its database key.")
-    return plan
+    return _plan_from_row(row)
 
 
 def _update_stored_plan(
@@ -368,7 +336,7 @@ def _update_stored_plan(
         (
             plan.created_at,
             plan.status,
-            json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True),
+            _serialize_plan(plan),
             plan_id,
         ),
     )
@@ -421,10 +389,7 @@ def record_remote_start_and_mark_applied(
         ).fetchone()
         if row is None:
             raise ValueError("Maintenance plan no longer exists.")
-        value = json.loads(str(row[0]))
-        if not isinstance(value, dict):
-            raise ValueError("Stored plan root is invalid.")
-        stored = _plan_from_dict(value)
+        stored = _plan_from_json(str(row[0]))
         matches = [
             action
             for action in stored.actions
@@ -477,10 +442,7 @@ def restore_unattended_busy_plan(
         ).fetchone()
         if row is None:
             raise ValueError("Busy maintenance plan no longer exists.")
-        value = json.loads(str(row[0]))
-        if not isinstance(value, dict):
-            raise ValueError("Stored plan root is invalid.")
-        stored = _plan_from_dict(value)
+        stored = _plan_from_json(str(row[0]))
         matches = [
             action
             for action in stored.actions
@@ -527,10 +489,7 @@ def delete_plan_if_pristine(
         if row is None:
             connection.commit()
             return True
-        value = json.loads(str(row[0]))
-        if not isinstance(value, dict):
-            raise ValueError("Stored plan root is invalid.")
-        stored = _plan_from_dict(value)
+        stored = _plan_from_json(str(row[0]))
         actual_receipt = str(row[1]) if row[1] is not None else None
         expected_receipt = str(receipt_path) if receipt_path is not None else None
         if (receipt_path is not None and actual_receipt != expected_receipt) or any(
@@ -659,10 +618,7 @@ def refund_automation_attempt(
         ).fetchone()
         if row is None:
             raise ValueError("Busy maintenance plan no longer exists.")
-        value = json.loads(str(row[0]))
-        if not isinstance(value, dict):
-            raise ValueError("Stored plan root is invalid.")
-        plan = _plan_from_dict(value)
+        plan = _plan_from_json(str(row[0]))
         if plan.may_refund_unattended_attempt is not True:
             raise ValueError("The current plan has no refundable unattended attempt.")
         _update_stored_plan(
