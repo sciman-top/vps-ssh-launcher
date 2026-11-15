@@ -12,6 +12,26 @@ _SERVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _CPA_MARKERS = ("cliproxyapi", "cli-proxy-api")
 
 
+def require_exact_table(
+    value: Any,
+    *,
+    field_name: str,
+    required_keys: set[str],
+    keys_description: str | None = None,
+) -> dict[str, Any]:
+    """Validate the shared outer shape of a resource pin.
+
+    Resource modules keep field-level normalization local, while this helper
+    owns the invariant that pins are TOML tables with no silent extra keys.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a TOML table.")
+    if set(value) != required_keys:
+        keys = keys_description or ", ".join(sorted(required_keys))
+        raise ValueError(f"{field_name} requires exactly {keys}.")
+    return value
+
+
 def normalize_version(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError("Xray version pin must be a string like 26.3.27.")

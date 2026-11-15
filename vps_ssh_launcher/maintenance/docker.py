@@ -11,16 +11,17 @@ from .pins import (
     normalize_sha256,
     normalize_services,
     normalize_digests,
+    require_exact_table,
 )
 
 
 def normalize_pin(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError("pins.docker must be a TOML table.")
-    if set(value) != {"compose_file", "compose_sha256", "services", "digests"}:
-        raise ValueError(
-            "pins.docker requires exactly compose_file, compose_sha256, services and digests."
-        )
+    value = require_exact_table(
+        value,
+        field_name="pins.docker",
+        required_keys={"compose_file", "compose_sha256", "services", "digests"},
+        keys_description="compose_file, compose_sha256, services and digests",
+    )
     services = normalize_services(value.get("services"))
     digests = normalize_digests(value.get("digests"), services=services)
     return {

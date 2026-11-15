@@ -6,7 +6,7 @@ import shlex
 from typing import Any
 
 from .models import MaintenanceAction
-from .pins import normalize_version, normalize_sha256
+from .pins import normalize_sha256, normalize_version, require_exact_table
 
 XRAY_BINARY = "/etc/v2ray-agent/xray/xray"
 XRAY_CONFDIR = "/etc/v2ray-agent/xray/conf"
@@ -14,10 +14,12 @@ XRAY_SERVICE = "xray"
 
 
 def normalize_pin(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError("pins.xray must be a TOML table.")
-    if set(value) != {"version", "sha256"}:
-        raise ValueError("pins.xray requires exactly version and sha256.")
+    value = require_exact_table(
+        value,
+        field_name="pins.xray",
+        required_keys={"version", "sha256"},
+        keys_description="version and sha256",
+    )
     return {
         "version": normalize_version(value.get("version")),
         "sha256": normalize_sha256(value.get("sha256")),
