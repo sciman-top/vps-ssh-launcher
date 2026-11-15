@@ -73,7 +73,7 @@ $py = Resolve-ProjectPython -ProjectRoot $scriptDir -AllowPyLauncher
 # The probe costs a full Python process start on every launcher invocation, so
 # a passing result is cached next to the config file. The cache is keyed on
 # interpreter identity (path, mtime, size, launcher args) plus the repo
-# requirements.txt stamp, and the recorded paramiko distribution directory
+# runtime lock stamp, and the recorded paramiko distribution directory
 # must still exist. Any doubt re-runs the probe; the cache never bypasses the
 # install or upgrade path.
 $probe = @'
@@ -156,7 +156,8 @@ function Test-ParamikoProbeCache {
 
 $pythonIdentity = Resolve-PythonExecutableIdentity -Python $py
 $probeCachePath = Join-Path (Split-Path -Parent $Config) "paramiko-probe.cache"
-$requirementsStamp = Get-FileStamp -Path (Join-Path $scriptDir "requirements.txt")
+$runtimeRequirementsPath = Join-Path $scriptDir "requirements-runtime.lock"
+$requirementsStamp = Get-FileStamp -Path $runtimeRequirementsPath
 $probeCached = Test-ParamikoProbeCache -CachePath $probeCachePath -Python $py -PythonIdentity $pythonIdentity -RequirementsStamp $requirementsStamp
 if (-not $probeCached) {
   $probeOutput = & $py.Exe @($py.Args + @("-c", $probe))
@@ -165,7 +166,12 @@ if (-not $probeCached) {
       throw "Paramiko >=5,<6 is required. Refusing to install or upgrade dependencies in non-isolated Python. Create .venv, set VPS_SSH_LAUNCHER_PYTHON, or pass -AllowGlobalBootstrap to accept global installation risk."
     }
     Write-Host "Installing compatible dependencies..."
-    & $py.Exe @($py.Args + @("-m", "pip", "install", "-r", (Join-Path $scriptDir "requirements.txt")))
+    & $py.Exe @(
+      $py.Args + @(
+        "-m", "pip", "install", "--require-hashes", "--requirement",
+        $runtimeRequirementsPath
+      )
+    )
     if ($LASTEXITCODE -ne 0) {
       throw "Failed to install Python dependencies."
     }

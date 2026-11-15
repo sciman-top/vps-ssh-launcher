@@ -206,9 +206,11 @@ function Invoke-LauncherPython {
         self.assertIn("paramiko-probe.cache", text)
         self.assertIn("Test-ParamikoProbeCache", text)
         self.assertIn('sysconfig.get_paths()["purelib"]', text)
-        # Cache invalidation anchors: interpreter identity, repo requirement
+        # Cache invalidation anchors: interpreter identity, runtime lock
         # drift and an actually-present paramiko distribution.
         self.assertIn("requirements_stamp", text)
+        self.assertIn("requirements-runtime.lock", text)
+        self.assertIn('"--require-hashes"', text)
         self.assertIn("paramiko-$($marker.version).dist-info", text)
         # The cache only skips the probe; install/upgrade stays reachable and
         # a post-install probe must still gate what gets cached.
