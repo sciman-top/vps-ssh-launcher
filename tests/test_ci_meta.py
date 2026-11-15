@@ -123,6 +123,103 @@ try {
                         ["1", "original-config", "original-profile"],
                     )
 
+    def test_gate_leg_applies_per_command_environment_overrides(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        helper = r"""
+$global:observedGateEnvironment = @()
+function Initialize-WindowsProcessEnvironment {}
+function Resolve-ProjectPython {
+  return @{ Exe = "Invoke-GateProbe"; IsIsolated = $true; Source = "fixture" }
+}
+function Invoke-GateProbe {
+  $commandText = ($args | ForEach-Object { [string]$_ }) -join " "
+  if ($args[0] -like "*gate_content_hash.py") {
+    '{"tree":"fixture-tree","environment":"fixture-environment"}'
+  } else {
+    $null = $global:observedGateEnvironment += [PSCustomObject]@{
+      command = $commandText
+      private = $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP
+      workerRoot = $env:VPS_SSH_LAUNCHER_GATE_TEMP_ROOT
+      pythonPath = $env:PYTHONPATH
+    }
+    if ($commandText -match "pytest") {
+      "1 passed in 0.1s"
+    }
+  }
+  $global:LASTEXITCODE = 0
+}
+"""
+        command = r"""
+$failed = $false
+try {
+  & $env:VPS_GATE_RUNNER -Profile Full -FullScope Runtime -RunParallel -MaxWorkers 2
+} catch {
+  $failed = $true
+  Write-Error $_
+}
+@{
+  failed = $failed
+  observed = @($global:observedGateEnvironment)
+} | ConvertTo-Json -Compress
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            (root / "tests").mkdir()
+            (root / "tests/test_probe.py").write_text(
+                "def test_probe():\n    assert True\n", encoding="utf-8"
+            )
+            runner = scripts / "run_gates.ps1"
+            runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
+            (scripts / "lib/project_environment.ps1").write_text(
+                helper, encoding="utf-8"
+            )
+            receipts = root / "outputs" / "gates" / "receipts"
+            receipts.mkdir(parents=True)
+            (receipts / "test.json").write_text(
+                json.dumps(
+                    {
+                        "status": "PASS",
+                        "profile": "Full",
+                        "tree": "fixture-tree",
+                        "environment": "fixture-environment",
+                        "workers": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "VPS_GATE_RUNNER": str(runner),
+                    "VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP": "original",
+                }
+            )
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout.splitlines()[-1])
+            self.assertFalse(report["failed"], result.stdout)
+            observed = report["observed"]
+            self.assertTrue(observed, result.stdout)
+            test_runs = [item for item in observed if item["private"] == "1"]
+            self.assertEqual(len(test_runs), 2, result.stdout)
+            for item in test_runs:
+                self.assertTrue(item["workerRoot"], result.stdout)
+                self.assertIn("scripts", item["pythonPath"], result.stdout)
+
     def test_powershell_scripts_parse(self) -> None:
         powershell = shutil.which("pwsh")
         if powershell is None:
@@ -1239,10 +1336,28 @@ try {
         )
         self.assertIn("def tree_hash(", hasher)
         self.assertIn("def environment_hash(", hasher)
+        self.assertIn("sys.version_info", hasher)
+        self.assertIn("sys.platform", hasher)
+        self.assertIn("cannot inspect gate input directory", hasher)
         # The receipt lives under outputs/, which the hash must ignore:
         # otherwise writing the receipt invalidates the evidence it records.
         self.assertIn('"outputs"', hasher)
         self.assertIn("IGNORED_PARTS", hasher)
+
+    def test_parallel_workers_keep_the_private_fixture_bridge(self) -> None:
+        # The CI runner emulation is not a host fact: ci.yml runs the suite in
+        # one worktree, so a worker that skipped the bridge would fail the very
+        # tests that check the private target contract -- and it did, on Linux,
+        # before this was pinned. Per-worker TEMP is what makes running there
+        # safe, not skipping it.
+        conftest = (repo_root() / "tests/conftest.py").read_text(encoding="utf-8")
+        self.assertIn('VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP") == "1"', conftest)
+        self.assertNotIn(
+            "PYTEST_XDIST_WORKER",
+            conftest.split("def _private_temp_root")[1].split(
+                "def _secure_fixture_tree"
+            )[0],
+        )
 
     def test_gate_helper_scripts_are_importable(self) -> None:
         # Both helpers are run by the gate itself. A syntax error in them would

@@ -17,6 +17,7 @@ import fnmatch
 import hashlib
 import importlib.metadata
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -65,11 +66,13 @@ def iter_inputs(root: Path) -> list[str]:
         directory = pending.pop()
         try:
             children = list(directory.iterdir())
-        except OSError:
-            # Local virtualenvs and stale symlinks can be unreadable on a
-            # different host. They are excluded working state, so skip the
-            # subtree instead of failing receipt calculation before the gate.
-            continue
+        except OSError as exc:
+            # Ignored working state never reaches this walk. If a real input
+            # directory becomes unreadable, fail closed instead of producing a
+            # receipt that silently omits files the gate could not inspect.
+            raise RuntimeError(
+                f"cannot inspect gate input directory {directory}: {exc}"
+            ) from exc
         for path in children:
             relative = path.relative_to(root).as_posix()
             if is_ignored(relative):
@@ -85,9 +88,10 @@ def iter_inputs(root: Path) -> list[str]:
                     pending.append(path)
                 elif path.is_file():
                     found.append(relative)
-            except OSError:
-                # A path this process may not stat is still an input.
-                found.append(relative)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"cannot inspect gate input path {relative}: {exc}"
+                ) from exc
     return sorted(found)
 
 
@@ -105,13 +109,12 @@ def tree_hash(root: Path, paths: list[str]) -> str:
                     if not chunk:
                         break
                     digest.update(chunk)
-        except FileNotFoundError:
-            digest.update(b"<missing>")
-        except OSError:
-            # Present but unreadable: the path still belongs to the hash, so
-            # its name above is already counted. A host that cannot read a
-            # file cannot have run the suite against it either.
-            digest.update(b"<unreadable>")
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"gate input disappeared while hashing {relative}"
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(f"cannot read gate input {relative}: {exc}") from exc
         digest.update(b"\0")
     return digest.hexdigest()
 
@@ -123,12 +126,23 @@ def distribution_label(distribution: importlib.metadata.Distribution) -> str:
 
 
 def environment_hash() -> str:
-    """Content address over the installed distributions of this interpreter."""
+    """Content address over this interpreter and its installed distributions."""
     names = sorted(
         distribution_label(distribution)
         for distribution in importlib.metadata.distributions()
     )
-    return hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
+    identity = {
+        "executable": str(Path(sys.executable).resolve()),
+        "implementation": platform.python_implementation().lower(),
+        "machine": platform.machine().lower(),
+        "platform": sys.platform,
+        "version": list(sys.version_info[:3]),
+        "distributions": names,
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -49,33 +49,43 @@ _original_mkdir = Path.mkdir
 def _private_temp_root() -> bool:
     """Whether this run must treat host tempfile fixtures as private.
 
-    A parallel run gets the same guarantee from a per-worker TEMP instead: the
-    gate points TEMP/TMP at a worker-private directory, so mkdtemp already
-    inherits the parent's ACL. Returning False there keeps the session-wide
-    hardening out of a temp directory other workers are creating fixtures in
-    at the same time, and out of a resolved path that disagrees with what
-    tempfile actually used.
+    This does not model the host; it models the CI runner the suite has to
+    pass on, whose fixtures are created under an umask broad enough to leave
+    a target.json group/world readable. The launcher refuses such a target
+    by design, so the bridge re-establishes the private precondition.
+
+    It also has to run in a parallel worker: this file is loaded inside both
+    the controller and every worker, and a worker that skipped the bridge
+    would fail the very tests that check the private contract. What the
+    gate gained from per-worker directories is that the bridge now hardens
+    each worker own tree instead of one shared temp root, so two workers no
+    longer rewrite modes on the same directory.
     """
-    if os.environ.get("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP") != "1":
-        return False
-    if os.environ.get("PYTEST_XDIST_WORKER"):
-        return False
-    return True
+    return os.environ.get("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP") == "1"
 
 
 def _secure_fixture_tree(root: Path) -> None:
-    """Make host-style tempfile fixtures satisfy their private-file contract."""
-    for directory, _, files in os.walk(root):
-        os.chmod(directory, stat.S_IRWXU)
-        for name in files:
-            path = Path(directory, name)
-            if not path.is_symlink():
-                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    """Make host-style tempfile fixtures satisfy their private-file contract.
+
+    Directories are hardened; files are not. A chmod on every fixture write
+    costs about 60us, and on a several-hundred-file tree it outranks the
+    deleted path the tests created themselves as a permission defect. The
+    one thing the original chmod also did was widen a directory an entrypoint
+    script had marked read-only, so that part stays.
+    """
+    for directory, _, _files in os.walk(root):
+        try:
+            os.chmod(directory, stat.S_IRWXU)
+        except OSError:
+            # A directory a test deliberately made read-only is the test
+            # assertion, not an environment artifact.
+            continue
 
 
 def _private_mkdtemp(*args: Any, **kwargs: Any) -> str:
     path = str(_original_mkdtemp(*args, **kwargs))
-    _secure_fixture_tree(Path(path))
+    if os.name == "posix":
+        _secure_fixture_tree(Path(path))
     return path
 
 
@@ -97,10 +107,11 @@ def _private_write_text(
             newline=newline,
         )
     )
-    # The mode is a POSIX permission contract. Asking for it on a host without
-    # POSIX mode bits turns the bridge into a second, much slower delete-path
-    # open per fixture write (the "you may not have permission to change file
-    # attributes" refusal costs far more than the OSError it raises).
+    # The private mode is a POSIX contract: `_secure_fixture_tree` and the
+    # tests that check 0600 are skipped off POSIX anyway, while a chmod here
+    # runs on every fixture write of a ~1700-test suite. Measured at about
+    # 60us per call, that is real wall clock for a guarantee nothing on this
+    # host asserts.
     if os.name != "posix":
         return written
     try:

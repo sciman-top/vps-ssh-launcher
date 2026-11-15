@@ -211,7 +211,11 @@ try {
     return ($raw | Out-String | ConvertFrom-Json)
   }
   function Test-GateReceipt {
-    param([string]$RelativePath)
+    param(
+      [string]$RelativePath,
+      [ValidateSet("Any", "Serial", "Parallel")]
+      [string]$Lane = "Any"
+    )
 
     if (-not (Test-Path -LiteralPath $RelativePath)) {
       return $false
@@ -227,14 +231,32 @@ try {
     if ($receipt.tree -ne $script:testProperties.tree) {
       return $false
     }
-    return $receipt.environment -eq $script:testProperties.environment
+    if ($receipt.environment -ne $script:testProperties.environment) {
+      return $false
+    }
+    $workers = 0
+    if ($null -ne $receipt.workers) {
+      try {
+        $workers = [int]$receipt.workers
+      } catch {
+        return $false
+      }
+    }
+    if ($Lane -eq "Parallel" -and $workers -ne $MaxWorkers) {
+      return $false
+    }
+    if ($Lane -eq "Serial" -and $workers -ne 0) {
+      return $false
+    }
+    return $true
   }
 
   function Write-GateReceipt {
     param(
       [string]$RelativePath,
       [string]$Status,
-      [double]$Seconds
+      [double]$Seconds,
+      [int]$Workers = 0
     )
 
     $directory = Split-Path -Parent $RelativePath
@@ -247,7 +269,7 @@ try {
       tree = $script:testProperties.tree
       environment = $script:testProperties.environment
       seconds = [math]::Round($Seconds, 1)
-      workers = $(if ($script:testParallel) { $MaxWorkers } else { 0 })
+      workers = $Workers
       host = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
       recorded_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
@@ -264,13 +286,17 @@ try {
       return
     }
     $lastError = $null
-    for ($attempt = 1; $attempt -le 8; $attempt++) {
+    # Windows worker processes can release SQLite/file handles a few seconds
+    # after pytest has printed its summary. Keep the cleanup bounded, but give
+    # normal xdist teardown a 30-second window before reporting a leak.
+    $maxAttempts = 120
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
       try {
         Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction Stop
         return
       } catch {
         $lastError = $_.Exception.Message
-        if ($attempt -lt 8) {
+        if ($attempt -lt $maxAttempts) {
           Start-Sleep -Milliseconds 250
         }
       }
@@ -326,6 +352,7 @@ try {
       Command = $serialCommand
       Environment = $testEntry.Environment
       Receipt = $testEntry.Receipt
+      Repeatable = $testEntry.Repeatable
     }
     if (-not $script:testParallel) {
       return @($others) + @($serialEntry)
@@ -334,7 +361,7 @@ try {
     # Proof is evidence about this host and tree, so it follows the receipt
     # exactly the way every other reused answer does.
     $proofPath = Join-Path $script:receiptDirectory "parallel-proof.json"
-    if ($ReuseReceipts -or (Test-GateReceipt -RelativePath $proofPath)) {
+    if ($ReuseReceipts -or (Test-GateReceipt -RelativePath $proofPath -Lane Parallel)) {
       return @($others) + @($testEntry)
     }
 
@@ -342,6 +369,7 @@ try {
       Id = "test"
       Command = $testEntry.Command
       Environment = $testEntry.Environment
+      Repeatable = $testEntry.Repeatable
     }
     # The one serial run that decides whether the parallel answer may stand.
     $serialRecheck = @{
@@ -350,6 +378,7 @@ try {
       Environment = $testEntry.Environment
       Receipt = $testEntry.Receipt
       SerialRecheck = $true
+      Repeatable = $testEntry.Repeatable
     }
     return @($others) + @($parallelEntry) + @($serialRecheck)
   }
@@ -431,10 +460,11 @@ try {
     # Per-command environment overrides are applied only around this command:
     # the previous build-time mutation leaked into every later gate and made
     # the documented "private fixtures" switch a no-op.
+    $overrides = if ($Environment) { $Environment } else { @{} }
     $saved = @{}
-    foreach ($name in $Environment.Keys) {
+    foreach ($name in $overrides.Keys) {
       $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-      [Environment]::SetEnvironmentVariable($name, [string]$Environment[$name], "Process")
+      [Environment]::SetEnvironmentVariable($name, [string]$overrides[$name], "Process")
     }
     # Tee instead of a bare pipe: only two legs consume their own output (the
     # summary vector and the proof baseline), and every other leg keeps
@@ -821,6 +851,7 @@ try {
         Command = @($pythonExe) + $pytestArgs
         Environment = $testEnvironment
         Receipt = "test.json"
+        Repeatable = $false
       }
       if ($IsLinux) {
         $commands += @{
@@ -858,7 +889,7 @@ try {
         # (B404/B603/B607) and to acceptance harnesses that assert on disposable
         # fixtures (B101/B110). Anything Medium or higher still fails the gate.
         @{ Id = "hotspot:bandit-scripts"; Command = @($pythonExe, "-m", "bandit", "-q", "-ll", "-r") + $scriptTargets },
-        @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets },
+        @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets; Repeatable = $true },
         @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTargets },
         @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets }
       )
@@ -898,33 +929,46 @@ try {
     # stand in for, keyed on content rather than on host time stamps. A running
     # edit invalidates the tree hash, so a green receipt of an older tree can
     # never excuse the current one.
-    if ($entry.Receipt -and (Test-Path -LiteralPath $script:receiptDirectory)) {
-      if (Test-GateReceipt -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt)) {
+    $receiptLane = "Any"
+    if ($entry.Id -eq "test-lane") {
+      $receiptLane = "Parallel"
+    } elseif ($entry.Id -eq "test" -or $entry.Id -eq "test:filesystem-baseline") {
+      $receiptLane = "Serial"
+    }
+    if (
+      $entry.Receipt -and
+      -not $entry.SerialRecheck -and
+      (Test-Path -LiteralPath $script:receiptDirectory)
+    ) {
+      if (
+        Test-GateReceipt `
+          -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt) `
+          -Lane $receiptLane
+      ) {
         Write-Host "==> $($entry.Id): reuse (inputs unchanged since the recorded PASS)"
         continue
       }
     }
     Write-Host "==> $($entry.Id): $($entry.Command -join ' ')"
     # Per-command environment overrides are applied only around this command:
-    # the previous build-time mutation leaked into every later gate and made the
-    # documented "private fixtures" switch a no-op.
-    $savedEnvironment = @{}
-    if ($entry.Environment) {
-      foreach ($name in $entry.Environment.Keys) {
-        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-        [Environment]::SetEnvironmentVariable($name, [string]$entry.Environment[$name], "Process")
-      }
-    }
+    # Invoke-GateLeg owns both setting and restoring the overrides. Keeping
+    # that lifecycle in one place prevents the caller from accidentally
+    # passing the pre-override values back into the child process.
     $legWatch = [Diagnostics.Stopwatch]::StartNew()
-    $legOutput = Invoke-GateLeg -Entry $entry -Environment $savedEnvironment
-    if ($LASTEXITCODE -ne 0 -and $script:testParallel) {
-      # A parallel suite can lose a test to the machine rather than to the
-      # change: four workers drive four times the process churn through the
-      # same disk. One retry separates a real failure from a loaded host, and
-      # the retry still has to pass on its own.
-      Write-Host "    exit $LASTEXITCODE under load; retrying once"
+    $legOutput = Invoke-GateLeg -Entry $entry -Environment $entry.Environment
+    $repeatable = $true
+    if ($null -ne $entry.Repeatable) {
+      $repeatable = [bool]$entry.Repeatable
+    }
+    if ($LASTEXITCODE -ne 0 -and $script:testParallel -and $repeatable) {
+      # A leg that only reads the tree can be re-asked once after a transient
+      # host failure; its answer does not depend on the attempt. The suite is
+      # deliberately not retried: it carries the parallel loop of stateful
+      # harnesses, and a retry there would report a second attempt as if it
+      # were the first, hiding exactly the failure this lane has to surface.
+      Write-Host "    exit $LASTEXITCODE; retrying once (read-only leg)"
       $legWatch.Restart()
-      $legOutput = Invoke-GateLeg -Entry $entry -Environment $savedEnvironment
+      $legOutput = Invoke-GateLeg -Entry $entry -Environment $entry.Environment
     }
     if ($LASTEXITCODE -ne 0) {
       if (@($entry.ToleratedExitCodes) -contains $LASTEXITCODE) {
@@ -932,8 +976,12 @@ try {
         continue
       }
       throw "Gate failed: $($entry.Id)"
-    }    $legWatch.Stop()
+    }
+    $legWatch.Stop()
+    # Only the parallel result and its serial recheck are compared; mapping
+    # progress lines for every other leg would be pure overhead.
     $legSummary = Get-PytestSummaryVector -Lines $legOutput
+
     if ($entry.Id -eq "test" -and $script:testParallel) {
       $script:parallelSummary = $legSummary
     }
@@ -948,12 +996,28 @@ try {
         Write-GateReceipt `
           -RelativePath (Join-Path $script:receiptDirectory "parallel-proof.json") `
           -Status "PASS" `
-          -Seconds $legWatch.Elapsed.TotalSeconds
+          -Seconds $legWatch.Elapsed.TotalSeconds `
+          -Workers $MaxWorkers
         Write-Host "    parallel proven for this tree: later runs skip the serial recheck"
       }
     }
-    if ($entry.Receipt -and (Test-Path -LiteralPath $script:receiptDirectory)) {
-      Write-GateReceipt -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt) -Status "PASS" -Seconds $legWatch.Elapsed.TotalSeconds
+    if (
+      $entry.Receipt -and
+      -not $entry.SerialRecheck -and
+      (Test-Path -LiteralPath $script:receiptDirectory)
+    ) {
+      # The serial recheck shares test.json with the parallel lane, so it
+      # must not write it: a serial PASS recorded under the parallel lane
+      # guard would let a later parallel run reuse an unproven answer.
+      $receiptWorkers = 0
+      if ($entry.Id -eq "test-lane") {
+        $receiptWorkers = $MaxWorkers
+      }
+      Write-GateReceipt `
+        -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt) `
+        -Status "PASS" `
+        -Seconds $legWatch.Elapsed.TotalSeconds `
+        -Workers $receiptWorkers
     }
   }
 } finally {

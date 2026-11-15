@@ -200,7 +200,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -Profile Ful
 
 它只追加 `--cov=vps_ssh_launcher --cov=scripts` 与 `term-missing` 报告，不设阈值、不阻断。
 慢测试按需用 `pytest -q --durations=15 --durations-min=3` 定位（当前最长单例约 11s，全量约 4.5 分钟）；
-没有引入 xdist，因为并行会与 PowerShell/fixture 的临时目录和子进程契约相互干扰。
+Full gate 可按需用 `-RunParallel` 启用 xdist；worker 使用独立 TEMP，且并行结论必须先与串行复核一致。
 
 ### 后续维护优先级
 
@@ -452,7 +452,7 @@ Full 的墙钟几乎全在 pytest 上：静态腿合计约 4 秒，测试套件�
 
 ### 复用同一份门禁证据
 
-Full 会把上游无法替代的静态腿结果记成回执，放在 `outputs/gates/receipts/*.json`（本机机器状态，不进版本库）。回执只在两件事同时成立时被复用：仓库文件内容树哈希一致，且门禁解释器里安装的发行包集合一致。改任何文件、升任何工具都会让回执失效，不会出现"旧证据为新树作保"。
+Full 会把上游无法替代的静态腿结果记成回执，放在 `outputs/gates/receipts/*.json`（本机机器状态，不进版本库）。回执只在两件事同时成立时被复用：仓库文件内容树哈希一致，且门禁解释器的运行时指纹与发行包集合一致。改任何文件、切换 Python/平台或升级任何工具都会让回执失效，不会出现"旧证据为新树作保"。
 
 只有依赖文件变化或供应链复核时追加：
 

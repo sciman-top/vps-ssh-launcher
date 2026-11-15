@@ -368,7 +368,7 @@ After both runs pass, the result is recorded in `outputs/gates/receipts/parallel
 
 ### Reusing gate evidence
 
-Full records the static legs whose answer cannot be reproduced by a test receipt under `outputs/gates/receipts/*.json` (machine-local working state, never committed). A receipt is reused only when both the repository content hash and the set of distributions installed in the gate interpreter are identical, so editing any file or upgrading any tool invalidates it; an old receipt can never vouch for a new tree.
+Full records the static legs whose answer cannot be reproduced by a test receipt under `outputs/gates/receipts/*.json` (machine-local working state, never committed). A receipt is reused only when both the repository content hash and the gate interpreter's runtime fingerprint plus installed distributions are identical, so editing any file, changing Python/platform, or upgrading any tool invalidates it; an old receipt can never vouch for a new tree.
 
 
 ---
@@ -567,8 +567,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -Profile Ful
 
 It only adds `--cov=vps_ssh_launcher --cov=scripts` with a `term-missing` report; no
 threshold, no blocking. Locate slow tests with `pytest -q --durations=15 --durations-min=3`
-(the longest single test is about 11s; the full suite lasts roughly 4.5 minutes). xdist is
-deliberately absent: parallel workers collide with the PowerShell fixture temp directories.
+(the longest single test is about 11s; the full suite lasts roughly 4.5 minutes). Full can
+enable xdist with `-RunParallel`; workers receive private TEMP roots and the parallel result
+must match the serial recheck before it is reused.
 
 ## 🩺 Troubleshooting, Forensics & Evidence Boundaries
 
