@@ -440,6 +440,8 @@ class ConnectionTests(unittest.TestCase):
 
             key = root / "id_ed25519"
             key.write_text("key bytes only for a shape test\n", encoding="utf-8")
+            if os.name != "nt":
+                key.chmod(0o600)
             args.key = str(key)
             link = root / "key-link"
             if os.name != "nt":
@@ -717,6 +719,23 @@ class EndpointAndKeyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "1 byte"):
                 connection._key_path_from_arg(str(path))
 
+    def test_a_key_file_with_broad_local_permissions_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "key"
+            path.write_bytes(b"k" * 8)
+            if os.name == "nt":
+                with patch_attr(
+                    connection.windows_acl,
+                    "_ensure_windows_private_dacl",
+                    side_effect=ValueError("foreign access"),
+                ):
+                    with self.assertRaisesRegex(ValueError, "must be private"):
+                        connection._key_path_from_arg(str(path))
+            else:
+                path.chmod(0o644)
+                with self.assertRaisesRegex(ValueError, "accessible to other users"):
+                    connection._key_path_from_arg(str(path))
+
     def test_a_directory_as_key_path_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "not a regular file"):
@@ -734,6 +753,8 @@ class EndpointAndKeyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             key = Path(directory) / "id_ed25519"
             key.write_bytes(b"k" * 8)
+            if os.name != "nt":
+                key.chmod(0o600)
             with (
                 patch_attr(
                     connection,

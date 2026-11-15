@@ -47,9 +47,26 @@ class ZzXhttpFrontTests(ScriptValidationMixin, unittest.TestCase):
         text = (SCRIPTS / "merged_subscription_lane.ps1").read_text(encoding="utf-8")
         self.assertIn("function Protect-MergedSubscriptionFile", text)
         self.assertIn("icacls $Path /inheritance:r /grant:r @grantSpecs", text)
+        self.assertIn('icacls $Path /remove "*S-1-3-4"', text)
+        self.assertIn("$accessRulesValid = @($verified.Access).Count -eq 3", text)
+        self.assertIn("AccessControlType]::Allow", text)
+        self.assertIn("Assert-LauncherPrivateSecretFile", text)
         for path in ("$tokenStore", "$urlFile"):
             with self.subTest(path=path):
                 self.assertIn(f"Protect-MergedSubscriptionFile -Path {path}", text)
+        token_read = text.index("Get-Content -LiteralPath $tokenStore")
+        token_privacy = text.index("Assert-LauncherPrivateSecretFile")
+        token_protect = text.index("Protect-MergedSubscriptionFile -Path $tokenStore")
+        self.assertLess(
+            token_privacy,
+            token_read,
+            "the token privacy gate must run before it is read",
+        )
+        self.assertLess(
+            token_protect,
+            token_read,
+            "an existing token must be protected before it is read",
+        )
         # Each write must be followed by the tightening call.
         for write, tighten in (
             ("Set-Content -LiteralPath $tokenStore", "-Path $tokenStore"),

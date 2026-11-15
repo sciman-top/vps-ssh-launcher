@@ -664,20 +664,71 @@ function Get-HeadBlobText {
 
 $admissionIntegrityPinHeadValue = Get-HeadBlobText "scripts/remote/cpa-admission-integrity-pin.txt"
 
-$updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"
-$healthHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-health.py"
-$healthRuntimeHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_health_runtime.py"
-$policyHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_policy.py"
-$providerRoutesHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_provider_routes.json"
-$admissionHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.py"
-$admissionConfigHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.json"
-$admissionUnitHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.service"
-$admissionIntegrityCheckHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-check.sh"
-$admissionIntegrityDropinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity.conf"
-$admissionIntegrityPinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-pin.txt"
-$updaterTimeoutConfHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-update-timeout.conf"
-$fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
-$fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
+# This is the persistent projection contract: every source listed here is
+# written by cpa-guardrail-apply.sh and must therefore be covered by the
+# HEAD-anchored doctor drift check. Keep the destination paths identical to
+# the remote apply script; the registry below only removes omission risk.
+$projectionDoctorTargets = [ordered]@{
+  "scripts/remote/cpa-auto-update.sh" = "/opt/cliproxyapi/auto-update.sh"
+  "scripts/remote/cpa-health.py" = "/opt/cliproxyapi/cpa-health.py"
+  "scripts/remote/cpa_health_runtime.py" = "/opt/cliproxyapi/cpa_health_runtime.py"
+  "scripts/remote/cpa_policy.py" = "/opt/cliproxyapi/cpa_policy.py"
+  "scripts/remote/cpa_provider_routes.json" = "/opt/cliproxyapi/cpa_provider_routes.json"
+  "scripts/remote/cpa-admission.py" = "/opt/cliproxyapi/cpa-admission.py"
+  "scripts/remote/cpa-admission-launch.sh" = "/opt/cliproxyapi/cpa-admission-launch.sh"
+  "scripts/remote/cpa_admission_bootstrap.py" = "/usr/local/libexec/cpa_admission_bootstrap.py"
+  "scripts/remote/cpa_request_guard.py" = "/usr/local/libexec/cpa_request_guard.py"
+  "scripts/remote/cpa-admission.json" = "/opt/cliproxyapi/cpa-admission.json"
+  "scripts/remote/cpa-admission.service" = "/etc/systemd/system/cpa-admission.service"
+  "scripts/remote/cpa-admission-integrity-check.sh" = "/usr/local/libexec/cpa-admission-integrity-check"
+  "scripts/remote/cpa-admission-integrity.conf" = "/etc/systemd/system/cpa-admission.service.d/10-integrity.conf"
+  "scripts/remote/cpa-admission-integrity-pin.txt" = "/etc/vps-ssh-launcher/cpa-admission.sha256"
+  "scripts/remote/cpa-update-timeout.conf" = "/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf"
+  "scripts/remote/cpa-fail2ban-filter.conf" = "/etc/fail2ban/filter.d/cpa-gateway.conf"
+  "scripts/remote/cpa-fail2ban-jail.conf" = "/etc/fail2ban/jail.d/cpa-gateway.conf"
+}
+if (
+  @($projectionDoctorTargets.Values).Count -ne
+  @($projectionDoctorTargets.Values | Sort-Object -Unique).Count
+) {
+  throw "CPA projection doctor targets contain duplicate destinations."
+}
+foreach ($entry in $projectionDoctorTargets.GetEnumerator()) {
+  if (-not $projectionSources.Contains($entry.Key)) {
+    throw "CPA projection doctor target is not a registered source: $($entry.Key)"
+  }
+}
+
+$projectionHeadSha256 = [ordered]@{}
+foreach ($entry in $projectionDoctorTargets.GetEnumerator()) {
+  $projectionHeadSha256[$entry.Key] = Get-HeadBlobSha256 $entry.Key
+}
+$updaterHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-auto-update.sh"]
+$healthHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-health.py"]
+$healthRuntimeHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_health_runtime.py"]
+$policyHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_policy.py"]
+$providerRoutesHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_provider_routes.json"]
+$admissionHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission.py"]
+$admissionLauncherHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-launch.sh"]
+$admissionBootstrapHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_admission_bootstrap.py"]
+$admissionConfigHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission.json"]
+$admissionUnitHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission.service"]
+$admissionIntegrityCheckHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-integrity-check.sh"]
+$admissionIntegrityDropinHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-integrity.conf"]
+$admissionIntegrityPinHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-integrity-pin.txt"]
+$updaterTimeoutConfHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-update-timeout.conf"]
+$fail2banFilterHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-fail2ban-filter.conf"]
+$fail2banJailHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-fail2ban-jail.conf"]
+# The request guard embeds the admission generation at projection time. Its
+# doctor hash must describe those deployed bytes, not the raw source blob.
+$admissionRequestGuardHeadText = (Get-HeadBlobText "scripts/remote/cpa_request_guard.py").
+  Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionRequestGuardHeadDeployedText = $admissionRequestGuardHeadText.Replace(
+  "__SOURCE_SHA256__",
+  $admissionHeadSha256
+)
+$admissionRequestGuardHeadSha256 = Get-LfNormalizedSha256 -Text $admissionRequestGuardHeadDeployedText
+$projectionHeadSha256["scripts/remote/cpa_request_guard.py"] = $admissionRequestGuardHeadSha256
 # Doctor reads the deployed admission pin as content and compares it with this
 # exact committed value, never with the SHA-256 of the pin file itself.
 $admissionIntegrityPinHeadValue = [string]$admissionIntegrityPinHeadValue
@@ -708,20 +759,9 @@ if ($forkBinaryHeadValue -notmatch '^[0-9a-f]{64}$') {
 }
 
 $projectionHashPairs = @(
-  "/opt/cliproxyapi/auto-update.sh=$updaterHeadSha256",
-  "/opt/cliproxyapi/cpa-health.py=$healthHeadSha256",
-  "/opt/cliproxyapi/cpa_health_runtime.py=$healthRuntimeHeadSha256",
-  "/opt/cliproxyapi/cpa_policy.py=$policyHeadSha256",
-  "/opt/cliproxyapi/cpa_provider_routes.json=$providerRoutesHeadSha256",
-  "/opt/cliproxyapi/cpa-admission.py=$admissionHeadSha256",
-  "/opt/cliproxyapi/cpa-admission.json=$admissionConfigHeadSha256",
-  "/etc/systemd/system/cpa-admission.service=$admissionUnitHeadSha256",
-  "/usr/local/libexec/cpa-admission-integrity-check=$admissionIntegrityCheckHeadSha256",
-  "/etc/systemd/system/cpa-admission.service.d/10-integrity.conf=$admissionIntegrityDropinHeadSha256",
-  "/etc/vps-ssh-launcher/cpa-admission.sha256=$admissionIntegrityPinHeadSha256",
-  "/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf=$updaterTimeoutConfHeadSha256",
-  "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterHeadSha256",
-  "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailHeadSha256"
+  foreach ($entry in $projectionDoctorTargets.GetEnumerator()) {
+    "$($entry.Value)=$($projectionHeadSha256[$entry.Key])"
+  }
 ) -join " "
 if (($projectionHashPairs -split ' ') | Where-Object { $_ -notmatch '^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$' }) {
   throw "Projection hash pair list failed its injection format check."

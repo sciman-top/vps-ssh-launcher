@@ -453,6 +453,23 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "accessible to other users"):
                     target_config.load_config(path)
 
+    def test_only_the_repository_template_is_exempt_from_privacy_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "target.example.json"
+            path.write_text("{}", encoding="utf-8")
+            if os.name == "nt":
+                with mock.patch.object(
+                    target_config,
+                    "_ensure_windows_private_dacl",
+                    side_effect=OSError("foreign access"),
+                ):
+                    with self.assertRaisesRegex(ValueError, "Unable to verify"):
+                        target_config.assert_private_target_config(path)
+            else:
+                path.chmod(0o644)
+                with self.assertRaisesRegex(ValueError, "accessible to other users"):
+                    target_config.assert_private_target_config(path)
+
     def test_windows_private_dacl_survives_parent_repropagation(self) -> None:
         """Regression: an unprotected DACL replace is undone by the parent.
 

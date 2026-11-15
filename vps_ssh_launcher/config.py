@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import ntpath
 import os
 import re
 import stat
@@ -216,11 +215,17 @@ def assert_private_target_config(path: Path) -> None:
 def _is_credential_config(path: Path) -> bool:
     """Decide which local files this privacy gate must guard.
 
-    ``target.json`` is the documented name, but an explicit ``--config`` may use
-    any name and the file still carries profile credentials. Anything except the
-    checked-in ``target.example.json`` template is therefore guarded.
+    Only the checked-in repository template is exempt. An explicit
+    ``--config`` may use any name, including ``target.example.json`` in another
+    directory, and that file still carries profile credentials.
     """
-    return ntpath.basename(str(path)).lower() != "target.example.json"
+    try:
+        candidate = path.expanduser().resolve(strict=False)
+        template = (SOURCE_ROOT / "target.example.json").resolve(strict=False)
+    except OSError:
+        # An unresolvable path is not trusted as a template.
+        return True
+    return candidate != template
 
 
 def app_config_dir() -> Path:

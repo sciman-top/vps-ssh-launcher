@@ -44,6 +44,14 @@ function Set-Hysteria2ObfsSecretAcl {
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to set private ACL on $Path`: $icaclsOutput"
   }
+  # Older files created under an owner-rights placeholder retain S-1-3-4 even
+  # after the explicit user grant above. Remove that alias so the post-check
+  # sees the same three principals this lane promises and future repairs do
+  # not accumulate a second user-shaped ACE.
+  & icacls $Path /remove "*S-1-3-4" /c /q | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to remove the owner-rights placeholder from $Path"
+  }
   $verifiedSecretAcl = Get-Acl -LiteralPath $Path
   $actualSids = @(
     foreach ($secretRule in @($verifiedSecretAcl.Access)) {
@@ -147,6 +155,7 @@ if (-not $ObfsPasswordFile) {
 }
 $passwordGenerated = $false
 if (-not $ObfsPassword -and (Test-Path -LiteralPath $ObfsPasswordFile -PathType Leaf)) {
+  Assert-LauncherPrivateSecretFile -Path $ObfsPasswordFile -Python $script:Python -ProjectRoot $repoRoot
   $ObfsPassword = (Get-Content -LiteralPath $ObfsPasswordFile -Raw).Trim()
 }
 if (-not $ObfsPassword -and $Apply) {

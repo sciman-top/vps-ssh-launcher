@@ -72,6 +72,10 @@ function Protect-MergedSubscriptionFile {
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to set a private ACL on $Path`: $icaclsOutput"
   }
+  & icacls $Path /remove "*S-1-3-4" /c /q | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to remove the owner-rights placeholder from $Path"
+  }
   $verified = Get-Acl -LiteralPath $Path
   $actualSids = @(
     foreach ($rule in @($verified.Access)) {
@@ -80,7 +84,16 @@ function Protect-MergedSubscriptionFile {
       ).Value
     }
   )
+  $accessRulesValid = @($verified.Access).Count -eq 3
+  foreach ($rule in @($verified.Access)) {
+    if ($rule.IsInherited -or
+        $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        $rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
+      $accessRulesValid = $false
+    }
+  }
   if ($verified.AreAccessRulesProtected -ne $true -or
+      -not $accessRulesValid -or
       (($actualSids | Sort-Object) -join ",") -ne (($secretSids | Sort-Object) -join ",")) {
     throw "Refusing to keep a credential file with an unverifiable private ACL: $Path"
   }
@@ -88,8 +101,12 @@ function Protect-MergedSubscriptionFile {
 
 if (-not $Token) {
   if (Test-Path -LiteralPath $tokenStore -PathType Leaf) {
-    $Token = (Get-Content -LiteralPath $tokenStore -Raw).Trim()
+    # Tighten the existing token before reading it. A stale file may still
+    # carry inherited AppData permissions; reading first would expose the
+    # credential during the repair window.
+    Assert-LauncherPrivateSecretFile -Path $tokenStore -Python $script:Python -ProjectRoot $repoRoot
     Protect-MergedSubscriptionFile -Path $tokenStore
+    $Token = (Get-Content -LiteralPath $tokenStore -Raw).Trim()
   } else {
     # The path is the only credential protecting every lane's UUID and
     # Hysteria2 password, so it must come from a CSPRNG rather than the

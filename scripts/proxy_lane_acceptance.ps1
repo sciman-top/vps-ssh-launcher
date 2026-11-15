@@ -31,19 +31,17 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 if ($ObfsPassword -and $ObfsPasswordFile) {
   throw "-ObfsPassword and -ObfsPasswordFile are mutually exclusive."
 }
-if ($ObfsPasswordFile) {
-  $ObfsPasswordFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ObfsPasswordFile)
-  if (-not (Test-Path -LiteralPath $ObfsPasswordFile -PathType Leaf)) {
-    throw "-ObfsPasswordFile not found: $ObfsPasswordFile"
-  }
-  $ObfsPassword = (Get-Content -LiteralPath $ObfsPasswordFile -Raw).Trim()
-}
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
+}
+if ($ObfsPasswordFile) {
+  $ObfsPasswordFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ObfsPasswordFile)
+  Assert-LauncherPrivateSecretFile -Path $ObfsPasswordFile -Python $script:Python -ProjectRoot $repoRoot
+  $ObfsPassword = (Get-Content -LiteralPath $ObfsPasswordFile -Raw).Trim()
 }
 if ($TimeoutSeconds -lt 3 -or $TimeoutSeconds -gt 60) {
   throw "-TimeoutSeconds must be between 3 and 60."

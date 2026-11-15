@@ -92,6 +92,12 @@ class Hysteria2ObfsLaneTests(ScriptValidationMixin, unittest.TestCase):
     def test_local_obfs_secret_file_is_acl_protected(self) -> None:
         text = self.text
         self.assertNotIn("Set-Content", text)
+        self.assertIn("Assert-LauncherPrivateSecretFile", text)
+        self.assertLess(
+            text.index("Assert-LauncherPrivateSecretFile"),
+            text.index("Get-Content -LiteralPath $ObfsPasswordFile"),
+        )
+        self.assertIn('icacls $Path /remove "*S-1-3-4"', text)
         self.assertIn("& icacls $Path /inheritance:r /grant:r @grantSpecs", text)
         self.assertIn('SecurityIdentifier]::new("S-1-5-18")', text)
         self.assertIn('SecurityIdentifier]::new("S-1-5-32-544")', text)

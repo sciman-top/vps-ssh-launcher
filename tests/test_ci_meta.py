@@ -795,7 +795,7 @@ $global:observedCommands = @()
             "contracts.py": set(),
             "config.py": {"contracts", "windows_acl"},
             "execution.py": {"contracts"},
-            "connection.py": {"contracts", "config", "socks5"},
+            "connection.py": {"contracts", "config", "socks5", "windows_acl"},
             "socks5.py": set(),
             "batch.py": {"contracts", "config", "connection", "execution"},
             "safe_files.py": set(),

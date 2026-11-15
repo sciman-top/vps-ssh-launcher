@@ -537,6 +537,38 @@ function Get-LauncherVerdictLine {
   return $Fallback
 }
 
+function Assert-LauncherPrivateSecretFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][hashtable]$Python,
+    [Parameter(Mandatory = $true)][string]$ProjectRoot
+  )
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    throw "Private secret file not found: $Path"
+  }
+  $privacyProbe = @'
+import sys
+from pathlib import Path
+from vps_ssh_launcher.config import assert_private_target_config
+
+assert_private_target_config(Path(sys.argv[1]))
+'@
+  Push-Location $ProjectRoot
+  try {
+    $output = @(& $Python.Exe @($Python.Args + @("-c", $privacyProbe, $Path)) 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    Pop-Location
+  }
+  if ($exitCode -ne 0) {
+    $detail = ($output | ForEach-Object { [string]$_ }) -join " "
+    if ([string]::IsNullOrWhiteSpace($detail)) {
+      $detail = "privacy check failed with exit code $exitCode"
+    }
+    throw "Refusing to read a non-private secret file: $Path ($detail)"
+  }
+}
+
 function Resolve-LaneObfsPasswordFile {
   # The obfs lane stays out of the vasma subscription, so its password lives
   # beside the target config instead of in task arguments. Read paths prefer

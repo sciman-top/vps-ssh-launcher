@@ -91,6 +91,11 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertNotIn('OBFS_PASSWORD="__OBFS_PASSWORD__"', text)
         self.assertIn("OBFS_PASSWORD_FILE", text)
         self.assertIn("[string]$ObfsPasswordFile", text)
+        self.assertIn("Assert-LauncherPrivateSecretFile", text)
+        self.assertLess(
+            text.index("Assert-LauncherPrivateSecretFile"),
+            text.index("Get-Content -LiteralPath $ObfsPasswordFile"),
+        )
         self.assertIn(
             "-ObfsPassword and -ObfsPasswordFile are mutually exclusive.", text
         )

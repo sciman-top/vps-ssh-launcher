@@ -1092,7 +1092,19 @@ foreach ($entry in $guardrailTemplates.GetEnumerator()) {
     tracked = $projectionSourcePaths -contains $entry.Value
   }
 }
-$result | ConvertTo-Json -Depth 4 -Compress
+$doctorTargets = [ordered]@{}
+$doctorHashes = [ordered]@{}
+foreach ($entry in $projectionDoctorTargets.GetEnumerator()) {
+  $doctorTargets[$entry.Key] = $entry.Value
+  $doctorHashes[$entry.Key] = $projectionHeadSha256[$entry.Key]
+}
+$result["projection"] = @{
+  source_paths = @($projectionSourcePaths)
+  doctor_targets = $doctorTargets
+  doctor_hashes = $doctorHashes
+  hash_pairs = $projectionHashPairs
+}
+$result | ConvertTo-Json -Depth 6 -Compress
 """
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
@@ -1128,6 +1140,7 @@ $result | ConvertTo-Json -Depth 4 -Compress
             result = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             loaded = json.loads(result.stdout)
+            projection = loaded.pop("projection")
             self.assertEqual(len(loaded), 5)
             for name, record in loaded.items():
                 payload = (scripts / "remote" / f"cpa-guardrail-{name}.sh").read_bytes()
@@ -1140,6 +1153,54 @@ $result | ConvertTo-Json -Depth 4 -Compress
                     hashlib.sha256(payload.replace(b"\r\n", b"\n")).hexdigest(),
                 )
                 self.assertTrue(record["tracked"])
+
+            expected_targets = {
+                "scripts/remote/cpa-auto-update.sh": "/opt/cliproxyapi/auto-update.sh",
+                "scripts/remote/cpa-health.py": "/opt/cliproxyapi/cpa-health.py",
+                "scripts/remote/cpa_health_runtime.py": "/opt/cliproxyapi/cpa_health_runtime.py",
+                "scripts/remote/cpa_policy.py": "/opt/cliproxyapi/cpa_policy.py",
+                "scripts/remote/cpa_provider_routes.json": "/opt/cliproxyapi/cpa_provider_routes.json",
+                "scripts/remote/cpa-admission.py": "/opt/cliproxyapi/cpa-admission.py",
+                "scripts/remote/cpa-admission-launch.sh": "/opt/cliproxyapi/cpa-admission-launch.sh",
+                "scripts/remote/cpa_admission_bootstrap.py": "/usr/local/libexec/cpa_admission_bootstrap.py",
+                "scripts/remote/cpa_request_guard.py": "/usr/local/libexec/cpa_request_guard.py",
+                "scripts/remote/cpa-admission.json": "/opt/cliproxyapi/cpa-admission.json",
+                "scripts/remote/cpa-admission.service": "/etc/systemd/system/cpa-admission.service",
+                "scripts/remote/cpa-admission-integrity-check.sh": "/usr/local/libexec/cpa-admission-integrity-check",
+                "scripts/remote/cpa-admission-integrity.conf": "/etc/systemd/system/cpa-admission.service.d/10-integrity.conf",
+                "scripts/remote/cpa-admission-integrity-pin.txt": "/etc/vps-ssh-launcher/cpa-admission.sha256",
+                "scripts/remote/cpa-update-timeout.conf": "/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf",
+                "scripts/remote/cpa-fail2ban-filter.conf": "/etc/fail2ban/filter.d/cpa-gateway.conf",
+                "scripts/remote/cpa-fail2ban-jail.conf": "/etc/fail2ban/jail.d/cpa-gateway.conf",
+            }
+            self.assertEqual(projection["doctor_targets"], expected_targets)
+            self.assertEqual(set(projection["doctor_hashes"]), set(expected_targets))
+            pairs = dict(
+                pair.split("=", 1) for pair in projection["hash_pairs"].split()
+            )
+            self.assertEqual(
+                pairs,
+                {
+                    destination: projection["doctor_hashes"][source]
+                    for source, destination in expected_targets.items()
+                },
+            )
+            self.assertTrue(
+                set(expected_targets).issubset(set(projection["source_paths"]))
+            )
+            admission_hash = projection["doctor_hashes"][
+                "scripts/remote/cpa-admission.py"
+            ]
+            raw_guard = (root / "scripts/remote/cpa_request_guard.py").read_text(
+                encoding="utf-8"
+            )
+            expected_guard_hash = hashlib.sha256(
+                raw_guard.replace("__SOURCE_SHA256__", admission_hash).encode()
+            ).hexdigest()
+            self.assertEqual(
+                projection["doctor_hashes"]["scripts/remote/cpa_request_guard.py"],
+                expected_guard_hash,
+            )
 
             missing = scripts / "remote/cpa-guardrail-doctor.sh"
             missing.unlink()
@@ -1161,8 +1222,13 @@ $result | ConvertTo-Json -Depth 4 -Compress
         # in the doctor drift list, and recoverable from the apply backup.
         self.assertIn('"scripts/remote/cpa-update-timeout.conf"', source)
         self.assertIn(
-            "/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf"
-            "=$updaterTimeoutConfHeadSha256",
+            '"scripts/remote/cpa-update-timeout.conf" = '
+            '"/etc/systemd/system/cliproxyapi-update.service.d/'
+            'cpa-update-timeout.conf"',
+            source,
+        )
+        self.assertIn(
+            '$projectionHeadSha256["scripts/remote/cpa-update-timeout.conf"]',
             source,
         )
         self.assertIn("__CPA_UPDATER_TIMEOUT_CONF_B64__", source)
@@ -2396,6 +2462,12 @@ except Exception as exc:
         self.assertIn("^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$", source)
         self.assertIn("Get-LfNormalizedSha256", source)
         self.assertIn("Get-HeadBlobSha256", source)
+        self.assertIn("$projectionDoctorTargets = [ordered]@{", source)
+        self.assertIn(
+            "if (-not $projectionSources.Contains($entry.Key))",
+            source,
+        )
+        self.assertIn("$admissionRequestGuardHeadDeployedText", source)
         self.assertIn(
             'foreach ($argument in @("-C", $repoRoot, "show", $gitPath)) {',
             source,
@@ -2405,9 +2477,28 @@ except Exception as exc:
             source,
         )
         self.assertIn("function Get-HeadBlobBytes", source)
-        self.assertIn('Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"', source)
         self.assertIn(
-            '"/etc/vps-ssh-launcher/cpa-admission.sha256=$admissionIntegrityPinHeadSha256"',
+            "$projectionHeadSha256[$entry.Key] = Get-HeadBlobSha256 $entry.Key",
+            source,
+        )
+        self.assertIn(
+            '"scripts/remote/cpa-admission-launch.sh" = "/opt/cliproxyapi/cpa-admission-launch.sh"',
+            source,
+        )
+        self.assertIn(
+            '"scripts/remote/cpa_admission_bootstrap.py" = "/usr/local/libexec/cpa_admission_bootstrap.py"',
+            source,
+        )
+        self.assertIn(
+            '"scripts/remote/cpa_request_guard.py" = "/usr/local/libexec/cpa_request_guard.py"',
+            source,
+        )
+        self.assertIn(
+            "$projectionDoctorTargets.GetEnumerator()",
+            source,
+        )
+        self.assertIn(
+            '"/etc/vps-ssh-launcher/cpa-admission.sha256"',
             source,
         )
         self.assertIn(

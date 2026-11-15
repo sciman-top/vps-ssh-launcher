@@ -142,3 +142,44 @@ admission-integrity=OK  DOCTOR_CONTRACT_OK
 - `maintenance/resources.py` 增加资源自有 preflight seam，Xray 配置检查不再硬编码在通用 planner 中。
 
 这些切片没有改变 CLI、TOML、SQLite 表结构、远端命令或真实 SSH 默认关闭策略；本轮改动后的最低证明为 ruff、format、mypy、compileall 与 `git diff --check`。完整 pytest 基线仍以上述门禁收据为准，真实 SSH 与 live acceptance 未被提升。
+
+## 10. 2026-11-15 第四批：投影闭包与本地凭据边界
+
+本批继续沿用演进式重构路线，没有改变技术栈或入口契约。修复集中在两个此前能让门禁“看不到”的安全边界：
+
+- `cpa_bwg_guardrails.ps1` 新增 17 项持久 projection source → remote target 映射。doctor hash pair、HEAD hash 和 request-guard 的 admission SHA 注入都由同一映射生成；映射会拒绝重复目标或未登记源。此前 apply 已写入但 doctor 未覆盖的 `cpa-admission-launch.sh`、`cpa_admission_bootstrap.py`、`cpa_request_guard.py` 现在会 fail closed。
+- SSH 私钥复用现有 Windows DACL 解析；Windows 只拒绝，不在连接路径隐式修改 ACL，POSIX 拒绝 group/other 权限。`target.example.json` 仅仓库真源模板免检，其他目录同名文件仍按凭据文件检查。
+- Hysteria2 obfs 密码文件和代理验收入口在 `Get-Content` 前执行统一隐私检查；合并订阅脚本先收紧旧 token 的 ACL 再读取，避免修复窗口暴露凭据。
+
+本轮证据：
+
+```text
+CATALOG_CHECK=PASS
+1708 passed, 31 skipped, 809 subtests passed
+Bandit: PASS
+Ruff check: PASS
+Ruff format --check: PASS
+mypy: PASS
+```
+
+审查结论保持不变：Python + PowerShell + 远端 Bash/Python 投影是当前边界条件下的合适组合。复杂度来自双 VPS、远端按字节投影、幂等/备份/回滚、双内核和 fail-closed 门禁；迁移到 Go/Rust/Node 不会消除这些复杂度，反而会引入协议重写、运行时替换、跨语言测试和部署风险。应继续做有证据的模块化、契约收敛和安全边界修复，不做一次性彻底重写。
+
+当前仍未提升的证据边界：
+
+- 以上门禁只证明 `repo_verified`。
+- 本机用户数据根 ACL 收紧完成并回读后，另记录为 `filesystem_projected`。
+- 未执行真实 SSH、远端 `-Apply`、重启或自然流量；`host_loaded` 与 `live_accepted` 仍需独立验收。
+
+## 11. 2026-11-15 本机凭据 ACL 收口
+
+对当前用户数据根按文件名和现有代码引用做了精确清单，共 7 个凭据类文件：两个 profile 的 Hysteria2 obfs 密码、legacy obfs 密码、obfs 客户端材料、合并订阅 token 以及两个合并订阅 URL。处理过程只读取文件元数据和 ACL，没有读取文件内容，也没有轮换密码、token、UUID 或 URL。
+
+每个文件先保存 ACL-only 备份，再以 `icacls /inheritance:r /grant:r` 收紧到 LocalSystem、Administrators 和当前用户，随后逐文件回读验证：继承关闭、仅 3 条 Allow/FullControl 规则、无额外 principal。备份目录位于 `%LOCALAPPDATA%\vps-ssh-launcher\acl-backups\20261115T201106\`，其中 `manifest.json` 保存原始 DACL，`restore-acl.ps1` 提供逐文件恢复入口，`repair-receipt.json` 记录 `ACL_REPAIR=PASS`。
+
+```text
+ACL_REPAIR=PASS count=7
+ACL_READBACK=PASS count=7 inherited=0 unexpected=0
+ACL_RECEIPT=PASS
+```
+
+该结果属于 `filesystem_projected`：它证明本机文件权限已经回读到目标终态，不证明远端服务、外部客户端或自然流量验收。
