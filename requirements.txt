@@ -1,1 +1,3 @@
-paramiko>=5.0.0,<6.0.0
+# Compatibility entrypoint for legacy ``pip install -r requirements.txt``.
+# The hashed runtime lock is the single reproducible dependency source.
+-r requirements-runtime.lock

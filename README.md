@@ -380,8 +380,13 @@ python -m venv .venv
 `requirements-dev.lock` is generated from `pyproject.toml` and
 `requirements-dev.in`. Refresh it with
 `uv pip compile pyproject.toml requirements-dev.in --all-extras --universal
---no-annotate --output-file requirements-dev.lock` when dependency declarations
-change.
+--generate-hashes --no-annotate --output-file requirements-dev.lock` when
+dependency declarations change. Refresh the runtime lock with
+`uv pip compile pyproject.toml --universal --generate-hashes
+--output-file requirements-runtime.lock`.
+
+根目录的 `requirements.txt` 仅作为旧版 `pip install -r` 入口，转发到带哈希的
+`requirements-runtime.lock`；新的可复现安装应直接使用对应的 lock 文件。
 
 快速反馈时只运行本次受影响的测试，例如：
 

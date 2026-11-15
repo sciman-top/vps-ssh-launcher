@@ -318,8 +318,14 @@ python -m venv .venv
 `requirements-dev.lock` is generated from `pyproject.toml` and
 `requirements-dev.in`. Refresh it with
 `uv pip compile pyproject.toml requirements-dev.in --all-extras --universal
---no-annotate --output-file requirements-dev.lock` when dependency declarations
-change.
+--generate-hashes --no-annotate --output-file requirements-dev.lock` when
+dependency declarations change. Refresh the runtime lock with
+`uv pip compile pyproject.toml --universal --generate-hashes
+--output-file requirements-runtime.lock`.
+
+The root `requirements.txt` is retained only as a legacy `pip install -r`
+entrypoint and delegates to the hashed `requirements-runtime.lock`. New
+reproducible installs should use the appropriate lock file directly.
 
 Run focused tests for fast feedback:
 

@@ -61,6 +61,11 @@ class AuditInvocationTests(unittest.TestCase):
         self.assertIn("scripts/dependency_audit.py", text)
         self.assertNotIn('"pip_audit", "-r", "requirements.txt"', text)
 
+    def test_legacy_requirements_entrypoint_delegates_to_runtime_lock(self) -> None:
+        text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+        self.assertIn("-r requirements-runtime.lock", text)
+        self.assertNotIn("paramiko>=", text)
+
     def test_list_mode_prints_pins_without_network(self) -> None:
         completed = subprocess.run(
             [
