@@ -5,12 +5,37 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
-from .models import MaintenanceAction
+from .models import InventoryRecord, MaintenanceAction
 from .pins import normalize_sha256, normalize_version, require_exact_table
 
 XRAY_BINARY = "/etc/v2ray-agent/xray/xray"
 XRAY_CONFDIR = "/etc/v2ray-agent/xray/conf"
 XRAY_SERVICE = "xray"
+
+
+def preflight(
+    profile: str,
+    desired: str,
+    observed: str,
+    record: InventoryRecord,
+) -> MaintenanceAction | None:
+    """Apply Xray-specific inventory guards before generic planning."""
+    if desired != "upgrade":
+        return None
+    config_check = record.facts.get("xray_config_check")
+    if config_check is None or config_check == "ok":
+        return None
+    return MaintenanceAction(
+        profile=profile,
+        resource="xray",
+        desired=desired,
+        observed=observed,
+        status="blocked",
+        reason=(
+            "Fresh Xray configuration check did not pass; repair and "
+            "re-collect inventory before upgrading the core."
+        ),
+    )
 
 
 def normalize_pin(value: Any) -> dict[str, Any]:

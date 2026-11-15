@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import docker, xray
-from .models import MaintenanceAction
+from .models import InventoryRecord, MaintenanceAction
 
 
 # The one profile the unattended path may ever touch. Declared here, next to the
@@ -37,6 +37,10 @@ class ResourceSpec:
     # Inventory fact consulted as the observed state for upgrade planning;
     # None keeps the generic ``facts[<resource>]`` key.
     observed_fact_key: str | None = None
+    # Optional resource-owned guard that runs before generic state planning.
+    preflight: (
+        Callable[[str, str, str, InventoryRecord], MaintenanceAction | None] | None
+    ) = None
 
 
 RESOURCES: dict[str, ResourceSpec] = {
@@ -49,6 +53,7 @@ RESOURCES: dict[str, ResourceSpec] = {
             xray.plan_upgrade,
             "Xray action has no version/SHA-256 pin.",
             observed_fact_key="xray_version",
+            preflight=xray.preflight,
         ),
         ResourceSpec(
             "docker",
