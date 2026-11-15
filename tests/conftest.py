@@ -23,6 +23,17 @@ import pytest
 # fallback name; production imports the real package module when available.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+if os.environ.get("PYTEST_XDIST_WORKER"):
+    # The gate points each xdist worker at its own TEMP before this file
+    # runs; this keeps the boundary explicit for a worker started any other
+    # way. The support module lives in scripts/ rather than in the test tree
+    # so a projected remote payload never ships a test helper.
+    from scripts.dsh_gate_xdist_worker_prelude import (
+        configure as _configure_worker_temp,
+    )
+
+    _configure_worker_temp()
+
 TEMP_CLEANUP_BUDGET_SECONDS = float(
     os.environ.get("VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS", "5.0")
 )
@@ -35,11 +46,21 @@ _original_write_text = Path.write_text
 _original_mkdir = Path.mkdir
 
 
-def _private_temp_root() -> Path | None:
-    """Return an explicit test-only temp root when CI opted in."""
+def _private_temp_root() -> bool:
+    """Whether this run must treat host tempfile fixtures as private.
+
+    A parallel run gets the same guarantee from a per-worker TEMP instead: the
+    gate points TEMP/TMP at a worker-private directory, so mkdtemp already
+    inherits the parent's ACL. Returning False there keeps the session-wide
+    hardening out of a temp directory other workers are creating fixtures in
+    at the same time, and out of a resolved path that disagrees with what
+    tempfile actually used.
+    """
     if os.environ.get("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP") != "1":
-        return None
-    return Path(tempfile.gettempdir()).resolve()
+        return False
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return False
+    return True
 
 
 def _secure_fixture_tree(root: Path) -> None:
@@ -76,6 +97,12 @@ def _private_write_text(
             newline=newline,
         )
     )
+    # The mode is a POSIX permission contract. Asking for it on a host without
+    # POSIX mode bits turns the bridge into a second, much slower delete-path
+    # open per fixture write (the "you may not have permission to change file
+    # attributes" refusal costs far more than the OSError it raises).
+    if os.name != "posix":
+        return written
     try:
         os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)
     except (AttributeError, OSError):
@@ -117,7 +144,7 @@ def _posix_test_directory(root: Path) -> Path:
 
 
 def _apply_private_fixture_bridge() -> None:
-    if _private_temp_root() is None:
+    if not _private_temp_root():
         return
     tempfile.mkdtemp = _private_mkdtemp  # type: ignore[assignment]
     cast(Any, Path).write_text = _private_write_text

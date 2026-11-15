@@ -318,8 +318,9 @@ python -m venv .venv
 `requirements-dev.lock` is generated from `pyproject.toml` and
 `requirements-dev.in`. Refresh it with
 `uv pip compile pyproject.toml requirements-dev.in --all-extras --universal
---generate-hashes --no-annotate --output-file requirements-dev.lock` when
-dependency declarations change. Refresh the runtime lock with
+--generate-hashes --output-file requirements-dev.lock` when dependency
+declarations change. Keep the default annotations: they are what makes a
+refreshed lock reviewable against the declarations that pulled each pin in. Refresh the runtime lock with
 `uv pip compile pyproject.toml --universal --generate-hashes
 --output-file requirements-runtime.lock`.
 
@@ -344,6 +345,31 @@ The default `Auto` profile picks the gate from `git diff`: anything under `vps_s
 `Full` executes an installed-package import check, the catalog consistency check (`contract:catalog`), pytest, Bandit, Ruff lint/format, and Mypy. CI runs the static scope once and keeps pytest on both Windows and Ubuntu; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
 
 `Focused` accepts a Python file or directory. For source changes, pass the relevant tests explicitly in the same `-FocusPath` list; a single `test_*.py` runs only that file. Changes to `tests/conftest.py` or another test support module widen the behavior leg to `pytest tests` because they affect collection and fixtures. A source-only list still receives Ruff, format, and Mypy checks.
+
+### Running the same Full gate faster
+
+Almost all of the Full wall clock is pytest: the static legs add up to about four seconds, the suite takes four to five minutes, and 457 child-process spawns inside it account for roughly 226 of those seconds. That is the part worth compressing; dropping gate layers is not.
+
+```powershell
+.\scripts\run_gates.ps1 -Profile Full -RunParallel
+```
+
+Four workers by default (`-MaxWorkers`, 2 through 32) distributed per file with `--dist loadfile`: test files share no in-process state, only fixtures inside a file do. Parallelism changes how the suite runs, never what it asserts.
+
+A parallel result only replaces the serial one once it is proven equivalent: `test` runs the suite in parallel, and `test:serial-recheck` runs the same suite one process at a time and compares passed/failed/skipped/errors at the whole-test level. `test:parallel-proof` names the receipt produced by that serial recheck; it no longer runs a third copy of the full suite. Subtest assertion counts may differ, but whole-test outcomes must match.
+
+After both runs pass, the result is recorded in `outputs/gates/receipts/parallel-proof.json`. Later runs on the same tree reuse a matching test receipt; if that receipt is missing or stale, they run the parallel lane without another serial comparison. When the serial lane has already run against this tree, skip the byte comparison explicitly:
+
+```powershell
+.\scripts\run_gates.ps1 -Profile Full -RunParallel -ReuseReceipts
+```
+
+`-RunParallel` is a request, not a promise: without `pytest-xdist` installed the gate falls back to serial and still gives the same answer. A parallel run gives every worker its own TEMP (`outputs/gates/tmp/run-<id>/<worker>`, removed at the end), and each gate invocation gets a fresh run leaf so stale worker cleanup cannot collide with a new run.
+
+### Reusing gate evidence
+
+Full records the static legs whose answer cannot be reproduced by a test receipt under `outputs/gates/receipts/*.json` (machine-local working state, never committed). A receipt is reused only when both the repository content hash and the set of distributions installed in the gate interpreter are identical, so editing any file or upgrading any tool invalidates it; an old receipt can never vouch for a new tree.
+
 
 ---
 

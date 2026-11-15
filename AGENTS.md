@@ -15,7 +15,7 @@
 - `vps_ssh_launcher/cli.py` 负责参数与动作分派；`config.py`、`connection.py`、`execution.py`、`batch.py` 分别负责配置、连接、命令流与批量调度，`contracts.py` 定义共享常量与协议；`ssh_tool.py` 是兼容入口。`auto_install.py --execute` 驱动远端安装器，不是健康检查。
 - SSH 连接配置真源是用户数据根下的 `target.json`（解析顺序 user → repo，仓库根不保存连接配置；明文 `password` 与 `default` 字段）。Git Bash 直跑：`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`；`run.cmd` 经 PowerShell 转发，对带管道的命令会坏引号。
 - `target.example.json` 是模板；密码、私钥、token 、订阅地址不得提交或写入证据。
-- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输（`Invoke-LauncherRemoteCommand`：CRLF 归一、base64、超限分块临时文件），wrapper 不自写路径拼接或远程传输；Python 侧同源解析是 `config.app_config_dir()`。
+- `scripts/run_gates.ps1` 是统一门禁（并行与回执助手：`scripts/gate_content_hash.py`、`scripts/dsh_gate_xdist_worker_prelude.py`）；`scripts/lib/project_environment.ps1` 负责 Windows 环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输（`Invoke-LauncherRemoteCommand`：CRLF 归一、base64、超限分块临时文件），wrapper 不自写路径拼接或远程传输；Python 侧同源解析是 `config.app_config_dir()`。
 - 测试统一在 `tests/`（pytest `testpaths = ["tests"]`，元测试强制根目录无散落测试文件）；可维护资源名单一真源是 `vps_ssh_launcher/maintenance/resources.py`。
 - `scripts/remote/` 文件名 kebab/snake 混用属既成事实；重命名会连锁投影清单、systemd 单元与 guardrails 哈希表，勿为统一重命名。
 - 远端防火墙基线 `scripts/firewall_baseline.ps1` 维护独立 `inet vps_launcher_guard` 表（默认 drop、精确端口 allowlist、UDP 20000–20999 → Hysteria2 obfs 8444 hairpin），不接管 vasma/Docker 规则，drift lane 为 `firewall-baseline`。
@@ -52,6 +52,7 @@
 - fixed order：`contract:catalog -> build -> test -> invariant -> hotspot`。`contract:catalog`（`scripts/cpa_catalog_check.py`，毫秒级）排在最前，catalog/别名漂移不等导入检查、套件或 `-Apply` 往返才暴露；`invariant`（`pip check` + `scripts/dependency_audit.py`）只在显式 `-RunDependencyAudit` 时插入，审计对象是门禁解释器里实际安装的全部包（排除 pip/setuptools/wheel 与本仓 editable 自身），不是单行的 `requirements.txt`；默认 `Full` 实际执行安装后导入检查、catalog 契约、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
 - 静态检查范围分两类：`scripts/`（含 `scripts/remote/` 远端运行时）纳入 ruff check / bandit；`ruff format --check` 覆盖 scripts 全树（含投影源，格式漂移会挡 Full 门禁）；mypy 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
+- 墙钟成本集中在 pytest（约 4–5 分钟，静态腿合计约 4 秒，套件内约 457 次子进程占约 226 秒），因此 full closeout 默认加 `-RunParallel`（4 worker，`--dist loadfile`）；并行结论先经 `test:parallel-proof` 与 `test:serial-recheck` 证明与串行等价并落盘 `outputs/gates/receipts/parallel-proof.json`，之后同树复用匹配的 test receipt；回执缺失或失效时才走并行单腿。已用串行跑过同一棵树时可加 `-ReuseReceipts` 跳过字节比对。静态腿回执按内容树哈希+发行包集合复用；改文件或升工具即失效。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
 - 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。
 - 普通本地改动以 Git diff、测试和 CI receipt 为证据，不新建独立审计文档；只有真实远端写入、事故或 release 在 `docs/change-evidence/` 留脱敏记录，例行验收把判据行（如 `ACCEPTANCE_RESULT=PASS`）写进提交信息。

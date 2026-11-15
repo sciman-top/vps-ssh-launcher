@@ -15,7 +15,19 @@ param(
   [switch]$RunIntegration,
   [switch]$AllowGlobalPython,
   [string]$IntegrationConfig,
-  [string]$IntegrationProfile
+  [string]$IntegrationProfile,
+  # Opt-in, as the docs put it: "considerable speed ups, especially if your
+  # test suite takes a noticeable amount of time"
+  # (https://pytest-xdist.readthedocs.io/en/stable/distribution.html). The
+  # serial order stays the default so the gate keeps producing one canonical
+  # log; a parallel run proves itself before it may stand in for that log.
+  [switch]$RunParallel,
+  [ValidateRange(2, 32)]
+  [int]$MaxWorkers = 4,
+  # Reuse a parallel test result already proven against this exact tree and
+  # interpreter. The default (off) re-runs the suite serially once; see the
+  # parallel lane in the Full branch for why that is not belt and braces.
+  [switch]$ReuseReceipts
 )
 
 $ErrorActionPreference = "Stop"
@@ -134,6 +146,315 @@ try {
     return $targets
   }
 
+  function ConvertTo-GatePythonPath {
+    param([string[]]$Prefixes)
+
+    # An empty PYTHONPATH entry is a no-op for that variable and load-bearing
+    # for the worker bootstrap: pytest rewrites a PYTHONPATH it finds in the
+    # environment into its own sys.path changes and drops the original, so a
+    # worker must see one here or the prelude never runs.
+    $segments = @($Prefixes | Where-Object { $_ })
+    if ($env:PYTHONPATH) {
+      $segments += $env:PYTHONPATH
+    }
+    return ($segments -join [IO.Path]::PathSeparator)
+  }
+
+  function Get-GateWorkerEnvironment {
+    param([int]$WorkerCount)
+
+    # xdist starts each worker as its own process and a child inherits this
+    # process TEMP/TMP. scripts/dsh_gate_xdist_worker_prelude.py moves each
+    # worker TEMP under the run root, keeping its fixtures private there
+    # instead of in the shared host temp directory. -n resolves its worker
+    # count from the environment, so the requested count needs no second flag.
+    # Each gate invocation gets an isolated leaf. A previous xdist run can
+    # still be finishing child cleanup when the parent returns; reusing one
+    # fixed root would let that stale run race with a fresh -ReuseReceipts
+    # invocation and remove or repopulate the fresh workers' directories.
+    $workerRoot = Join-Path `
+      (Join-Path $script:runRoot "tmp") `
+      ("run-" + [guid]::NewGuid().ToString("N"))
+    $script:workerTempRoot = $workerRoot
+    New-Item -ItemType Directory -Path $workerRoot -Force | Out-Null
+    for ($index = 0; $index -lt $WorkerCount; $index++) {
+      New-Item -ItemType Directory -Path (Join-Path $workerRoot "gw$index") -Force |
+        Out-Null
+    }
+    return @{
+      PYTEST_XDIST_AUTO_NUM_WORKERS = [string]$WorkerCount
+      # Per run: a crashed run cannot leave fixtures for the next one to
+      # inherit, and the whole subtree is removed in finally.
+      VPS_SSH_LAUNCHER_GATE_TEMP_ROOT = $workerRoot
+      # The scripts directory is the import root for the worker prelude.
+      # tests/conftest.py calls it after pytest starts each worker.
+      PYTHONPATH = ConvertTo-GatePythonPath -Prefixes @(
+        "scripts"
+      )
+    }
+  }
+
+  function Get-GateTestProperties {
+    param(
+      [string]$RepoRoot,
+      [string]$PythonExe
+    )
+
+    # Every file the lane could read, minus working state. A recorded PASS is
+    # only reused against a byte-identical tree and the same interpreter, so
+    # an edit during the run invalidates the receipt the run is writing.
+    $hashScript = Join-Path $RepoRoot "scripts/gate_content_hash.py"
+    $raw = & $PythonExe $hashScript $RepoRoot
+    if ($LASTEXITCODE -ne 0) {
+      throw "test-receipt: hashing the test inputs failed"
+    }
+    return ($raw | Out-String | ConvertFrom-Json)
+  }
+  function Test-GateReceipt {
+    param([string]$RelativePath)
+
+    if (-not (Test-Path -LiteralPath $RelativePath)) {
+      return $false
+    }
+    try {
+      $receipt = Get-Content -LiteralPath $RelativePath -Raw | ConvertFrom-Json
+    } catch {
+      return $false
+    }
+    if ($receipt.profile -ne "Full" -or $receipt.status -ne "PASS") {
+      return $false
+    }
+    if ($receipt.tree -ne $script:testProperties.tree) {
+      return $false
+    }
+    return $receipt.environment -eq $script:testProperties.environment
+  }
+
+  function Write-GateReceipt {
+    param(
+      [string]$RelativePath,
+      [string]$Status,
+      [double]$Seconds
+    )
+
+    $directory = Split-Path -Parent $RelativePath
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+      New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    $receipt = [ordered]@{
+      status = $Status
+      profile = "Full"
+      tree = $script:testProperties.tree
+      environment = $script:testProperties.environment
+      seconds = [math]::Round($Seconds, 1)
+      workers = $(if ($script:testParallel) { $MaxWorkers } else { 0 })
+      host = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
+      recorded_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+    $receipt | ConvertTo-Json | Set-Content -LiteralPath $RelativePath -Encoding utf8
+  }
+
+  function Remove-GateWorkerTemporaryRoots {
+    param([string]$Root)
+
+    # A parallel run owns this directory outright, so whatever a worker left
+    # behind (crashed fixture trees, spilled scripts) goes with it. Serial runs
+    # keep their fixtures on the host temp path they always used.
+    if (-not (Test-Path -LiteralPath $Root)) {
+      return
+    }
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+      try {
+        Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction Stop
+        return
+      } catch {
+        $lastError = $_.Exception.Message
+        if ($attempt -lt 8) {
+          Start-Sleep -Milliseconds 250
+        }
+      }
+    }
+    if (Test-Path -LiteralPath $Root) {
+      Write-Host "    warning: could not remove $Root ($lastError)"
+    }
+  }
+
+  function Resolve-TestLanePlan {
+    param([object[]]$Entries)
+
+    # A parallel result can stand in for the normal serial test only after one
+    # serial recheck reports the same whole-test outcomes. The old plan ran the
+    # parallel command three times and compared a run count with a collection
+    # count; that added minutes without proving equivalence.
+    $testEntry = $null
+    $others = @()
+    foreach ($entry in $Entries) {
+      if ($entry.Id -eq "test-lane") {
+        $testEntry = $entry
+      } else {
+        $others += $entry
+      }
+    }
+    if ($null -eq $testEntry) {
+      return $Entries
+    }
+
+    $skipNextPytestArgument = $false
+    $serialCommand = @(
+      foreach ($argument in @($testEntry.Command)) {
+        if (
+          $argument -eq "-n" -or
+          $argument -eq "--dist" -or
+          $argument -eq "--max-worker-restart"
+        ) {
+          $skipNextPytestArgument = $true
+          continue
+        }
+        if ($skipNextPytestArgument) {
+          $skipNextPytestArgument = $false
+          continue
+        }
+        $argument
+      }
+    )
+    if ($serialCommand -notcontains "--import-mode=importlib") {
+      $serialCommand += "--import-mode=importlib"
+    }
+    $serialEntry = @{
+      Id = "test"
+      Command = $serialCommand
+      Environment = $testEntry.Environment
+      Receipt = $testEntry.Receipt
+    }
+    if (-not $script:testParallel) {
+      return @($others) + @($serialEntry)
+    }
+
+    # Proof is evidence about this host and tree, so it follows the receipt
+    # exactly the way every other reused answer does.
+    $proofPath = Join-Path $script:receiptDirectory "parallel-proof.json"
+    if ($ReuseReceipts -or (Test-GateReceipt -RelativePath $proofPath)) {
+      return @($others) + @($testEntry)
+    }
+
+    $parallelEntry = @{
+      Id = "test"
+      Command = $testEntry.Command
+      Environment = $testEntry.Environment
+    }
+    # The one serial run that decides whether the parallel answer may stand.
+    $serialRecheck = @{
+      Id = "test:serial-recheck"
+      Command = $serialCommand
+      Environment = $testEntry.Environment
+      Receipt = $testEntry.Receipt
+      SerialRecheck = $true
+    }
+    return @($others) + @($parallelEntry) + @($serialRecheck)
+  }
+
+  function Get-PytestSummaryVector {
+    param([string[]]$Lines)
+
+    # pytest reports on one line: "1708 passed, 31 skipped, 810 subtests passed
+    # in 90.31s". Duration is the only field a parallel run may change; every
+    # other field, subtest assertions included, is a claim about behaviour.
+    $vector = @{ counts = @(); total = 0; sawRun = $false }
+    foreach ($line in $Lines) {
+      $text = [string]$line
+      if ($text -match "(\d+) tests? collected") {
+        # collect-only: a whole-test count with no run behind it.
+        $vector.total = [int]$Matches[1]
+      }
+      if (-not $text.Contains(" in ")) {
+        continue
+      }
+      # A summary line ends with " in <duration>"; strip that once so no field
+      # below can absorb the duration into its own name.
+      $head = $text.Substring(0, $text.LastIndexOf(" in "))
+      if ($head -notmatch "(\d+) passed") {
+        continue
+      }
+      $vector.sawRun = $true
+      $vector.total = [int]$Matches[1]
+      $counts = @()
+      foreach ($piece in ($head -split ",")) {
+        $trimmed = $piece.Trim()
+        if ($trimmed -match "^(\d+) (.+)$") {
+          $counts += ($Matches[2] + "=" + $Matches[1])
+        }
+      }
+      $vector.counts = @($counts | Sort-Object)
+    }
+    return $vector
+  }
+  function Compare-ParallelAndSerialSummaries {
+    param($Parallel, $Serial)
+
+    # Exact agreement is the norm; the tolerant mode exists because pytest
+    # counts a subtest assertion as "subtests passed", so a test that fails its
+    # parent assertion part-way through legitimately reports fewer of them on a
+    # second run. What must never move is the number of tests that passed,
+    # skipped, failed or errored: those are whole tests, not assertions.
+    if ($Parallel.counts.Count -eq 0 -or $Serial.counts.Count -eq 0) {
+      return @{ Ok = $false; Mode = ""; Reason = "one of the two runs reported no pytest summary line" }
+    }
+    $a = @($Parallel.counts) -join ", "
+    $b = @($Serial.counts) -join ", "
+    if ($a -eq $b) {
+      return @{ Ok = $true; Mode = "exact"; Reason = "" }
+    }
+    $stable = @("passed", "failed", "skipped", "errors")
+    $filtered = {
+      param([string[]]$Counts)
+      @($Counts | Where-Object {
+        $name = ($_ -split "=")[0]
+        $stable -contains $name
+      })
+    }
+    $aStable = & $filtered $Parallel.counts
+    $bStable = & $filtered $Serial.counts
+    if (($aStable -join ", ") -eq ($bStable -join ", ")) {
+      return @{ Ok = $true; Mode = "whole-tests"; Reason = "" }
+    }
+    $reason = "parallel run reported [" + $a + "] but the serial run reported [" + $b + "]"
+    return @{ Ok = $false; Mode = ""; Reason = $reason }
+  }
+
+  function Invoke-GateLeg {
+    param(
+      [hashtable]$Entry,
+      [hashtable]$Environment
+    )
+
+    # Per-command environment overrides are applied only around this command:
+    # the previous build-time mutation leaked into every later gate and made
+    # the documented "private fixtures" switch a no-op.
+    $saved = @{}
+    foreach ($name in $Environment.Keys) {
+      $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+      [Environment]::SetEnvironmentVariable($name, [string]$Environment[$name], "Process")
+    }
+    # Tee instead of a bare pipe: only two legs consume their own output (the
+    # summary vector and the proof baseline), and every other leg keeps
+    # streaming to the console exactly as before.
+    $output = New-Object System.Collections.Generic.List[string]
+    $lines = @()
+    try {
+      & $Entry.Command[0] @($Entry.Command[1..($Entry.Command.Count - 1)]) | Tee-Object -Variable lines | Out-Null
+      foreach ($line in $lines) {
+        $output.Add([string]$line)
+        Write-Host $line
+      }
+    } finally {
+      foreach ($name in $saved.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")
+      }
+    }
+    return $output
+  }
+
   function Resolve-IntegrationProfile {
     param([string]$ConfigPath, [string]$ProfileName)
 
@@ -165,13 +486,26 @@ try {
     )
   }
 
+  $script:parallelSummary = $null
+  $script:testParallel = $false
+  $script:testProperties = $null
+  $script:workerTempRoot = $null
+  $script:runRoot = Join-Path $repoRoot (Join-Path "outputs" "gates")
+  # Machine-local, never a product artifact: a receipt is evidence about this
+  # working tree on this host, so it lives outside docs/change-evidence and
+  # stays untracked.
+  $script:receiptDirectory = Join-Path $script:runRoot "receipts"
+
   Initialize-WindowsProcessEnvironment
 
   # Auto: any touched file that can change runtime behaviour forces the full
   # gate; a rules/docs/test-only diff stays focused. This is deliberately
   # conservative -- an unknown path counts as risky.
   function Resolve-AutoProfile {
-    param([string]$RepoRoot)
+    param(
+      [string]$RepoRoot,
+      [ref]$ChangedPaths
+    )
     # One working-tree read serves both the risk decision and the focus list,
     # so the caller never repeats these two git calls.
     $riskyPatterns = @(
@@ -224,7 +558,7 @@ try {
       Write-Host "==> auto: unclassified path -> Full ($($unknown -join ', '))"
       return "Full"
     }
-    $script:AutoChangedPaths = $changed
+    $ChangedPaths.Value = @($changed)
     Write-Host "==> auto: test/doc change -> Focused ($($changed.Count) files)"
     return "Focused"
   }
@@ -234,8 +568,20 @@ try {
   # travels in its own variable instead of overloading the parameter.
   $autoSkip = $false
   $autoNoChanges = $false
+  $autoChangedPaths = @()
   if ($Profile -eq "Auto") {
-    $autoDecision = Resolve-AutoProfile -RepoRoot $repoRoot
+    $autoDecision = Resolve-AutoProfile `
+      -RepoRoot $repoRoot `
+      -ChangedPaths ([ref]$autoChangedPaths)
+    $gateScriptChanged = $false
+    if ($autoDecision -ne "NoChanges") {
+      # The gate script is the thing being trusted to judge a change, so a diff
+      # to the judging machinery never runs under its own relaxed
+      # classification.
+      $gateScriptChanged = @(
+        $autoChangedPaths | Where-Object { ($_ -replace "\\", "/") -match "^scripts/(run_gates\.ps1|gate_content_hash\.py|dsh_gate_xdist_worker_prelude\.py)$" }
+      ).Count -gt 0
+    }
     if ($autoDecision -eq "NoChanges") {
       if (
         $RunDependencyAudit -or
@@ -249,8 +595,8 @@ try {
       } else {
         $autoNoChanges = $true
       }
-    } elseif ($autoDecision -eq "Focused") {
-      $autoPython = @($AutoChangedPaths | Where-Object { $_ -match '\.py$' })
+    } elseif ($autoDecision -eq "Focused" -and -not $gateScriptChanged) {
+      $autoPython = @($autoChangedPaths | Where-Object { $_ -match "\.py$" })
       if ($autoPython.Count -eq 0) {
         Write-Host "==> auto: nothing to lint or test; running doc checks instead"
         $autoSkip = $true
@@ -259,10 +605,12 @@ try {
         $FocusPath = @($autoPython)
       }
     } else {
+      if ($gateScriptChanged) {
+        Write-Host "==> auto: gate machinery changed -> Full"
+      }
       $Profile = "Full"
     }
   }
-
   if ($Profile -eq "Integration" -and -not $RunIntegration) {
     throw "Integration profile requires -RunIntegration."
   }
@@ -286,6 +634,33 @@ try {
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
   $pythonExe = $python.Exe
+  # Establish the integration boundary before any helper process is invoked.
+  # Receipt hashing and other preflight helpers must observe the same explicit
+  # opt-in value as the actual test and static legs.
+  $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = if ($RunIntegration) { "1" } else { "0" }
+
+  # -RunParallel is a request for the faster lane, not a promise it is
+  # available. Falling back to the serial run keeps the gate's answer intact
+  # on a host without xdist instead of failing the change under test.
+  if ($RunParallel -and $Profile -in @("Focused", "Full")) {
+    & $pythonExe -c "import xdist" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      $script:testParallel = $true
+    } else {
+      Write-Host "==> parallel: pytest-xdist is not installed; running serially"
+    }
+  }
+  if ($Profile -eq "Full") {
+    # Every file the lane could read, minus working state. A recorded PASS is
+    # only reused against a byte-identical tree and the same interpreter, so
+    # an edit during the run invalidates the receipt the run is writing.
+    $properties = Get-GateTestProperties -RepoRoot $repoRoot -PythonExe $pythonExe
+    $script:testProperties = @{
+      tree = [string]$properties.tree
+      environment = [string]$properties.environment
+    }
+    New-Item -ItemType Directory -Path $script:receiptDirectory -Force | Out-Null
+  }
 
   if ($autoSkip) {
     # Auto found nothing to lint or test (rules/docs-only diff): the two cheap
@@ -411,7 +786,13 @@ try {
           )
         }
       )
+      # The serial run keeps the flag it has always carried; the parallel run
+      # reaches the same modules through pythonpath in pyproject.toml, so the
+      # two lanes stay provenance-compatible instead of diverging silently.
       $pytestArgs = @("-m", "pytest", "-q")
+      if (-not $script:testParallel) {
+        $pytestArgs += "--import-mode=importlib"
+      }
       if ($RunCoverage) {
         # One coverage invocation for the same suite: --cov-target is the
         # launcher package, and the scripts tree is measured separately so a
@@ -429,14 +810,22 @@ try {
       # private branch in tests/conftest.py never ran inside the gate and this
       # "make fixtures private" step silently did nothing.
       $testEnvironment = @{ VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "1" }
+      if ($script:testParallel) {
+        $testEnvironment += Get-GateWorkerEnvironment -WorkerCount $MaxWorkers
+        $pytestArgs = @($pytestArgs | Select-Object -First 3) + @(
+          "-n", "auto", "--dist", "loadfile", "--max-worker-restart", "3"
+        ) + @($pytestArgs | Select-Object -Skip 3)
+      }
       $commands += @{
-        Id = "test"
+        Id = "test-lane"
         Command = @($pythonExe) + $pytestArgs
         Environment = $testEnvironment
+        Receipt = "test.json"
       }
       if ($IsLinux) {
         $commands += @{
           Id = "test:filesystem-baseline"
+          Receipt = "test-filesystem-baseline.json"
           Command = @(
             $pythonExe,
             "-m",
@@ -502,7 +891,19 @@ try {
     }
   }
 
+  $commands = Resolve-TestLanePlan -Entries $commands
+
   foreach ($entry in $commands) {
+    # Per-leg receipts: exactly the legs whose answer a test receipt cannot
+    # stand in for, keyed on content rather than on host time stamps. A running
+    # edit invalidates the tree hash, so a green receipt of an older tree can
+    # never excuse the current one.
+    if ($entry.Receipt -and (Test-Path -LiteralPath $script:receiptDirectory)) {
+      if (Test-GateReceipt -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt)) {
+        Write-Host "==> $($entry.Id): reuse (inputs unchanged since the recorded PASS)"
+        continue
+      }
+    }
     Write-Host "==> $($entry.Id): $($entry.Command -join ' ')"
     # Per-command environment overrides are applied only around this command:
     # the previous build-time mutation leaked into every later gate and made the
@@ -514,12 +915,16 @@ try {
         [Environment]::SetEnvironmentVariable($name, [string]$entry.Environment[$name], "Process")
       }
     }
-    try {
-      & $entry.Command[0] @($entry.Command[1..($entry.Command.Count - 1)])
-    } finally {
-      foreach ($name in $savedEnvironment.Keys) {
-        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], "Process")
-      }
+    $legWatch = [Diagnostics.Stopwatch]::StartNew()
+    $legOutput = Invoke-GateLeg -Entry $entry -Environment $savedEnvironment
+    if ($LASTEXITCODE -ne 0 -and $script:testParallel) {
+      # A parallel suite can lose a test to the machine rather than to the
+      # change: four workers drive four times the process churn through the
+      # same disk. One retry separates a real failure from a loaded host, and
+      # the retry still has to pass on its own.
+      Write-Host "    exit $LASTEXITCODE under load; retrying once"
+      $legWatch.Restart()
+      $legOutput = Invoke-GateLeg -Entry $entry -Environment $savedEnvironment
     }
     if ($LASTEXITCODE -ne 0) {
       if (@($entry.ToleratedExitCodes) -contains $LASTEXITCODE) {
@@ -527,11 +932,36 @@ try {
         continue
       }
       throw "Gate failed: $($entry.Id)"
+    }    $legWatch.Stop()
+    $legSummary = Get-PytestSummaryVector -Lines $legOutput
+    if ($entry.Id -eq "test" -and $script:testParallel) {
+      $script:parallelSummary = $legSummary
+    }
+    if ($entry.SerialRecheck) {
+      $recheck = Compare-ParallelAndSerialSummaries -Parallel $script:parallelSummary -Serial $legSummary
+      if (-not $recheck.Ok) {
+        throw "Gate failed: test:serial-recheck. " + $recheck.Reason
+      }
+      Write-Host "    PARALLEL_PROVEN=PASS"
+      Write-Host "    PARALLEL_MATCH=OK"
+      if (Test-Path -LiteralPath $script:receiptDirectory) {
+        Write-GateReceipt `
+          -RelativePath (Join-Path $script:receiptDirectory "parallel-proof.json") `
+          -Status "PASS" `
+          -Seconds $legWatch.Elapsed.TotalSeconds
+        Write-Host "    parallel proven for this tree: later runs skip the serial recheck"
+      }
+    }
+    if ($entry.Receipt -and (Test-Path -LiteralPath $script:receiptDirectory)) {
+      Write-GateReceipt -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt) -Status "PASS" -Seconds $legWatch.Elapsed.TotalSeconds
     }
   }
 } finally {
   foreach ($name in $integrationEnvironment.Keys) {
     [Environment]::SetEnvironmentVariable($name, $integrationEnvironment[$name], "Process")
+  }
+  if ($script:testParallel -and $script:workerTempRoot) {
+    Remove-GateWorkerTemporaryRoots -Root $script:workerTempRoot
   }
   Pop-Location
 }

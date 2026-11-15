@@ -22,6 +22,10 @@ dev = [
     "pytest>=8.0.0",
     # Opt-in coverage for -RunCoverage; report-only, never a threshold gate.
     "pytest-cov>=6.0.0",
+    # Opt-in parallelism for -RunParallel. The suite is 95 files of behaviour
+    # harnesses whose wall clock is dominated by ~450 child processes, so
+    # parallelism multiplies throughput without touching test semantics.
+    "pytest-xdist>=3.5.0",
     # Declared explicitly: several contract tests import yaml at module
     # level, and the historical supply came transitively from bandit - if
     # bandit ever dropped it, CI contract tests would silently skip.
@@ -72,6 +76,13 @@ python_files = ["test_*.py"]
 # -ra: always list skipped tests with their reasons, so a host without bash or
 # pwsh cannot quietly shrink the behavioural suite while the gate stays green.
 addopts = ["--strict-markers", "-ra"]
+# Always on, never only under -n: the serial run's sys.path prepend of tests/
+# is what let support modules (launcher_fakes, cpa_catalog_expectations,
+# script_validation_support) import as top-level names. Setting it explicitly
+# gives the xdist workers the same modules a serial run sees, so provenance
+# does not follow the lane, while -Profile Full itself carries the
+# --import-mode flag its serial run has always used.
+pythonpath = ["tests"]
 # A hanging test used to be silent (the 2026-10-03 gate hang ran 58 minutes
 # before anyone saw a stack). Dump the blocking traceback instead.
 faulthandler_timeout = 120

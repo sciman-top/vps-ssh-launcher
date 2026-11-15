@@ -766,11 +766,18 @@ $global:observedCommands = @()
         # Glob stems (`outputs/deploy-cpa-*.sh`) and template mentions
         # (`outputs/doctor-<date>.txt`) end mid-name; the same rule lets
         # check_docs.py skip them in fenced blocks. doctor-latest.txt is a
-        # runtime-generated artifact (check_docs.py OPTIONAL_PATHS).
+        # runtime-generated artifact (check_docs.py OPTIONAL_PATHS). Gate
+        # receipts and worker scratch space are also machine-local by contract;
+        # they are deliberately ignored by the content hash and never need a
+        # tracked checkout path.
         referenced = {
             path
             for path in referenced
-            if not path.endswith("-") and path != "outputs/doctor-latest.txt"
+            if (
+                not path.endswith("-")
+                and path != "outputs/doctor-latest.txt"
+                and not path.startswith("outputs/gates/")
+            )
         }
         missing = sorted(referenced - tracked)
         self.assertEqual(
@@ -1200,6 +1207,53 @@ try {
         self.assertGreaterEqual(
             len(runtimes[0]["strategy"]["matrix"]["include"]), 2, runtimes[0]
         )
+
+    def test_parallel_lane_is_opt_in_and_proven_against_the_serial_lane(self) -> None:
+        # The suite is 95 files of behaviour harnesses and dominates the Full
+        # wall clock, so -RunParallel exists. What must not drift is the claim
+        # that it produces the serial answer: the switches stay opt-in, the
+        # serial run keeps its import mode, and a parallel result has to be
+        # proven before it may stand in for the serial one.
+        runner = (repo_root() / "scripts/run_gates.ps1").read_text(encoding="utf-8")
+        self.assertIn("[switch]$RunParallel", runner)
+        self.assertIn("[switch]$ReuseReceipts", runner)
+        self.assertIn('"-n", "auto", "--dist", "loadfile"', runner)
+        self.assertIn("test:serial-recheck", runner)
+        self.assertIn('Write-Host "    PARALLEL_PROVEN=PASS"', runner)
+        # The serial lane keeps the flag it always had instead of quietly
+        # following the parallel lane import mode.
+        self.assertIn('$pytestArgs += "--import-mode=importlib"', runner)
+        # Proof is a prerequisite, not a best effort: the parallel result is
+        # only recorded once the comparison legs passed.
+        self.assertIn("parallel-proof.json", runner)
+        # The serial proof also refreshes the ordinary test receipt; otherwise
+        # a later tree can keep re-running the parallel lane against a stale
+        # test receipt forever.
+        self.assertIn("Receipt = $testEntry.Receipt", runner)
+
+    def test_receipts_are_keyed_on_content_not_on_host_state(self) -> None:
+        # A receipt is only evidence for the tree it was produced from, so the
+        # key is a content hash and the gate has to compute it from inputs.
+        hasher = (repo_root() / "scripts/gate_content_hash.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("def tree_hash(", hasher)
+        self.assertIn("def environment_hash(", hasher)
+        # The receipt lives under outputs/, which the hash must ignore:
+        # otherwise writing the receipt invalidates the evidence it records.
+        self.assertIn('"outputs"', hasher)
+        self.assertIn("IGNORED_PARTS", hasher)
+
+    def test_gate_helper_scripts_are_importable(self) -> None:
+        # Both helpers are run by the gate itself. A syntax error in them would
+        # only surface on the next Full run, after the suite already spent
+        # minutes proving everything else.
+        for name in ("gate_content_hash.py", "dsh_gate_xdist_worker_prelude.py"):
+            with self.subTest(script=name):
+                path = repo_root() / "scripts" / name
+                source = path.read_text(encoding="utf-8")
+                compile(source, str(path), "exec")
+                self.assertIn("from __future__ import annotations", source)
 
     def test_both_readmes_document_the_same_modules(self) -> None:
         # README.md and README.en.md carry parallel module matrices. check_docs.py

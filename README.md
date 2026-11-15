@@ -380,8 +380,9 @@ python -m venv .venv
 `requirements-dev.lock` is generated from `pyproject.toml` and
 `requirements-dev.in`. Refresh it with
 `uv pip compile pyproject.toml requirements-dev.in --all-extras --universal
---generate-hashes --no-annotate --output-file requirements-dev.lock` when
-dependency declarations change. Refresh the runtime lock with
+--generate-hashes --output-file requirements-dev.lock` when dependency
+declarations change. Keep the default annotations: they are what makes a
+refreshed lock reviewable against the declarations that pulled each pin in. Refresh the runtime lock with
 `uv pip compile pyproject.toml --universal --generate-hashes
 --output-file requirements-runtime.lock`.
 
@@ -428,6 +429,30 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 ```
 
 `-FocusPath` 可以是 Python 文件或目录。修改源码时请把对应测试显式列入同一命令；单个 `test_*.py` 只运行显式文件。修改 `tests/conftest.py` 或其他测试支持模块时，Focused 会自动扩大为 `pytest tests`，以覆盖收集器和 fixture 影响。只传源码时，Focused 仍执行 Ruff、格式和 Mypy 静态检查。
+
+### 更快地跑同一条 Full
+
+Full 的墙钟几乎全在 pytest 上：静态腿合计约 4 秒，测试套件约 4–5 分钟，而套件里的 457 次子进程调用占掉约 226 秒。要压缩的是这一段，不是删掉门禁层。
+
+```powershell
+.\scripts\run_gates.ps1 -Profile Full -RunParallel
+```
+
+默认 4 个工作进程（`-MaxWorkers` 可调，2–32），分发单位是 `--dist loadfile`：测试文件之间不共享内存状态，文件内部才共享 fixture。并行只改变执行方式，不改变断言。
+
+并行结果只有在被证明与串行等价之后才替代串行结论：`test` 并行跑一次，`test:serial-recheck` 再按单进程跑同一套件，并比对 passed/failed/skipped/errors 等整测试结果。`test:parallel-proof` 是这条串行复核产生的证明收据概念，不会再重复执行第三次完整套件；subtest 断言数可以不同，但整测试结果必须一致。
+
+两条腿全过后结果记到 `outputs/gates/receipts/parallel-proof.json`。之后同一棵树会复用匹配的 test receipt；回执缺失或失效时才走并行单腿，不再做串行比对。已经用串行跑过同一棵树时可显式跳过字节比对：
+
+```powershell
+.\scripts\run_gates.ps1 -Profile Full -RunParallel -ReuseReceipts
+```
+
+`-RunParallel` 是请求而非承诺：解释器里没有 `pytest-xdist` 时自动退回串行，不改变门禁结论。并行运行会给每个 worker 独立 TEMP（`outputs/gates/tmp/run-<id>/<worker>`，收尾删除）；每次 gate 都使用新的 run 目录，旧 worker 的延迟清理不会与新一轮冲突。
+
+### 复用同一份门禁证据
+
+Full 会把上游无法替代的静态腿结果记成回执，放在 `outputs/gates/receipts/*.json`（本机机器状态，不进版本库）。回执只在两件事同时成立时被复用：仓库文件内容树哈希一致，且门禁解释器里安装的发行包集合一致。改任何文件、升任何工具都会让回执失效，不会出现"旧证据为新树作保"。
 
 只有依赖文件变化或供应链复核时追加：
 
