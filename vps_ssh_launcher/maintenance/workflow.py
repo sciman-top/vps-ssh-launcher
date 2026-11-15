@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -133,7 +134,10 @@ def execute_remote_plan(
             if result.status != "verified":
                 break
     finally:
-        client.close()
+        # Preserve the remote result or the original adapter failure if the
+        # SSH library reports an error while closing its transport.
+        with suppress(Exception):
+            client.close()
 
     if any(action.status == "refused_before_mutation" for action in updated.actions):
         return (

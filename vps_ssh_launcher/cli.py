@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 
 from .batch import run_on_all
@@ -266,7 +267,10 @@ def main() -> int:
     try:
         return _run_main_action(args, connection.client)
     finally:
-        connection.client.close()
+        # A close failure is cleanup noise; it must not mask the command's
+        # exit code or turn a completed run into an uncaught traceback.
+        with suppress(Exception):
+            connection.client.close()
 
 
 if __name__ == "__main__":

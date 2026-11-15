@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -78,7 +79,8 @@ def _default_connector(
             command_hard_timeout=policy.command_timeout * 2,
         )
     finally:
-        client.close()
+        with suppress(Exception):
+            client.close()
 
 
 def collect_inventory(

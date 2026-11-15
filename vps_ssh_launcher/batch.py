@@ -7,6 +7,7 @@ import logging
 import shlex
 import sys
 import time
+from contextlib import suppress
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -295,7 +296,11 @@ def _run_profile_command(
         return error_result
     finally:
         if client is not None:
-            client.close()
+            # Cleanup must not replace a successful command result (or the
+            # original transport error) if a third-party SSH client raises
+            # while closing its socket.
+            with suppress(Exception):
+                client.close()
 
 
 def _print_prefixed_lines(
