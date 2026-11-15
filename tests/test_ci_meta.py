@@ -596,7 +596,7 @@ function Invoke-GateProbe {
         command = r"""
 $global:observedCommands = @()
 & $env:VPS_GATE_RUNNER -Profile Focused `
-  -FocusPath tests\test_config.py,vps_ssh_launcher\config.py
+  -FocusPath tests\test_config.py,tests\script_validation_support.py,vps_ssh_launcher\config.py
 @{ commands = $global:observedCommands } | ConvertTo-Json -Compress -Depth 4
 """
         with tempfile.TemporaryDirectory() as directory:
@@ -608,6 +608,7 @@ $global:observedCommands = @()
             (root / "vps_ssh_launcher").mkdir()
             (root / "vps_ssh_launcher/config.py").write_text("pass\n", encoding="utf-8")
             (tests / "test_config.py").write_text("", encoding="utf-8")
+            (tests / "script_validation_support.py").write_text("", encoding="utf-8")
             runner = scripts / "run_gates.ps1"
             runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
             (scripts / "lib/project_environment.ps1").write_text(
@@ -639,20 +640,22 @@ $global:observedCommands = @()
         report = json.loads(completed.stdout.splitlines()[-1])
         commands = report["commands"]
         self.assertEqual(len(commands), 4, commands)
-        # The pytest leg carries only explicit test files; source files stay
-        # on the three static legs (pytest would otherwise collect the source
-        # file, find no tests and exit 5).
-        actual = sorted(
-            path.replace("\\", "/") for path in commands[0][3:] if path.endswith(".py")
-        )
-        self.assertEqual(actual, ["tests/test_config.py"])
+        # A support module widens the pytest leg to the tests tree; source
+        # files still stay on the three static legs (pytest would otherwise
+        # collect the source file, find no tests and exit 5).
+        self.assertIn("tests", [path.replace("\\", "/") for path in commands[0]])
+        self.assertNotIn("tests/test_config.py", commands[0])
         for command in commands[1:]:
             self.assertNotEqual(command[:2], ["-m", "pytest"])
             self.assertEqual(
                 sorted(
                     path.replace("\\", "/") for path in command if path.endswith(".py")
                 ),
-                ["tests/test_config.py", "vps_ssh_launcher/config.py"],
+                [
+                    "tests/script_validation_support.py",
+                    "tests/test_config.py",
+                    "vps_ssh_launcher/config.py",
+                ],
             )
 
     def test_focused_gate_skips_pytest_leg_for_source_only_targets(self) -> None:
@@ -866,12 +869,15 @@ $global:observedCommands = @()
                 }
                 self.assertEqual(absolute_names & forbidden, set())
 
-    def test_auto_profile_maps_a_diff_to_full_focused_or_skip(self) -> None:
+    def test_auto_profile_maps_a_diff_to_full_focused_skip_or_no_changes(
+        self,
+    ) -> None:
         # -Profile Auto picks the gate from the working tree, so a mistake in
         # that decision either skips a runtime change or runs a needless full
         # gate. There was no coverage for it when its doc-only branch was
         # written in the wrong scope and crashed on every documentation-only
-        # diff; this pins all three outcomes.
+        # diff; this pins all four outcomes, including the cheap clean-tree
+        # result.
         powershell = shutil.which("pwsh")
         if powershell is None:
             self.skipTest("PowerShell 7 is not available")
@@ -887,8 +893,9 @@ function Invoke-GateProbe {
   $global:LASTEXITCODE = 0
 }
 """
-        cases = (
+        cases: tuple[tuple[dict[str, str], str, str], ...] = (
             # (files to create, expected legs, description)
+            ({}, "no_changes", "clean tree"),
             ({"vps_ssh_launcher/config.py": "pass\n"}, "full", "runtime surface"),
             ({"docs/runbook.md": "# doc\n"}, "skip", "documentation only"),
             ({"tests/test_config.py": ""}, "focused", "test file only"),
@@ -903,8 +910,8 @@ function Invoke-GateProbe {
                     (root / "tests").mkdir()
                     (root / "vps_ssh_launcher").mkdir()
                     # Auto decides from the diff, so the fixture is committed
-                    # first and the change is made afterwards: an empty diff
-                    # would (correctly) fall back to Full and prove nothing.
+                    # first and the change is made afterwards. An empty diff
+                    # must remain the cheap no-changes path.
                     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
                     (root / "vps_ssh_launcher").mkdir(exist_ok=True)
                     runner = scripts / "run_gates.ps1"
@@ -979,7 +986,10 @@ function Invoke-GateProbe {
                     report = json.loads(completed.stdout.splitlines()[-1])
                     commands = report["commands"]
                     ids = [entry[0] if entry else "" for entry in commands]
-                    if kind == "skip":
+                    if kind == "no_changes":
+                        self.assertEqual(commands, [], commands)
+                        self.assertIn("no working-tree change", completed.stdout)
+                    elif kind == "skip":
                         # Only the document checks run.
                         self.assertEqual(len(commands), 1, commands)
                         self.assertIn("check_docs.py", " ".join(commands[0]))

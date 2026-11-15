@@ -386,7 +386,7 @@ python -m venv .venv
 .\scripts\run_gates.ps1
 ```
 
-默认 profile 是 `Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml` 或 CI 工作流即等同 `Full`；纯测试/文档改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `scripts/check_docs.py`；任何未识别路径一律按 `Full` 处理。`-Profile Full` 仍可显式指定。
+默认 profile 是 `Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml` 或 CI 工作流即等同 `Full`；纯测试/文档改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `scripts/check_docs.py`；工作树无改动时报告 `NoChanges`，不重复运行完整门禁；任何未识别路径一律按 `Full` 处理。`-Profile Full` 仍可显式指定。
 
 `Full` 只执行一次必要证明：catalog 一致性检查（`contract:catalog`，排最前）、安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；`ruff format --check` 覆盖 scripts 全树，mypy 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
 
@@ -411,7 +411,7 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
   -FocusPath tests/test_cpa_admission.py,scripts/remote/cpa-admission.py
 ```
 
-`-FocusPath` 可以是 Python 文件或目录。修改源码时请把对应测试显式列入同一命令；未列入的测试不会按文件名猜测执行。只传源码时，Focused 仍执行 Ruff、格式和 Mypy 静态检查。
+`-FocusPath` 可以是 Python 文件或目录。修改源码时请把对应测试显式列入同一命令；单个 `test_*.py` 只运行显式文件。修改 `tests/conftest.py` 或其他测试支持模块时，Focused 会自动扩大为 `pytest tests`，以覆盖收集器和 fixture 影响。只传源码时，Focused 仍执行 Ruff、格式和 Mypy 静态检查。
 
 只有依赖文件变化或供应链复核时追加：
 

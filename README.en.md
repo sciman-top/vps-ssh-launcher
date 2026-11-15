@@ -322,11 +322,11 @@ Unified local quality gate:
 .\scripts\run_gates.ps1
 ```
 
-The default `Auto` profile picks the gate from `git diff`: anything under `vps_ssh_launcher/`, `scripts/`, the entry scripts, `pyproject.toml` or the CI workflows runs the equivalent of `Full`; test-only or doc-only changes stay `Focused`; a documentation-only change just runs `git diff --check` and `scripts/check_docs.py`; any unrecognised path falls back to `Full`. `-Profile Full` still works explicitly.
+The default `Auto` profile picks the gate from `git diff`: anything under `vps_ssh_launcher/`, `scripts/`, the entry scripts, `pyproject.toml` or the CI workflows runs the equivalent of `Full`; test-only or doc-only changes stay `Focused`; a documentation-only change just runs `git diff --check` and `scripts/check_docs.py`; a clean working tree reports `NoChanges` without repeating the full gate; any unrecognised path falls back to `Full`. `-Profile Full` still works explicitly.
 
 `Full` executes an installed-package import check, the catalog consistency check (`contract:catalog`), pytest, Bandit, Ruff lint/format, and Mypy. CI runs the static scope once and keeps pytest on both Windows and Ubuntu; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
 
-For source-only changes, `Focused` accepts a Python file or directory. Pass the relevant tests explicitly in the same `-FocusPath` list; test discovery is not inferred from filenames. A source-only list still receives Ruff, format, and Mypy checks.
+`Focused` accepts a Python file or directory. For source changes, pass the relevant tests explicitly in the same `-FocusPath` list; a single `test_*.py` runs only that file. Changes to `tests/conftest.py` or another test support module widen the behavior leg to `pytest tests` because they affect collection and fixtures. A source-only list still receives Ruff, format, and Mypy checks.
 
 ---
 

@@ -204,8 +204,8 @@ try {
     }
     $changed = @($changed | Where-Object { $_ } | Sort-Object -Unique)
     if ($changed.Count -eq 0) {
-      Write-Host "==> auto: no working-tree change; running the full gate"
-      return "Full"
+      Write-Host "==> auto: no working-tree change; no gate needed"
+      return "NoChanges"
     }
 
     $risky = @($changed | Where-Object {
@@ -233,8 +233,23 @@ try {
   # $Profile raises MetadataError at runtime, so the document-only outcome
   # travels in its own variable instead of overloading the parameter.
   $autoSkip = $false
+  $autoNoChanges = $false
   if ($Profile -eq "Auto") {
-    if ((Resolve-AutoProfile -RepoRoot $repoRoot) -eq "Focused") {
+    $autoDecision = Resolve-AutoProfile -RepoRoot $repoRoot
+    if ($autoDecision -eq "NoChanges") {
+      if (
+        $RunDependencyAudit -or
+        $RunCoverage -or
+        $RunIntegration -or
+        $FullScope -ne "All"
+      ) {
+        # An explicit extra gate is still a request to do work, even when the
+        # working tree is clean. Keep the normal Full path for that request.
+        $Profile = "Full"
+      } else {
+        $autoNoChanges = $true
+      }
+    } elseif ($autoDecision -eq "Focused") {
       $autoPython = @($AutoChangedPaths | Where-Object { $_ -match '\.py$' })
       if ($autoPython.Count -eq 0) {
         Write-Host "==> auto: nothing to lint or test; running doc checks instead"
@@ -262,6 +277,11 @@ try {
   }
   if ($Profile -ne "Full" -and $FullScope -ne "All") {
     throw "-FullScope is only valid with -Profile Full."
+  }
+
+  if ($autoNoChanges) {
+    Write-Host "GATE_RESULT=PASS (auto: no working-tree change)"
+    return
   }
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
@@ -319,17 +339,36 @@ try {
     if ($focusedTargets.Count -eq 0) {
       throw "Focused profile requires at least one -FocusPath Python file or directory."
     }
-    # Pass only explicitly requested tests to pytest. Source files still get
+    # Pass only explicitly requested tests to pytest. A support module or
+    # conftest can change collection and fixtures for every test, so those
+    # files widen the behavior leg to the tests tree. Source files still get
     # the static legs; exit 5 tolerates a directory with no collected tests.
-    $focusedTestTargets = @(
+    $focusedRunsAllTests = @(
       $focusedTargets | Where-Object {
         if (Test-Path -LiteralPath $_ -PathType Container) {
           return $true
         }
-        $leaf = Split-Path -Leaf $_
-        $leaf -like "test_*.py" -or $leaf -like "*_test.py"
+        $normalized = (Resolve-Path -LiteralPath $_).Path -replace '\\', '/'
+        $testsRoot = (Resolve-Path -LiteralPath (Join-Path $repoRoot "tests")).Path -replace '\\', '/'
+        $normalized.StartsWith("$testsRoot/") -and
+          $normalized.EndsWith(".py") -and
+          (Split-Path -Leaf $_) -notlike "test_*.py" -and
+          (Split-Path -Leaf $_) -notlike "*_test.py"
       }
-    )
+    ).Count -gt 0
+    if ($focusedRunsAllTests) {
+      $focusedTestTargets = @("tests")
+    } else {
+      $focusedTestTargets = @(
+        $focusedTargets | Where-Object {
+          if (Test-Path -LiteralPath $_ -PathType Container) {
+            return $true
+          }
+          $leaf = Split-Path -Leaf $_
+          $leaf -like "test_*.py" -or $leaf -like "*_test.py"
+        }
+      )
+    }
     $commands = @()
     if ($focusedTestTargets.Count -gt 0) {
       $commands += @{
