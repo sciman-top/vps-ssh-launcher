@@ -9,7 +9,6 @@ from typing import Any
 from .commands import require_policy_profile
 from .fingerprint import fingerprint, inventory_fingerprint
 from .models import (
-    ActionStatus,
     InventoryRecord,
     InventorySnapshot,
     MaintenanceAction,
@@ -18,6 +17,7 @@ from .models import (
     PlanStatus,
 )
 from .resources import RESOURCES
+from .transitions import updated_plan as updated_plan
 
 
 def _observed(record: InventoryRecord, resource: str) -> str:
@@ -187,37 +187,3 @@ def build_plan(
         actions=tuple(actions),
         status=status,
     )
-
-
-def updated_plan(
-    plan: MaintenancePlan,
-    *,
-    action_index: int,
-    status: ActionStatus,
-    reason: str,
-) -> MaintenancePlan:
-    actions = list(plan.actions)
-    actions[action_index] = replace(
-        actions[action_index],
-        status=status,
-        reason=reason,
-    )
-    statuses = {action.status for action in actions}
-    plan_status: PlanStatus
-    if any(action.status == "applied" for action in actions):
-        plan_status = "applied"
-    elif "refused_before_mutation" in statuses:
-        plan_status = "refused_before_mutation"
-    elif "unverified" in statuses:
-        plan_status = "unverified"
-    elif "rolled_back" in statuses:
-        plan_status = "rolled_back"
-    elif "verified" in statuses:
-        plan_status = "verified"
-    elif any(action.status == "planned" for action in actions):
-        plan_status = "planned"
-    elif "deferred" in statuses or "noop" in statuses:
-        plan_status = "planned"
-    else:
-        plan_status = plan.status
-    return replace(plan, actions=tuple(actions), status=plan_status)

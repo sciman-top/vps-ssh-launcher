@@ -15,13 +15,16 @@ from typing import Any, Iterator
 from .models import (
     MaintenancePlan,
 )
-from .planner import updated_plan
 from ..safe_files import open_private_file, prepare_private_parent
 from .state_codec import (
     plan_from_json as _plan_from_json,
     plan_from_row as _plan_from_row,
     serialize_plan as _serialize_plan,
     validate_plan_id as _validate_plan_id,
+)
+from .transitions import (
+    is_backward_transition as _is_backward_transition,
+    updated_plan,
 )
 
 _PRIVATE_FILE_MODE = 0o600
@@ -82,76 +85,6 @@ def _connect(path: Path) -> Iterator[sqlite3.Connection]:
             with suppress(Exception):
                 connection.rollback()
         connection.close()
-
-
-# Ordering is forward-only: an action may advance from planned to applied and
-# then to exactly one terminal observation, but no transition may erase a
-# terminal state or resurrect an action that a remote adapter already touched.
-_ACTION_RANK = {
-    "noop": 0,
-    "planned": 1,
-    "deferred": 1,
-    "blocked": 1,
-    "applied": 2,
-    "verified": 3,
-    "unverified": 3,
-    "rolled_back": 3,
-    "refused_before_mutation": 3,
-}
-
-
-_PLAN_RANK = {
-    "ready": 1,
-    "planned": 1,
-    "blocked": 1,
-    "applied": 2,
-    "verified": 3,
-    "unverified": 3,
-    "rolled_back": 3,
-    "refused_before_mutation": 3,
-}
-
-
-def _is_backward_transition(
-    previous: MaintenancePlan, incoming: MaintenancePlan
-) -> bool:
-    """True when the incoming plan would lose execution information.
-
-    The per-action transition is the authority: an action may advance from
-    planned to applied and then to exactly one terminal observation, and a
-    terminal verdict may be re-reported but never replaced by a different one.
-    The plan-level status is only a projection of those actions, so it is
-    checked for backward motion only when no action advanced -- otherwise a
-    legitimate retry (one action already verified, the next one starting) would
-    look like a rewind of the whole plan.
-    """
-    if len(previous.actions) != len(incoming.actions):
-        return True
-    advanced = False
-    for stored, candidate in zip(previous.actions, incoming.actions, strict=True):
-        stored_rank = _ACTION_RANK.get(stored.status, 0)
-        candidate_rank = _ACTION_RANK.get(candidate.status, 0)
-        if candidate_rank < stored_rank:
-            return True
-        if candidate_rank > stored_rank:
-            advanced = True
-        # A terminal observation is final: it may be re-reported with a new
-        # reason, but not replaced by a different terminal verdict.
-        if (
-            stored_rank == 3
-            and candidate_rank == 3
-            and stored.status != candidate.status
-        ):
-            return True
-    if advanced:
-        return False
-    previous_rank = _PLAN_RANK.get(previous.status, 0)
-    incoming_rank = _PLAN_RANK.get(incoming.status, 0)
-    if incoming_rank < previous_rank:
-        return True
-    if previous_rank == 3 and incoming_rank == 3 and previous.status != incoming.status:
-        return True
-    return False
 
 
 def save_plan(
