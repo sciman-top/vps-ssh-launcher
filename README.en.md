@@ -118,7 +118,10 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `vps_ssh_launcher/maintenance/` | Policy, inventory, planner, state, adapters, receipts | Plan / execution / rollback in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/resources.py` | Unified resource registry: pin validation, plan build | Resource config -> plan -> execution workflow |
 | `vps_ssh_launcher/maintenance/fingerprint.py` | Canonical JSON and inventory identity fingerprints, without SSH | Volatile telemetry stays out; listener changes require a new plan |
-| `vps_ssh_launcher/maintenance/planner.py` / `models.py` / `state.py` | Plan building and transitions, status contract, persistence validation | Profile scope, unknown status rejection, historical plan compatibility |
+| `vps_ssh_launcher/maintenance/planner.py` / `transitions.py` / `models.py` | Plan building, state transitions, and the status contract | Profile scope, unknown status rejection, monotonic terminal states |
+| `vps_ssh_launcher/maintenance/state.py` / `state_store.py` / `state_codec.py` | Plan persistence facade, private SQLite storage, and JSON/row validation | Historical plan compatibility, rewind refusal, private database |
+| `vps_ssh_launcher/maintenance/state_automation.py` | Automation attempt ledger, remote-start markers, busy recovery, and refunds | Attempt accounting, busy recovery, receipt state |
+| `vps_ssh_launcher/maintenance/inventory_protocol.py` | Fixed remote probe, fact allowlist, and bounded decoding | Probe output, unknown-field dropping, fingerprint boundary |
 | `vps_ssh_launcher/maintenance/xray.py` / `docker.py` | Resource-specific pin schema, upgrade logic, rollback | Resource plan, execution, failure recovery |
 | `vps_ssh_launcher/windows_ctypes.py` | Lazily loaded Windows ctypes API so the Linux config entrypoint stays importable | Cross-platform import, native ACL calls, error mapping |
 | `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | Shared pin validation / registry dispatch & verdict | Unknown resource rejection, success/rollback markers |
@@ -144,7 +147,8 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 Add Python subpackages under `vps_ssh_launcher/` with an `__init__.py`; package discovery
 is restricted to that prefix. Inspect the built wheel when adding modules. Keep CLI
 argument/output handling in the entrypoint and remote execution in the maintenance workflow;
-plan status transitions live in `planner.updated_plan()`. Shared maintenance
+plan status transitions live in `maintenance.transitions.updated_plan()` with the
+legacy import re-exported by `planner`. Shared maintenance
 policy/target/integration admission belongs in `maintenance/commands.py`; the
 Windows ACL module has no configuration or SSH semantics.
 

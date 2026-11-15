@@ -4,8 +4,9 @@ for which resource names exist.
 Adding a resource touches, in order:
 1. a resource module with pin validation, upgrade planning and command building;
 2. one ``ResourceSpec`` here linking those functions;
-3. its probe facts in ``maintenance/inventory.py`` (``INVENTORY_COMMAND``
-   and ``_ALLOWED_FACT_KEYS``);
+3. its probe facts in ``maintenance/inventory_protocol.py`` (re-exported by
+   ``maintenance/inventory.py`` as ``INVENTORY_COMMAND`` and
+   ``_ALLOWED_FACT_KEYS``);
 4. planner/admission/rollback tests in ``tests/test_maintenance.py``.
 
 Planner observation, automation eligibility and policy defaults all derive

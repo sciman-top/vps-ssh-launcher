@@ -129,3 +129,16 @@ admission-integrity=OK  DOCTOR_CONTRACT_OK
 - **live_accepted**：需要真实联网客户端（复制节点、改地址端口、打开境外网页）。这是操作者判定，不由代理代签。
 - **zz**：本轮未做任何远端写入，也未投影。
 - **admission 代际升级本身的功能验收**：只证明部署成功与既有契约（healthz 200、integrity OK、public route 401/404/404），未对 de-latch 行为做流量级验证。
+
+## 9. 2026-11-15 维护控制平面模块化
+
+在完整门禁基线 `1705 passed, 31 skipped` 之后，完成了四个本地、可回滚的重构切片：
+
+- `maintenance/pins.py` 统一资源 pin 的外层精确字段校验，Xray/Docker 保留各自字段语义。
+- `maintenance/state_codec.py` 集中计划 ID、JSON 与 SQLite 行的校验和序列化。
+- `maintenance/transitions.py` 集中计划/动作的单调状态转换，`planner.updated_plan` 保留兼容重导出。
+- `maintenance/state_store.py`、`state_automation.py` 与 `state.py` facade 分离 SQLite、计划持久化和自动化账本。
+- `maintenance/inventory_protocol.py` 从 SSH inventory 调度中分离固定探针、事实白名单和有界解析，旧名称由 `inventory.py` 重导出。
+- `maintenance/resources.py` 增加资源自有 preflight seam，Xray 配置检查不再硬编码在通用 planner 中。
+
+这些切片没有改变 CLI、TOML、SQLite 表结构、远端命令或真实 SSH 默认关闭策略；本轮改动后的最低证明为 ruff、format、mypy、compileall 与 `git diff --check`。完整 pytest 基线仍以上述门禁收据为准，真实 SSH 与 live acceptance 未被提升。

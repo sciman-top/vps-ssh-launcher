@@ -114,7 +114,10 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
 | `vps_ssh_launcher/maintenance/resources.py` | 统一登记资源的 pin 校验、升级计划和命令构建 | 新增/删除资源的配置→计划→执行联动 |
 | `vps_ssh_launcher/maintenance/fingerprint.py` | 规范 JSON 与 inventory 身份指纹，不依赖 SSH | volatile telemetry 不改变身份；监听器变化须重建计划 |
-| `vps_ssh_launcher/maintenance/planner.py` / `models.py` / `state.py` | 计划构建与状态转换、状态契约、持久化边界验证 | profile 范围、未知状态拒绝、历史计划兼容 |
+| `vps_ssh_launcher/maintenance/planner.py` / `transitions.py` / `models.py` | 计划构建、状态转换与状态契约 | profile 范围、未知状态拒绝、终态单调推进 |
+| `vps_ssh_launcher/maintenance/state.py` / `state_store.py` / `state_codec.py` | 计划持久化 facade、SQLite 私有存储与 JSON/行校验 | 历史计划兼容、状态回退拒绝、私有数据库 |
+| `vps_ssh_launcher/maintenance/state_automation.py` | 自动化尝试账本、远端启动标记、忙碌恢复与退款 | attempt 记账、并发忙碌恢复、收据状态 |
+| `vps_ssh_launcher/maintenance/inventory_protocol.py` | 固定远端探针命令、事实白名单与有界解析 | 探针输出、未知字段丢弃、事实指纹边界 |
 | `vps_ssh_launcher/maintenance/xray.py` / `docker.py` | 各资源的 pin schema、升级判断、命令与回滚 | 对应资源的计划、执行、失败恢复 |
 | `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | 共享 pin 校验 / 注册表分派与结果判定 | 未注册资源拒绝、成功/回滚标记 |
 | `scripts/cpa_bwg_guardrails.ps1` | CPA 参数准入、模板加载、哈希与投影、动作分派 | PowerShell 加载、源码漂移、原参数行为 |
@@ -143,7 +146,7 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 1. SSH 功能在对应能力模块实现，只有新增用户选项或动作时才改 CLI；沿原入口补充行为测试。
 2. 新增维护资源按 `maintenance/resources.py` 文件头注释的四步走：资源模块实现
    `normalize_pin()` / `plan_upgrade()` / `build_from_pin()` → 注册表 `ResourceSpec` →
-   `maintenance/inventory.py` 探针 facts → 计划/执行/回滚测试。
+   `maintenance/inventory_protocol.py` 探针 facts → 计划/执行/回滚测试。
    config、planner 和 adapter 从同一注册表分派，不再分别维护资源分支或名单。
    远端写入需有版本或 hash pin、备份、结果复验与回滚；未知资源保持拒绝执行。
 3. 删除维护资源先清理本机策略和调度中的引用，保留历史 SQLite 计划的读取与终态拒绝逻辑；
@@ -168,7 +171,8 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    `lib/`，否则 `$remoteCommand` 与宿主函数的注入语义会混淆。
 7. 新增 `vps-maint` 子命令时，在 `maintenance_cli.py` 登记 parser 与动作适配；共用策略、
    target 和 integration 准入放 `maintenance/commands.py`；远端事务仍在
-   `maintenance/workflow.py`，状态转换用 `planner.updated_plan()`；退出码沿用入口文件
+   `maintenance/workflow.py`，状态转换用 `maintenance.transitions.updated_plan()`；
+   退出码沿用入口文件
    头声明。流程测试进 `tests/test_maintenance.py`。
 8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
    审计输出复用 `scripts/audit_cli.py`，不复制终端编码适配。需要把自身投送到远端执行的
