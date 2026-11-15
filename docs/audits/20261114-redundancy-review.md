@@ -84,4 +84,48 @@ Git Bash 对 `bash -c` 的脚本在约 8192 字节处**静默截断且仍返回 
 
 ### 7.2 验证
 
-`pwsh -NoProfile -File scripts/run_gates.ps1 -Profile Full`：`1672 passed, 31 skipped`，catalog / ruff / format / mypy / bandit 全绿。
+`pwsh -NoProfile -File scripts/run_gates.ps1 -Profile Full`：`1677 passed, 31 skipped`，catalog / ruff / format / mypy / bandit 全绿。
+## 8. 2026-11-15 第三批：投影与受控实战验收
+
+### 8.1 修复（代码侧）
+
+`scripts/remote/frp_bwg_relay.py` 的两个非 contract 模式此前**完全不可用**：它们导入 `scripts._remote_ops`，而该模块在本仓从未存在（`git log --all` 无任何记录），所以 `bwg` 与 `aliyun` 都在打开 socket 前就以 ImportError 退出。现在改为复用启动器已有的配置解析、私有 DACL 校验、profile 校验与严格 host-key 检查。
+
+临时文件保持文档承诺的形状：一个指向真实 target.json 的指针，凭据文件本身不离开私有位置。
+
+### 8.2 真实联调发现的第二个缺陷
+
+主机侧 `ALIYUN_CONTROL_ESTABLISHED` **永远报 0**，而中继显然是通的。原实现只看行尾字段，但服务端该位置是客户端临时端口，监听端口在本地列。这与本模块存在的意义（失败看起来像 0）是同一类缺陷，只是低了一层。现在按形状匹配地址字段（两端任一命中），既修正两端计数，也仍能忽略 Recv-Q/Send-Q 列。
+
+### 8.3 投影（真实远端写入）
+
+`-Apply` 首次被正确拒绝：`REFUSE admission_pin_transition_pending`。这是门禁按设计工作，不是缺陷——主机 admission 停在 `d2256369`，仓库 HEAD 要求 `104c0ef5`，中间跨了 2 个代际（`33fc8a6` 的 O_NOFOLLOW 加固与 `cc6f80e` 的 ELOOP 归类）。
+
+按设计路径处理，未绕过门禁：
+
+| 步骤 | 证据 |
+|---|---|
+| dry-run 复核事务 | `DRY_RUN_OK baseline=d2256369 candidate=104c0ef5 idle=true no_swap=true` |
+| 代际轮换（排空 → 备份 → 只重启 admission → 回读） | `DEPLOY_OK pin=104c0ef5`，备份 `20261115T013036...-admission-delatch-20261114` |
+| 重新投影 | `GUARDRAILS_APPLIED`，`EXIT=0` |
+| doctor 复查 | `admission-integrity=OK`、`DOCTOR_CONTRACT_OK`、`EXIT=0` |
+
+注：`outputs/deploy-admission-delatch-20261114.ps1` 的 `-ExpectedLivePin` 默认值 `de1a548d` 是更早的代际，对当前主机必然 `REFUSE live_guard_generation_drift`。已用显式参数传入真实基线，未修改该历史事务脚本。
+
+### 8.4 验收结果（只读或受控写入，未触碰 zz）
+
+```text
+BWG_FRPC_RELAY_ACTIVE=active      BWG_FRPS_CONTROL_ESTABLISHED=1
+BWG_LOCAL_REALITY_LISTENER=1      BWG_FRPC_VERSION=0.72.0
+ALIYUN_FRPS_ACTIVE=active         ALIYUN_EXPECTED_LISTENERS=2
+ALIYUN_CONTROL_ESTABLISHED=1      ALIYUN_FRPS_VERSION=0.72.0
+valid_path_unauth=401  bare_path=404  wrong_path=404
+HARDENING_DRIFT=NONE
+admission-integrity=OK  DOCTOR_CONTRACT_OK
+```
+
+### 8.5 未覆盖
+
+- **live_accepted**：需要真实联网客户端（复制节点、改地址端口、打开境外网页）。这是操作者判定，不由代理代签。
+- **zz**：本轮未做任何远端写入，也未投影。
+- **admission 代际升级本身的功能验收**：只证明部署成功与既有契约（healthz 200、integrity OK、public route 401/404/404），未对 de-latch 行为做流量级验证。
