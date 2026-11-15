@@ -408,7 +408,7 @@ dependency declarations change. Refresh the runtime lock with
 
 pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现 `tests/` 下的测试模块，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
 
-CI 将静态门禁在一个组合中运行一次，将 Runtime（安装后导入与 pytest）保留在 Windows/Python 3.11 和 Ubuntu/Python 3.13 两个组合中。需要单独选择范围时可使用 `-FullScope Static` 或 `-FullScope Runtime`；本地默认 `FullScope All`。
+CI 将静态门禁在一个组合中运行一次，将 Runtime（安装后导入与 pytest）覆盖 Windows/Ubuntu 与 Python 3.11/3.13 的四个组合。需要单独选择范围时可使用 `-FullScope Static` 或 `-FullScope Runtime`；本地默认 `FullScope All`。
 
 在删除被安全策略阻断的宿主上（例如本机注入的 safe-delete shim），每个临时目录清理都会耗满 `conftest.py` 的预算，把测试步从几分钟拖到十几分钟，并在 `faulthandler_timeout` 处反复 dump 栈。可显式降低预算换墙钟时间，**断言与覆盖面完全不变**：
 
@@ -435,7 +435,7 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 .\scripts\run_gates.ps1 -RunDependencyAudit
 ```
 
-这会额外执行 `pip check` 与 `scripts/dependency_audit.py`（对门禁解释器里实际安装的包做审计，含 dev extra 与传递依赖；`pip`/`setuptools`/`wheel` 与本仓 editable 自身排除在外），要求隔离项目 Python。常规 CI 只在一个组合执行依赖审计；兼容性矩阵保留 Windows/Python 3.11 与 Ubuntu/Python 3.13 两个互补组合。
+这会额外执行 `pip check` 与 `scripts/dependency_audit.py`（对门禁解释器里实际安装的包做审计，含 dev extra 与传递依赖；`pip`/`setuptools`/`wheel` 与本仓 editable 自身排除在外），要求隔离项目 Python。常规 CI 只在静态组合执行依赖审计；Runtime 兼容性矩阵覆盖 Windows/Ubuntu 与 Python 3.11/3.13 的四个组合。
 
 ## 真实 SSH 集成
 
