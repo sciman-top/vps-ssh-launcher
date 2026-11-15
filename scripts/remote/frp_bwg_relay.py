@@ -6,6 +6,7 @@ It does not read environment variables, credential files, or arbitrary paths.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -61,10 +62,30 @@ def _parse_proxy(text: str) -> dict[str, str]:
 
 
 def _count_established(run: Any, peer: str) -> int:
+    # Count established sockets whose EITHER endpoint ends with ``peer``.
+    #
+    # Checking only the trailing field made the aliyun side report 0 forever:
+    # on the server the local column is the listening port (...:27000) and the
+    # line ends with the client ephemeral port, so endswith(":27000") never
+    # matched even while the relay was up -- the same "failure looks like zero"
+    # defect this module exists to remove, one level down.
+    #
     # `grep -c` exits 1 on "no match", which is a legitimate count of zero, so
     # count in Python from the raw listing instead of depending on grep status.
     listing = run("ss -Htn state established")
-    return sum(1 for line in listing.splitlines() if line.rstrip().endswith(peer))
+    total = 0
+    for line in listing.splitlines():
+        for field in line.split():
+            # Addresses are the only fields that carry "host:port"; the
+            # Recv-Q/Send-Q counters and any state token do not. Matching by
+            # SHAPE rather than by column index keeps the counter correct for
+            # both `ss -Htn` (queue columns first) and the state-prefixed form.
+            if ":" not in field:
+                continue
+            if field.endswith(peer):
+                total += 1
+                break
+    return total
 
 
 def _count_listening(run: Any, port: str) -> int:
@@ -182,6 +203,73 @@ def config_contract(path: Path | None = None) -> dict[str, str]:
     return proxy
 
 
+def _reviewed_target_path() -> Path:
+    """The single private config this read-only checker may open.
+
+    Deliberately NOT an arbitrary path: the checker runs on the operator
+    workstation and must not be pointed at an unrelated credential file.
+    """
+    return Path(tempfile.gettempdir()) / "frp-relay-review-target.json"
+
+
+def _open_reviewed_client(profile_name: str) -> Any:
+    """Open one strict, host-key-pinned SSH client for a reviewed profile.
+
+    This used to import ``scripts._remote_ops``, a module that never existed in
+    this repository (``git log --all`` finds no such path), so both the ``bwg``
+    and ``aliyun`` modes failed with ImportError before touching a host. The
+    launcher already owns config parsing, profile validation and strict
+    host-key checking, so the checker reuses that instead of inventing a
+    second connection layer.
+    """
+    from vps_ssh_launcher import config as launcher_config
+    from vps_ssh_launcher import connection as launcher_connection
+
+    pointer = _reviewed_target_path()
+    if not pointer.is_file():
+        raise RelayCheckError("PRIVATE_RELAY_TARGET=MISSING")
+    try:
+        # The staged file is a POINTER: {"target": "<path to the real
+        # target.json>"}. Keeping the pointer in temp means the credential
+        # file itself never leaves its private location. A file that already
+        # carries profiles is accepted too, so the checker still works when an
+        # operator points it straight at the real config.
+        raw = json.loads(pointer.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("review target must be an object")
+        source_path = raw.get("target")
+        config_path = Path(source_path) if isinstance(source_path, str) else pointer
+        # load_config() also runs the private-DACL/symlink gate, so a world
+        # readable credential file is refused before any socket opens.
+        loaded = launcher_config.load_config(config_path)
+        profiles = loaded.get("profiles")
+        if not isinstance(profiles, dict):
+            raise ValueError("profiles must be an object")
+        entry = profiles[profile_name]
+        if not isinstance(entry, dict):
+            raise ValueError("profile must be an object")
+        launcher_config.validate_profile(entry, profile_name)
+        base_args = argparse.Namespace(password=None, key=None, allow_agent=False)
+        namespace = launcher_config.build_connect_namespace(
+            entry,
+            profile_name=profile_name,
+            base_args=base_args,
+            config_dir=config_path.parent,
+            # Never inherit the profile opt-out: a read-only audit must not
+            # silently accept a first-use host key.
+            strict_host_key_checking=True,
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RelayCheckError("PRIVATE_RELAY_TARGET=INVALID") from exc
+    try:
+        return launcher_connection.connect_with_retry(namespace)
+    except Exception as exc:
+        reason = launcher_connection.classify_connection_error(exc, target_known=True)
+        raise RelayCheckError(
+            f"RELAY_HOST_CONNECTION=FAILED:{reason.category}"
+        ) from exc
+
+
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) == 2 else ""
     if mode == "config-contract":
@@ -193,29 +281,7 @@ def main() -> None:
         print("FRP_CONFIG_CONTRACT=PASS")
         return
     if mode in {"bwg", "aliyun"}:
-        from scripts._remote_ops import (  # type: ignore[import-not-found]
-            connect_ssh,
-            describe_ssh_connection_error,
-            load_target_profile,
-        )
-
-        target = Path(tempfile.gettempdir()) / "frp-relay-review-target.json"
-        if not target.is_file():
-            raise RelayCheckError("PRIVATE_RELAY_TARGET=MISSING")
-        try:
-            raw = json.loads(target.read_text(encoding="utf-8"))
-            source = json.loads(raw["target"].read_text(encoding="utf-8"))
-            selected = source["profiles"][mode]
-            target.write_text(
-                json.dumps({"profiles": {mode: selected}}), encoding="utf-8"
-            )
-            profile = load_target_profile(target, mode)
-            client = connect_ssh(profile, require_host_key_pin=True)
-        except (OSError, ValueError, KeyError) as exc:
-            raise RelayCheckError("PRIVATE_RELAY_TARGET=INVALID") from exc
-        except Exception as exc:
-            reason = describe_ssh_connection_error(exc)
-            raise RelayCheckError(f"RELAY_HOST_CONNECTION=FAILED:{reason}") from exc
+        client = _open_reviewed_client(mode)
         try:
             if mode == "bwg":
                 check_bwg(client)

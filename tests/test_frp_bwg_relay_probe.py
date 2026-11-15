@@ -32,6 +32,41 @@ LISTEN 0 4096 127.0.0.1:8317 0.0.0.0:*
 """
 
 
+# A real `ss -Htn state established` line, verbatim from the hosts: Recv-Q and
+# Send-Q come first, then the local and peer addresses.
+SERVER_SIDE = (
+    "0      0                     172.28.242.82:27000        144.34.229.116:2940"
+)
+CLIENT_SIDE = (
+    "0      0                     144.34.229.116:2940        8.163.41.198:27000"
+)
+
+
+def test_control_connection_counts_from_either_end() -> None:
+    # The aliyun branch reported 0 forever: the listening port is in the LOCAL
+    # column there, while the original check only looked at the line tail (the
+    # client ephemeral port). That is "failure looks like zero" one level down.
+    assert relay._count_established(_Run({"ss -Htn": SERVER_SIDE}), ":27000") == 1
+    assert (
+        relay._count_established(_Run({"ss -Htn": CLIENT_SIDE}), "8.163.41.198:27000")
+        == 1
+    )
+
+
+def test_control_count_ignores_the_queue_columns() -> None:
+    # Recv-Q/Send-Q are the first two columns and are "0" here; scanning them
+    # instead of the address columns silently matched nothing and turned a
+    # healthy relay into a zero.
+    listing = "0      0   127.0.0.1:45987   127.0.0.1:11242"
+    assert relay._count_established(_Run({"ss -Htn": listing}), ":27000") == 0
+    assert relay._count_established(_Run({"ss -Htn": listing}), ":45987") == 1
+    assert relay._count_established(_Run({"ss -Htn": listing}), ":11242") == 1
+
+
+def test_control_count_is_zero_for_an_empty_listing() -> None:
+    assert relay._count_established(_Run({"ss -Htn": ""}), ":27000") == 0
+
+
 def test_a_listening_port_is_counted_from_the_listing() -> None:
     run = _Run({"ss -Hltn": LISTENING})
     assert relay._count_listening(run, "443") == 1
