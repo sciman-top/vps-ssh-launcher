@@ -365,7 +365,7 @@ SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` �
 
 ### Paramiko 5.x 现代 SSH 核心
 
-如果缺少 Paramiko，或现有版本不满足 `>=5,<6`，`connect.ps1` 只会在隔离环境中按 `requirements-runtime.lock` 安装或升级。命中全局 Python 时默认拒绝，除非显式传 `-AllowGlobalBootstrap`。探针通过的版本会缓存在配置目录的 `paramiko-probe.cache`（键含解释器身份、运行时锁戳与 Paramiko 发行目录存在性），避免每次调用都额外启动一个 Python 进程；任何不一致都会重新执行探针，缓存不会绕过安装或升级路径。
+如果缺少 Paramiko，或现有版本与 `requirements-runtime.lock` 中唯一的精确 pin 不一致，`connect.ps1` 只会在隔离环境中按该锁文件安装或升级。命中全局 Python 时默认拒绝，除非显式传 `-AllowGlobalBootstrap`。探针通过的版本会缓存在配置目录的 `paramiko-probe.cache`（键含解释器身份、运行时锁戳与 Paramiko 发行目录存在性），避免每次调用都额外启动一个 Python 进程；任何不一致都会重新执行探针，缓存不会绕过安装或升级路径。
 
 运行时依赖固定在已验证的 Paramiko 5.x；完整依赖和发行文件哈希见 `requirements-runtime.lock`。该主版本移除了不安全的 RSA/SHA-1 签名及部分旧密钥、KEX 和 GSSAPI 兼容路径；仍依赖这些算法的旧主机应先升级 SSH 配置，不通过降级客户端恢复连接。真实主机的密钥和算法兼容性需单独验收。
 

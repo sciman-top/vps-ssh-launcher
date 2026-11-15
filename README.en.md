@@ -304,7 +304,7 @@ All other commands must be executed via single-host `run` to prevent multi-purpo
 
 ### Paramiko 5.x Modern SSH Core
 
-If Paramiko is missing or `<5`, `connect.ps1` installs or upgrades it inside an isolated environment from `requirements-runtime.lock`. Verified versions are cached in `paramiko-probe.cache`.
+If Paramiko is missing or differs from the sole exact pin in `requirements-runtime.lock`, `connect.ps1` installs or upgrades it inside an isolated environment from that lock file. Verified versions are cached in `paramiko-probe.cache`.
 Runtime dependencies are pinned to validated Paramiko 5.x, with distribution hashes recorded in `requirements-runtime.lock`. Paramiko 5.x deprecates insecure RSA/SHA-1 signatures and outdated KEX/GSSAPI paths.
 
 ### Development & Quality Gates

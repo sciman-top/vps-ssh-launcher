@@ -49,7 +49,7 @@ try:
     from scripts import launcher_transport
     from scripts.audit_cli import make_streams_lossy_safe
     from vps_ssh_launcher import config as target_config
-except ModuleNotFoundError:
+except ImportError:
     if __package__:
         raise
     from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
@@ -971,7 +971,7 @@ _STAGED_IMPORT_BLOCK = (
     b"    from scripts import launcher_transport\n"
     b"    from scripts.audit_cli import make_streams_lossy_safe\n"
     b"    from vps_ssh_launcher import config as target_config\n"
-    b"except ModuleNotFoundError:\n"
+    b"except ImportError:\n"
     b"    if __package__:\n"
     b"        raise\n"
     b"    from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]\n"

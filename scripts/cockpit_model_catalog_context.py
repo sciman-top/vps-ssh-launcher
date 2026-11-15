@@ -22,7 +22,7 @@ try:
         running_cockpit_processes,
         update_model_context_pins,
     )
-except ModuleNotFoundError:
+except ImportError:
     if __package__:
         raise
     from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]

@@ -1240,7 +1240,7 @@ def _transport() -> Any:
         return _TRANSPORT
     try:
         from scripts import launcher_transport
-    except ModuleNotFoundError:
+    except ImportError:
         if __package__:
             raise
         try:
@@ -1248,7 +1248,7 @@ def _transport() -> Any:
 
             ensure_repo_imports()
             from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]
-        except ModuleNotFoundError as exc:
+        except ImportError as exc:
             raise RuntimeError(
                 "cpa_status: the local ssh_tool transport is unavailable in this "
                 "runtime; the projected host copy is read-only and must be given "
@@ -1313,7 +1313,7 @@ def _make_streams_lossy_safe() -> None:
     """Local-console adapter only; the remote runtime never imports it."""
     try:
         from scripts.audit_cli import make_streams_lossy_safe
-    except ModuleNotFoundError:
+    except ImportError:
         if __package__:
             raise
         from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]

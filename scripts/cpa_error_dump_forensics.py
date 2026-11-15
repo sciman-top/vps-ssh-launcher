@@ -56,7 +56,7 @@ def _transport() -> Any:
         return _TRANSPORT
     try:
         from scripts import launcher_transport
-    except ModuleNotFoundError:
+    except ImportError:
         if __package__:
             raise
         try:
@@ -64,7 +64,7 @@ def _transport() -> Any:
 
             ensure_repo_imports()
             from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]
-        except ModuleNotFoundError as exc:
+        except ImportError as exc:
             raise RuntimeError(
                 "cpa_error_dump_forensics: the local ssh_tool transport is "
                 "unavailable in this runtime; the uploaded copy is read-only "

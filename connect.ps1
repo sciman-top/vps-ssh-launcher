@@ -69,28 +69,42 @@ initialise_user_config(Path(sys.argv[1]))
 
 $py = Resolve-ProjectPython -ProjectRoot $scriptDir -AllowPyLauncher
 
-# --- Ensure the supported Paramiko major version is installed ---
+# --- Ensure the locked Paramiko version is installed ---
 # The probe costs a full Python process start on every launcher invocation, so
 # a passing result is cached next to the config file. The cache is keyed on
 # interpreter identity (path, mtime, size, launcher args) plus the repo
 # runtime lock stamp, and the recorded paramiko distribution directory
 # must still exist. Any doubt re-runs the probe; the cache never bypasses the
 # install or upgrade path.
+$runtimeRequirementsPath = Join-Path $scriptDir "requirements-runtime.lock"
+$runtimeLockText = Get-Content -LiteralPath $runtimeRequirementsPath -Raw
+$paramikoRequirements = [regex]::Matches(
+  $runtimeLockText,
+  '(?m)^paramiko==(?<version>[^\s\\]+)'
+)
+if ($paramikoRequirements.Count -ne 1) {
+  throw "requirements-runtime.lock must contain exactly one Paramiko version pin."
+}
+$expectedParamikoVersion = $paramikoRequirements[0].Groups["version"].Value
+
 $probe = @'
 import importlib.metadata
 import sys
 import sysconfig
 
+if len(sys.argv) != 2:
+    sys.exit(2)
+
+expected_version = sys.argv[1]
 try:
     version = importlib.metadata.version("paramiko")
-    major = int(version.split(".", 1)[0])
 except (importlib.metadata.PackageNotFoundError, TypeError, ValueError):
     sys.exit(1)
 
-if major == 5:
+if version == expected_version:
     print(sysconfig.get_paths()["purelib"])
     print(version)
-sys.exit(0 if major == 5 else 1)
+sys.exit(0 if version == expected_version else 1)
 '@
 
 function Get-FileStamp {
@@ -121,7 +135,8 @@ function Test-ParamikoProbeCache {
     [string]$CachePath,
     [hashtable]$Python,
     [string]$PythonIdentity,
-    [string]$RequirementsStamp
+    [string]$RequirementsStamp,
+    [string]$ExpectedParamikoVersion
   )
 
   if (-not (Test-Path -LiteralPath $CachePath -PathType Leaf)) {
@@ -145,27 +160,34 @@ function Test-ParamikoProbeCache {
   if ($marker.requirements_stamp -ne $RequirementsStamp) {
     return $false
   }
+  if ($marker.version -ne $ExpectedParamikoVersion) {
+    return $false
+  }
   if ((Get-FileStamp -Path $PythonIdentity) -ne $marker.exe_stamp) {
     return $false
   }
   $sitePackages = $marker.site_packages
-  $distInfo = Join-Path $sitePackages "paramiko-$($marker.version).dist-info"
-  $eggInfo = Join-Path $sitePackages "paramiko-$($marker.version).egg-info"
+  $distInfo = Join-Path $sitePackages "paramiko-$ExpectedParamikoVersion.dist-info"
+  $eggInfo = Join-Path $sitePackages "paramiko-$ExpectedParamikoVersion.egg-info"
   return ((Test-Path -LiteralPath $distInfo) -or (Test-Path -LiteralPath $eggInfo))
 }
 
 $pythonIdentity = Resolve-PythonExecutableIdentity -Python $py
 $probeCachePath = Join-Path (Split-Path -Parent $Config) "paramiko-probe.cache"
-$runtimeRequirementsPath = Join-Path $scriptDir "requirements-runtime.lock"
 $requirementsStamp = Get-FileStamp -Path $runtimeRequirementsPath
-$probeCached = Test-ParamikoProbeCache -CachePath $probeCachePath -Python $py -PythonIdentity $pythonIdentity -RequirementsStamp $requirementsStamp
+$probeCached = Test-ParamikoProbeCache `
+  -CachePath $probeCachePath `
+  -Python $py `
+  -PythonIdentity $pythonIdentity `
+  -RequirementsStamp $requirementsStamp `
+  -ExpectedParamikoVersion $expectedParamikoVersion
 if (-not $probeCached) {
-  $probeOutput = & $py.Exe @($py.Args + @("-c", $probe))
+  $probeOutput = & $py.Exe @($py.Args + @("-c", $probe, $expectedParamikoVersion))
   if ($LASTEXITCODE -ne 0) {
     if (-not $py.IsIsolated -and -not $AllowGlobalBootstrap) {
-      throw "Paramiko >=5,<6 is required. Refusing to install or upgrade dependencies in non-isolated Python. Create .venv, set VPS_SSH_LAUNCHER_PYTHON, or pass -AllowGlobalBootstrap to accept global installation risk."
+      throw "Paramiko $expectedParamikoVersion is required. Refusing to install or upgrade dependencies in non-isolated Python. Create .venv, set VPS_SSH_LAUNCHER_PYTHON, or pass -AllowGlobalBootstrap to accept global installation risk."
     }
-    Write-Host "Installing compatible dependencies..."
+    Write-Host "Installing locked runtime dependencies..."
     & $py.Exe @(
       $py.Args + @(
         "-m", "pip", "install", "--require-hashes", "--requirement",
@@ -177,7 +199,7 @@ if (-not $probeCached) {
     }
     # A successful install is still verified before it may be cached; a
     # broken install must surface on this run, not on the next cache miss.
-    $probeOutput = & $py.Exe @($py.Args + @("-c", $probe))
+    $probeOutput = & $py.Exe @($py.Args + @("-c", $probe, $expectedParamikoVersion))
     if ($LASTEXITCODE -ne 0) {
       throw "Paramiko probe still failing after dependency install."
     }

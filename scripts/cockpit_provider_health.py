@@ -59,7 +59,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 try:
     from scripts.audit_cli import make_stdout_lossy_safe
-except ModuleNotFoundError:
+except ImportError:
     if __package__:
         raise
     from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]

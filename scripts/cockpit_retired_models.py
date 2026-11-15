@@ -31,7 +31,7 @@ try:
         load_retired_models,
         read_json,
     )
-except ModuleNotFoundError:
+except ImportError:
     if __package__:
         raise
     from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]

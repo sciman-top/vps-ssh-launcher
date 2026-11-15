@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -75,7 +76,10 @@ class ConnectEntrypointTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
         self.assertIn('importlib.metadata.version("paramiko")', text)
-        self.assertIn("major == 5", text)
+        self.assertIn("paramiko==", text)
+        self.assertIn("$expectedParamikoVersion", text)
+        self.assertIn("expected_version = sys.argv[1]", text)
+        self.assertIn('"-c", $probe, $expectedParamikoVersion', text)
 
     def test_connect_command_file_preserves_complex_remote_command(self) -> None:
         powershell = shutil.which("pwsh")
@@ -124,6 +128,19 @@ function Invoke-LauncherPython {
             library = root / "scripts" / "lib"
             library.mkdir(parents=True)
             (root / "connect.ps1").write_text(connect_source, encoding="utf-8")
+            runtime_lock = repo_root / "requirements-runtime.lock"
+            runtime_lock_text = runtime_lock.read_text(encoding="utf-8")
+            (root / "requirements-runtime.lock").write_text(
+                runtime_lock_text,
+                encoding="utf-8",
+            )
+            paramiko_version = re.search(
+                r"(?m)^paramiko==([^\s\\]+)",
+                runtime_lock_text,
+            )
+            self.assertIsNotNone(paramiko_version)
+            assert paramiko_version is not None
+            helper = helper.replace("5.5.0", paramiko_version.group(1))
             (library / "project_environment.ps1").write_text(helper, encoding="utf-8")
             config = root / "target.json"
             config.write_text("{}\n", encoding="utf-8")
@@ -211,7 +228,9 @@ function Invoke-LauncherPython {
         self.assertIn("requirements_stamp", text)
         self.assertIn("requirements-runtime.lock", text)
         self.assertIn('"--require-hashes"', text)
-        self.assertIn("paramiko-$($marker.version).dist-info", text)
+        self.assertIn("paramiko-$ExpectedParamikoVersion.dist-info", text)
+        self.assertIn("-ExpectedParamikoVersion $expectedParamikoVersion", text)
+        self.assertIn("$marker.version -ne $ExpectedParamikoVersion", text)
         # The cache only skips the probe; install/upgrade stays reachable and
         # a post-install probe must still gate what gets cached.
         self.assertIn('"-m", "pip", "install"', text)

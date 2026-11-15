@@ -25,7 +25,7 @@ try:
         restore_cockpit_backup,
         running_cockpit_processes,
     )
-except ModuleNotFoundError:
+except ImportError:
     if __package__:
         raise
     from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
