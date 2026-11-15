@@ -214,6 +214,15 @@ class _PersistentAutoAddPolicy:
                 self._known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
                 if os.name == "nt":
                     self._known_hosts_path.touch(exist_ok=True)
+                    # ``touch`` inherits the parent directory DACL.  The
+                    # launcher trust store is user controlled state, so
+                    # refuse to persist a host key until that inherited ACL
+                    # has been checked/tightened through the same seam used
+                    # for target.json and private keys.
+                    windows_acl._ensure_windows_private_dacl(
+                        self._known_hosts_path,
+                        windows_acl._tighten_windows_dacl,
+                    )
                 else:
                     descriptor = os.open(
                         self._known_hosts_path,
@@ -290,6 +299,14 @@ def _load_user_host_keys(client: Any, known_hosts_path: Path) -> None:
             raise ValueError(
                 f"Launcher known_hosts disappeared during verification: {known_hosts_path}"
             ) from exc
+    else:
+        # Existing stores may predate the private trust-store policy, and a
+        # file created by another process can inherit broad directory ACLs.
+        # Validate/tighten before Paramiko reads any host identity.
+        windows_acl._ensure_windows_private_dacl(
+            known_hosts_path,
+            windows_acl._tighten_windows_dacl,
+        )
     try:
         client.load_host_keys(str(known_hosts_path))
     except Exception as exc:
