@@ -108,14 +108,21 @@ class RealityAltSniLaneTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn(
             'STANDBY_VHOST="$NGINX_CONF_D/vps-launcher-alt-sni-sub.conf"', text
         )
-        self.assertIn(
-            'standby_port="$(python3 - "$NGINX_CONF_D/subscribe.conf" "$ALT_PORT"', text
-        )
+        # The port now comes from the shared derivation rather than scraping
+        # subscribe.conf: the 2026-11-15 review found a host whose subscription
+        # port was served by a snippet the old scrape never read. The shared
+        # block still refuses to bind the fallback port twice.
+        self.assertIn("scripts/lib/proxy_tls_ports.py", text)
+        self.assertIn("standby_out=\"$(printf '%s' '__TLS_PORTS_HELPER_B64__'", text)
+        self.assertIn('grep -qx "port=$ALT_PORT"', text)
+        # A name already mounted on that port by another vhost is a hard
+        # refusal, not a second server_name for the same host.
+        self.assertIn("STANDBY_NAME_TAKEN", text)
+        self.assertIn("REFUSE standby_name_already_owned", text)
         self.assertIn("alt_sni_standby_handshake=ok", text)
         self.assertIn('-checkhost "$ALT"', text)
         # The extra vhost serves the shared static root only: no proxy, no new
         # credential surface, and never a second bind on the fallback port.
-        self.assertIn("if port and port != fallback:", text)
 
     def test_vhost_only_converge_skips_the_xray_restart(self) -> None:
         # The mutator is this lane's only xray write face, so a half-applied

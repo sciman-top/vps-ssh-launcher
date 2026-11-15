@@ -15,6 +15,11 @@ Initialize-LaneScript -ScriptRoot $PSScriptRoot -Config $Config -AllowPyLauncher
 
 $applyLiteral = if ($Apply) { "1" } else { "0" }
 
+$proxyTlsPortsPath = Join-Path $PSScriptRoot "lib\proxy_tls_ports.py"
+$proxyTlsPortsB64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes((Get-Content -Raw -LiteralPath $proxyTlsPortsPath))
+)
+
 # Two fingerprint fixes that need no service restart, only `nginx -s reload`:
 #
 # 1. `server_tokens off` stops nginx advertising its exact build
@@ -26,10 +31,13 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 #    A `default_server` with `ssl_reject_handshake on` turns unknown names into
 #    a clean handshake failure while the real SNI keeps serving the decoy page.
 #
-# The ports come from the live REALITY configs (xray target/dest and sing-box
-# reality handshake), so bwg (33387) and zz (35622) need no profile table. The
-# file is a conf.d drop-in: nginx.conf keeps its distro content and vasma never
-# writes this name. Read-only unless -Apply.
+# The ports come from scripts/lib/proxy_tls_ports.py, which reads the live
+# REALITY configs (xray target/dest and sing-box reality handshake) *and* the
+# conf.d snippets that actually serve the subscription/decoy ports. Deriving
+# only from REALITY left zz's 12378 answering every SNI with the host
+# certificate (2026-11-15), while this lane reported applied. The file is a
+# conf.d drop-in: nginx.conf keeps its distro content and vasma never writes
+# this name. Read-only unless -Apply.
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -42,6 +50,18 @@ SB_SOURCE_DIR="${VPS_STEALTH_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/confi
 STATUS_DIR="${VPS_STEALTH_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-status}"
 BACKUP_PARENT="${VPS_STEALTH_BACKUP_DIR:-/var/backups}"
 STATUS_FILE="$STATUS_DIR/nginx-stealth.status"
+# These frontends are intentionally reached by IP literal by existing clients.
+# Rejecting their unknown SNI would break that traffic, so the shared drift
+# contract names them as explicit exceptions instead of silently treating them
+# as healthy stealth ports.
+UNKNOWN_SNI_EXEMPT="${VPS_STEALTH_UNKNOWN_SNI_EXEMPT:-8443 28317}"
+
+is_unknown_sni_exempt() {
+    case " $UNKNOWN_SNI_EXEMPT " in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 write_status() {
     local result="$1" code="$2" finished tmp
@@ -60,80 +80,9 @@ write_status() {
 }
 
 echo '==reality-fallback-ports=='
-facts="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY'
-import glob
-import json
-import os
-import sys
-
-xray_dir, sb_dir = sys.argv[1:3]
-seen = {}
-invalid = False
-
-
-def add(port, sni, source):
-    if not isinstance(port, int) or port <= 0 or not sni:
-        return
-    previous = seen.get(port)
-    if previous and previous != sni:
-        print(f"conflict port={port} sni={previous},{sni}", file=sys.stderr)
-        raise SystemExit(4)
-    seen[port] = sni
-
-
-def split_port(value):
-    value = str(value or '').strip()
-    if value.startswith('[') and ']' in value:
-        tail = value[value.index(']') + 1:]
-        return int(tail.lstrip(':') or 0)
-    if value.count(':') == 1:
-        try:
-            return int(value.split(':', 1)[1])
-        except ValueError:
-            return 0
-    return 0
-
-
-for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
-    try:
-        data = json.load(open(path, encoding='utf-8'))
-    except Exception:
-        invalid = True
-        continue
-    for ib in data.get('inbounds', []) or []:
-        rs = (ib.get('streamSettings') or {}).get('realitySettings')
-        if not rs:
-            continue
-        target = rs.get('target') or rs.get('dest') or ''
-        names = [str(name) for name in (rs.get('serverNames') or []) if name]
-        add(split_port(target), names[0] if names else '', 'xray')
-
-for path in sorted(glob.glob(os.path.join(sb_dir, '*.json'))):
-    try:
-        data = json.load(open(path, encoding='utf-8'))
-    except Exception:
-        invalid = True
-        continue
-    for ib in data.get('inbounds', []) or []:
-        tls = ib.get('tls') or {}
-        reality = tls.get('reality') or {}
-        if not reality or not reality.get('enabled'):
-            continue
-        port = (reality.get('handshake') or {}).get('server_port')
-        add(port, str(tls.get('server_name') or ''), 'sing-box')
-
-if invalid:
-    print('facts=invalid')
-    raise SystemExit(4)
-for port in sorted(seen):
-    # One field per line: a single "port=... sni=..." line would need a second
-    # split in bash, and an empty value there silently shifts the arrays.
-    print(f"port={port}")
-    print(f"sni={seen[port]}")
-if not seen:
-    print('facts=not-applicable')
-PY
-)" || facts='facts=invalid'
+SNIPPET_DIR="${VPS_STEALTH_SNIPPET_DIR:-/etc/nginx/conf.d}"
+SNIPPET_EXCLUDE="${VPS_STEALTH_SNIPPET_EXCLUDE:-vps-launcher-stealth,alone,reality-handshake}"
+facts="$(printf '%s' '__TLS_PORTS_HELPER_B64__' | base64 -d | python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$SNIPPET_DIR" "$SNIPPET_EXCLUDE")" || facts='facts=invalid'
 printf '%s\n' "$facts"
 
 ports=()
@@ -165,6 +114,9 @@ render_expected() {
         for i in "${!ports[@]}"; do
             port="${ports[$i]}"
             sni="${snies[$i]:-}"
+            if is_unknown_sni_exempt "$port"; then
+                continue
+            fi
             printf '\n# REALITY fallback for %s: unknown SNI must fail like a strict vhost.\n' "$sni"
             printf 'server {\n'
             printf '    listen %s ssl default_server;\n' "$port"
@@ -200,7 +152,7 @@ server_header_has_version() {
 }
 
 report_state() {
-    local i port sni expected mismatch=0 rejected=0 broken=0 leak=0
+    local i port sni expected mismatch=0 rejected=0 required=0 broken=0 leak=0
     expected="$(mktemp)"
     render_expected "$expected"
     for i in "${!ports[@]}"; do
@@ -210,10 +162,15 @@ report_state() {
             echo "real_sni_broken port=$port sni=$sni"
             broken=1
         fi
-        if [ "$(probe_cert "$port" 'vps-launcher-probe.invalid')" = 'cert' ]; then
+        if is_unknown_sni_exempt "$port"; then
+            echo "unknown_sni_allowed port=$port"
+        elif [ "$(probe_cert "$port" 'vps-launcher-probe.invalid')" = 'cert' ]; then
             echo "unknown_sni_answered port=$port"
         else
             rejected=$((rejected + 1))
+        fi
+        if ! is_unknown_sni_exempt "$port"; then
+            required=$((required + 1))
         fi
         if server_header_has_version "$port" "$sni"; then
             echo "server_version_leak port=$port"
@@ -231,12 +188,12 @@ report_state() {
     fi
     rm -f -- "$expected"
     echo "conf_file=$file_state"
-    echo "unknown_sni_rejected=$rejected/${#ports[@]}"
+    echo "unknown_sni_rejected=$rejected/$required"
     if [ "$broken" -eq 1 ]; then
         echo 'stealth=broken'
         return 2
     fi
-    if [ "$file_state" = 'match' ] && [ "$rejected" -eq "${#ports[@]}" ] && [ "$leak" -eq 0 ]; then
+    if [ "$file_state" = 'match' ] && [ "$rejected" -eq "$required" ] && [ "$leak" -eq 0 ]; then
         echo 'stealth=applied'
         return 0
     fi
@@ -357,6 +314,6 @@ echo 'BACKUP_PRUNE scope=nginx-stealth policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'NGINX_STEALTH_APPLIED'
 write_status success 0
-'@.Replace("__APPLY__", $applyLiteral)
+'@.Replace("__APPLY__", $applyLiteral).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "nginx-stealth"

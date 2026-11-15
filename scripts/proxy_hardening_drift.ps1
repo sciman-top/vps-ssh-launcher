@@ -25,6 +25,11 @@ $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
 }
+
+$proxyTlsPortsPath = Join-Path $PSScriptRoot "lib\proxy_tls_ports.py"
+$proxyTlsPortsB64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes((Get-Content -Raw -LiteralPath $proxyTlsPortsPath))
+)
 if (-not $MasqueradeUrl) {
   $MasqueradeUrl = @{
     "bwg" = "https://fq.sciman.top:33387/"
@@ -123,6 +128,11 @@ if ($expectedV2rayInstallSha -notmatch '^(?i:[0-9a-f]{64})$') {
 # It never writes. `HARDENING_DRIFT=NONE` is the clean verdict;
 # `HARDENING_DRIFT=<lane,...>` names what regressed and which script re-applies
 # it, so the fix is a copy of the command rather than a memory exercise.
+#
+# nginx-stealth carries an independent floor on top of its derived port list:
+# every TLS port `nginx -T` serves must answer unknown SNI with a clean
+# failure. The derived list alone reported stealth=applied on zz while 12378
+# answered CN=zz.sciman.top for any name (2026-11-15).
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -465,74 +475,11 @@ if ! printf '%s\n' "$reality_flow_state" | grep -qE '^reality_flow=(ok|not-appli
 fi
 
 echo '==nginx-stealth=='
-stealth_facts="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY'
-import glob
-import json
-import os
-import sys
-
-xray_dir, sb_dir = sys.argv[1:3]
-seen = {}
-invalid = False
-
-
-def add(port, sni):
-    if isinstance(port, int) and port > 0 and sni:
-        seen.setdefault(port, sni)
-
-
-def split_port(value):
-    value = str(value or '').strip()
-    if value.startswith('[') and ']' in value:
-        try:
-            return int(value[value.index(']') + 1:].lstrip(':') or 0)
-        except ValueError:
-            return 0
-    if value.count(':') == 1:
-        try:
-            return int(value.split(':', 1)[1])
-        except ValueError:
-            return 0
-    return 0
-
-
-for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
-    try:
-        data = json.load(open(path, encoding='utf-8'))
-    except Exception:
-        invalid = True
-        continue
-    for ib in data.get('inbounds', []) or []:
-        rs = (ib.get('streamSettings') or {}).get('realitySettings')
-        if not rs:
-            continue
-        names = [str(name) for name in (rs.get('serverNames') or []) if name]
-        add(split_port(rs.get('target') or rs.get('dest')), names[0] if names else '')
-
-for path in sorted(glob.glob(os.path.join(sb_dir, '*.json'))):
-    try:
-        data = json.load(open(path, encoding='utf-8'))
-    except Exception:
-        invalid = True
-        continue
-    for ib in data.get('inbounds', []) or []:
-        tls = ib.get('tls') or {}
-        reality = tls.get('reality') or {}
-        if not reality or not reality.get('enabled'):
-            continue
-        add((reality.get('handshake') or {}).get('server_port'), str(tls.get('server_name') or ''))
-
-if invalid:
-    print('stealth_facts=invalid')
-    raise SystemExit(4)
-if not seen:
-    print('stealth_facts=not-applicable')
-else:
-    for port in sorted(seen):
-        print(f"port={port}")
-        print(f"sni={seen[port]}")
-PY
-)" || stealth_facts='stealth_facts=invalid'
+stealth_rc=0
+stealth_facts="$(printf '%s' '__TLS_PORTS_HELPER_B64__' | base64 -d | python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$NGINX_CONF_D" "vps-launcher-stealth,alone,reality-handshake")" || stealth_rc=$?
+if [ "$stealth_rc" -ne 0 ]; then stealth_facts='stealth_facts=invalid'; fi
+# The shared derivation prints `facts=...`; this gate keys on `stealth_facts=`.
+stealth_facts="$(printf '%s\n' "$stealth_facts" | sed 's/^facts=/stealth_facts=/')"
 if printf '%s\n' "$stealth_facts" | grep -q '^stealth_facts=invalid$'; then
     echo 'stealth=invalid'
     drift+=('nginx-stealth')
@@ -546,6 +493,18 @@ else
             port=*) stealth_port="${stealth_line#port=}" ;;
             sni=*)
                 stealth_sni="${stealth_line#sni=}"
+                # A declared unknown-SNI exception (see floor_skip below) is
+                # reached by IP literal: 8443 answers 404 and 28317 answers 401
+                # for the real name because they are API/panel frontends, not
+                # decoy pages. Holding them to the 200 rule would keep this
+                # lane permanently red for a documented decision, so the
+                # exemption is honoured here as well instead of only in the
+                # floor that lists it.
+                case " ${VPS_DRIFT_UNKNOWN_SNI_EXEMPT:-8443 28317} " in
+                    *" $stealth_port "*)
+                        echo "stealth_port_exempt port=$stealth_port sni=$stealth_sni"
+                        continue ;;
+                esac
                 stealth_out="$(echo | timeout 8 openssl s_client -connect "127.0.0.1:$stealth_port" \
                     -servername vps-launcher-probe.invalid 2>&1 || true)"
                 if printf '%s' "$stealth_out" | grep -q 'BEGIN CERTIFICATE'; then
@@ -577,6 +536,70 @@ else
                 ;;
         esac
     done <<<"$stealth_facts"
+    # Independent floor, added after the 2026-11-15 review: the port list above
+    # is derived, so a port nobody thought to derive (zz's subscription port
+    # 12378) answered unknown SNI with the host's own certificate while this
+    # gate reported stealth=applied. Every TLS port nginx serves must answer
+    # unknown SNI with a clean failure, so a lane that later adds a port
+    # without a default_server cannot silently reopen that gap.
+    # One dumped configuration serves both questions: which ports nginx
+    # listens on, and which of those already own a rejecting default_server.
+    # A configuration test is deliberately not used here: it would make this
+    # read-only gate fail on a broken config instead of reporting it as drift.
+    floor_dump="$(nginx -T 2>/dev/null)" || floor_dump=''
+    floor_guarded=' '
+    if [ -n "$floor_dump" ]; then
+        floor_guarded="$(printf '%s\n' "$floor_dump" | awk '
+            /^[[:space:]]*server[[:space:]]*\{/ { in_block = 1; block = ""; next }
+            in_block == 1 { block = block $0 "\n" }
+            /^[[:space:]]*\}[[:space:]]*$/ && in_block == 1 {
+                if (block ~ /default_server/ && block ~ /ssl_reject_handshake[[:space:]]+on/) {
+                    n = split(block, lines, "\n")
+                    for (i = 1; i <= n; i++) {
+                        if (match(lines[i], /listen[[:space:]]+([^[:space:];]*:)?[0-9]+/)) {
+                            token = substr(lines[i], RSTART, RLENGTH)
+                            sub(/^listen[[:space:]]+/, "", token)
+                            sub(/^.*:/, "", token)
+                            printf " %s ", token
+                        }
+                    }
+                }
+                in_block = 0
+            }
+        ')"
+    fi
+    floor_bad=0
+    floor_checked=0
+    # Declared exceptions, not silent ones. 8443 (CPA gateway) and 28317
+    # (CPAMC panel) are reached by IP literal, so `ssl_reject_handshake` on
+    # unknown SNI would break real clients; they keep a stock vhost by
+    # decision (runbook, "explicitly abandoned fingerprints"). Listed here so
+    # the exception is visible in the gate instead of a permanently red lane.
+    floor_skip=" ${VPS_DRIFT_UNKNOWN_SNI_EXEMPT:-8443 28317} "
+    for floor_port in $(printf '%s\n' "$floor_dump" |
+        sed -n 's/^[[:space:]]*listen[[:space:]]\+\(\[[^]]*\]:\)\?\([0-9]\+\).*/\2/p' |
+        sort -un); do
+        [ -n "$floor_port" ] || continue
+        case "$floor_guarded" in
+            *" $floor_port "*|*" "$floor_port" "*) continue ;;
+        esac
+        floor_cert="$(echo | timeout 8 openssl s_client -connect "127.0.0.1:$floor_port" \
+            -servername vps-launcher-floor.invalid 2>&1 || true)"
+        if printf '%s' "$floor_cert" | grep -q 'BEGIN CERTIFICATE'; then
+            case "$floor_skip" in
+                *" "$floor_port" "*)
+                    echo "unknown_sni_answered_allowed port=$floor_port" ;;
+                *)
+                    echo "unknown_sni_answered_unguarded port=$floor_port"
+                    floor_bad=1 ;;
+            esac
+        fi
+        floor_checked=$((floor_checked + 1))
+    done
+    echo "unknown_sni_floor=checked:$floor_checked unguarded:$floor_bad"
+    if [ "$floor_bad" -ne 0 ]; then
+        stealth_bad=1
+    fi
     if [ -f "$NGINX_CONF_D/vps-launcher-stealth.conf" ]; then
         echo 'stealth_conf=present'
     else
@@ -2157,7 +2180,7 @@ for lane in "${drift[@]}"; do
 done
 echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
 
 try {
   Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

@@ -43,6 +43,11 @@ if ($AltName -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z
 # answer for the first and nothing local answers the second.
 $applyLiteral = if ($Apply) { "1" } else { "0" }
 
+$proxyTlsPortsPath = Join-Path $PSScriptRoot "lib\proxy_tls_ports.py"
+$proxyTlsPortsB64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes((Get-Content -Raw -LiteralPath $proxyTlsPortsPath))
+)
+
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -50,6 +55,7 @@ ALT="__ALT_NAME__"
 APPLY="__APPLY__"
 XRAY_BIN="${VPS_ALT_SNI_XRAY_BIN:-/etc/v2ray-agent/xray/xray}"
 XRAY_CONF="${VPS_ALT_SNI_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
+SB_SOURCE_DIR="${VPS_ALT_SNI_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_CONF_D="${VPS_ALT_SNI_NGINX_DIR:-/etc/nginx/conf.d}"
 NGINX_ROOT="${VPS_ALT_SNI_NGINX_ROOT:-/usr/share/nginx/html}"
 VHOST="$NGINX_CONF_D/vps-launcher-alt-sni.conf"
@@ -166,32 +172,36 @@ fi
 # only the REALITY fallback port, the published recovery URL still dies on
 # hostname verification. Compute the subscription port here so the noop branch
 # can tell "fully applied" from "half applied".
+# The standby vhost is part of the same contract: if the alternate name reaches
+# only the REALITY fallback port, the published recovery URL still dies on
+# hostname verification. The port comes from the shared derivation
+# (scripts/lib/proxy_tls_ports.py) instead of scraping subscribe.conf: a host
+# can serve its subscription from a snippet this lane never read, and the
+# 2026-11-15 review found zz's subscription port had no vhost for this name
+# while every other check stayed green.
 standby_port=""
-if [ -f "$NGINX_CONF_D/subscribe.conf" ]; then
-    standby_port="$(python3 - "$NGINX_CONF_D/subscribe.conf" "$ALT_PORT" <<'PY'
-import re
-import sys
-
-path, fallback = sys.argv[1], sys.argv[2]
-try:
-    text = open(path, encoding='utf-8', errors='replace').read()
-except OSError:
-    raise SystemExit(0)
-port = None
-for line in text.splitlines():
-    line = line.strip()
-    if not line.startswith('listen '):
-        continue
-    match = re.search(r'listen\s+(?:\[[^\]]*\]:)?([\d.]+:)?(\d+)\s+ssl', line)
-    if match:
-        port = match.group(2)
-        break
-# Publishing the same port twice would create duplicate servers on one listen
-# directive; the fallback port already serves the name.
-if port and port != fallback:
-    print(port)
-PY
-)"
+standby_rc=0
+standby_out="$(printf '%s' '__TLS_PORTS_HELPER_B64__' | base64 -d | python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$NGINX_CONF_D" "vps-launcher-stealth,alone,reality-handshake")" || standby_rc=$?
+if [ "$standby_rc" -eq 5 ]; then
+    # Refusing is the whole point: the name is already mounted on that port by
+    # another vhost, and a second server_name for it would be served by
+    # whichever block nginx loads first.
+    printf '%s\n' "$standby_out" | grep -v '^standby=' >&2 || true
+    echo 'REFUSE standby_name_already_owned' >&2
+    exit 5
+elif [ "$standby_rc" -ne 0 ]; then
+    echo 'REFUSE standby_derivation_failed' >&2
+    exit 4
+fi
+standby_port=''
+if printf '%s\n' "$standby_out" | grep -qx "port=$ALT_PORT"; then
+    if printf '%s\n' "$standby_out" | grep -qx "serve=$ALT|$ALT_PORT"; then
+        printf 'STANDBY_NAME_TAKEN name=%s port=%s\n' "$ALT" "$ALT_PORT" >&2
+        echo 'REFUSE standby_name_already_owned' >&2
+        exit 5
+    fi
+else
+    standby_port="$(printf '%s\n' "$standby_out" | sed -n 's/^serve=[^|]*|//p' | head -1)"
 fi
 STANDBY_VHOST=""
 if [ -n "$standby_port" ]; then
@@ -592,6 +602,6 @@ chmod 644 "$MARKER"
 cleanup || true
 echo "APPLY_BACKUP_DIR=$BACKUP"
 echo 'ALT_SNI_APPLIED'
-'@.Replace("__ALT_NAME__", $AltName).Replace("__APPLY__", $applyLiteral).Replace("__TLS_CIPHERS__", $tlsCiphers)
+'@.Replace("__ALT_NAME__", $AltName).Replace("__APPLY__", $applyLiteral).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "alt-sni"

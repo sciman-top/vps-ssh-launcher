@@ -38,10 +38,16 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   默认目标分别是 BWG `fq.sciman.top:33387` 与 ZZ `zz.sciman.top:12378`。
   obfs 车道不做 masquerade，因为 salamander 会在协议层之前拒绝未混淆报文。
 - `scripts/nginx_tls_stealth.ps1`：`server_tokens off` 去掉 `Server: nginx/<版本>`，
-  并给每个 REALITY 回落端口加 `ssl_reject_handshake on` 的 `default_server`，让未知 SNI
-  握手失败而不是回本域名证书。端口从在线 REALITY 配置推导（bwg `33387`、zz `35622`），
-  只 `nginx -s reload`，不重启服务；Apply 后必须同时验证真 SNI 仍可用、未知 SNI 被拒、
-  `Server` 头无版本，任一不满足即回滚。
+  并给**每个对外 TLS 端口**加 `ssl_reject_handshake on` 的 `default_server`，让未知 SNI
+  握手失败而不是回本域名证书。端口来自 `scripts/lib/proxy_tls_ports.py`，它同时读在线
+  REALITY 配置（bwg `33387`、zz `35622`）与 `conf.d` 里实际服务这些端口的 snippet，
+  所以订阅/伪装端口（zz `12378`）也在覆盖范围内。只 `nginx -s reload`，不重启服务；
+  Apply 后必须同时验证真 SNI 仍可用、未知 SNI 被拒、`Server` 头无版本，任一不满足即回滚。
+  **2026-11-15 审查发现 zz `12378` 一直缺失**：旧推导只看 REALITY target，`12378` 不是
+  target，于是它对任意 SNI 都回 `CN=zz.sciman.top`，而真实网站会回 `unrecognized_name`，
+  一个 ClientHello 就能把这台主机归为代理——同一时刻漂移门仍报 `stealth=applied`。
+  现在 `reality_alt_sni_lane.ps1` 的备用 vhost 端口也用同一份推导，并在该名已被别的
+  vhost 占用时 `REFUSE standby_name_already_owned`，不再重复写 `server_name`。
 - `scripts/xhttp_nginx_front.ps1`：把 XHTTP TLS 车道从裸 Xray 监听改为
   `dokodemo 0.0.0.0:<公开端口> → 127.0.0.1:15994(nginx) → 127.0.0.1:<inbound>`。公开端口必须
   留在 Xray 的 `inbounds[1]` 上：vasma 用 `inbounds[1].port` 取订阅端口，菜单重配还会重写
@@ -485,6 +491,48 @@ Hysteria2 探针拨本机回环或本机公网 IP，不解析外部域名，因�
 sing-box 在而 base inbound 缺失）记 `RESULT=N/A` 但触发 `PARTIAL`，使半缺失
 状态显形。`FAIL` 恒为真实握手失败或源不可读。
 
+## 主动探测实测与误判边界（2026-11-15）
+
+这一节记录从外部 IP 看到的真实观测面，以及一次**误判**，避免后来者重复它。
+
+**误判：HTTPS 请求返回 `400 Bad Request` 不是缺陷。** 用 .NET `SslStream` 且不指定
+ALPN 时它会发 `["http/1.1"]`，而 `subscribe.conf` 的 `http2 on` 优先级高于 ALPN，
+nginx 于是用 h2 接入 http/1.1 字节流，返回 HTTP/2 的 400。换成不声明 ALPN 的客户端
+（Python `ssl`、Go 默认栈）所有端口都是 `200 OK / 6133` 字节，curl `--http2` 与
+`--http1.1` 也都是 200。**所以 `proxy_lane_acceptance.ps1` 那类只发 `http/1.1` ALPN
+的客户端拿到的 400 不构成“伪装页不可达”的证据**，验收伪装页必须用 curl 或 Python。
+
+**未知 SNI 的判定同样要注意 ALPN。** `echo | openssl s_client -servername <未知> ` 若
+声明了 h2 以外的 ALPN，可能先收到 nginx 的 HTTP/2 应用层错误而不是 TLS 告警，看起来像
+“被拒绝”。判定必须看**服务端是否发出证书**：收到 `BEGIN CERTIFICATE` 才是回本域名证书
+（坏），握手在证书之前结束才是拒绝（好）。`proxy_hardening_drift.ps1` 与本文所有探测
+都按这条口径写。
+
+**443 对外呈现的是普通 Go TLS 栈，不是“浏览器握手”。** REALITY 的非认证分支在
+`hs.c` 仍是 `*tls.Conn` 时直接 `io.Copy` 到 dest（XTLS/REALITY `tls.go`），把 Go
+`crypto/tls` 的原始字节摊给探测方；它不会以 uTLS 浏览器指纹重新握手，因为那时还没有
+`clientHello` 可重放。由此可稳定观测到：443 接受 TLS 1.2（真 REALITY 只做 TLS 1.3）、
+443 不回 HTTP/2，而同 IP 的 nginx 端口回。**不要**用“REALITY 出站走浏览器指纹”来反驳
+这一点；那是客户端方向的行为。
+
+**`maxTimeDiff` 是探针参数，不是安全参数。** `minClientVer`／`maxTimeDiff` 只在 AEAD
+认证通过后才参与判定，探测方过不了这一步，所以它们对主动探测**没有任何作用**，却会把
+“时钟偏差超过阈值”的合成 ClientHello 精确送进上面那条 Go 栈路径。`minClientVer` 默认
+值在 Xray 2026-07-11 设为 `26.3.27`，又在 2026-09-08（`47cfe99`）连同告警一起回退，
+现网 `1.8.2` 是 2021 年的遗留值，既不加固也无收益。
+
+**Hysteria2 与 Cloudflare 互斥。** CF 反向代理只代理 HTTP/HTTPS 的 **TCP** 端口
+（80/8080/8880/2052/2082/2086/2095 与 443/2053/2083/2087/2096/8443），整页无 UDP；
+UDP 透传只存在于 Enterprise 的 Spectrum。Hysteria 官方 “Can I use a CDN?” 亦为 no。
+这条分支不必再论证，Hysteria2 的 443 覆盖只能靠 TCP 车道。
+
+**sing-box 1.14.x 客户端默认仿冒 Chrome QUIC 握手**（`disable_chrome_parrot` 关闭才停），
+这是上游唯一的反指纹手段且**在客户端**，服务端无法控制。已知副作用：Ed25519 证书会
+握手失败。现网证书为 `id-ecPublicKey`（ECDSA P-256），不受影响；换证书类型前需复查这一条。
+
+**Hysteria2 的 `up_mbps`/`down_mbps` 是每客户端双向硬上限**，Brutal 会被夹到
+`min(server, client)`；`ignore_client_bandwidth` 与这两个字段是 sing-box 文档明写的
+“Conflict”，二者不可兼得。现网 `100/50` 是有意保留的显式上限，不随本轮变更调整。
 ## 已收敛与被放弃的指纹
 
 - 裸 XHTTP 监听、nginx 版本头、未知 SNI 回本域名证书三项已由上面两个 lane 收敛；bwg 的
@@ -508,7 +556,16 @@ sing-box 在而 base inbound 缺失）记 `RESULT=N/A` 但触发 `PARTIAL`，使
   在整根备份后把这些**未被任何服务页引用**的残留一并清除（`/s/` 合并订阅目录被
   `--exclude-dir=s` 保护；任何被 `*.html` 或 `en/` 引用的项保留并在
   `residue_kept_referenced` 声明）；漂移门禁输出 `camouflage=residue file=<path>` 并报
-  `camouflage` 漂移，vasma 重装重新拉取模板后带回即被巡检发现。2026-11-01 已在 bwg
+  `camouflage` 漂移，vasma 重装重新拉取模板后带回即被巡检发现。
+
+- **未知 SNI 拒绝面覆盖全部 TLS 端口（2026-11-15）**：伪装站、CDN 回源、XHTTP 前置、
+  REALITY 回落端口均已拒绝未知 SNI；zz 的订阅端口 `12378` 也曾是缺口（对任意 SNI 回
+  `CN=zz.sciman.top`），现已收敛。漂移门禁在派生端口列表之外另有一道**独立下限**：
+  从 `nginx -T` 提取全部 TLS 监听端口，逐个探测未知 SNI，未被拒绝即报
+  `unknown_sni_answered_unguarded`。已声明的例外只有 `8443`（CPA 网关）与 `28317`
+  （CPAMC 面板）：它们按 IP 字面量访问、真实名字回 404/401，强制拒绝会误伤客户端，
+  因此以 `unknown_sni_answered_allowed` / `stealth_port_exempt` 明示放行，而不是让该
+  车道长期报红。例外清单可用 `VPS_DRIFT_UNKNOWN_SNI_EXEMPT` 覆盖。2026-11-01 已在 bwg
   （`img/pro.psd` + 5 个 `Thumbs.db`）与 zz（`__MACOSX/` 整树、`psd/`、4 个 `html*.zip`、
   `README.md`、`Dockerfile`、`manifest.json`、2 个 `precache-manifest`、2 个
   `*.worker.js`、`img/pro.psd`、5 个 `Thumbs.db`）应用。
