@@ -1,0 +1,59 @@
+# This file is generated from pyproject.toml and requirements-dev.in.
+# Regenerate with: uv pip compile pyproject.toml requirements-dev.in --all-extras --universal --no-annotate --output-file requirements-dev.lock
+ast-serialize==0.13.1
+bandit==1.9.4
+bcrypt==5.0.0
+boolean-py==5.0
+cachecontrol==0.14.4
+certifi==2026.10.23
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+charset-normalizer==3.5.2
+colorama==0.4.6 ; sys_platform == 'win32'
+coverage==7.17.3
+cryptography==50.0.2
+cyclonedx-python-lib==11.12.0
+defusedxml==0.7.1
+filelock==4.2.10
+idna==3.20
+iniconfig==2.3.1
+invoke==3.0.3
+librt==0.16.0 ; platform_python_implementation != 'PyPy'
+license-expression==30.4.4
+markdown-it-py==4.3.0
+mdurl==0.1.2
+msgpack==1.2.4
+mypy==2.4.1
+mypy-extensions==1.2.0
+packageurl-python==0.17.6
+packaging==26.3
+paramiko==5.1.0
+pathspec==1.1.1
+pexpect==4.9.0
+pip==26.3
+pip-api==0.0.35
+pip-audit==2.10.1
+pip-requirements-parser==32.0.1
+platformdirs==4.14.5
+pluggy==1.7.0
+ptyprocess==0.7.0
+py-serializable==2.2.0
+pycparser==3.12 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+pygments==2.21.0
+pynacl==1.6.2
+pyparsing==3.3.3
+pytest==9.2.0
+pytest-cov==7.1.0
+pyyaml==6.0.3
+requests==2.34.2
+rich==15.0.0
+ruff==0.17.5
+setuptools==84.2.1
+sortedcontainers==2.4.0
+stevedore==5.10.0
+tomli==2.5.0
+tomli-w==1.2.0
+types-pexpect==4.9.0.20260518
+typing-extensions==4.16.0
+urllib3==2.8.0
+wheel==0.48.0
+

@@ -1158,8 +1158,14 @@ try {
         self.assertIn("./scripts/run_gates.ps1", run_text)
         self.assertNotIn("-IntegrationCommand", run_text)
         self.assertNotIn("-IntegrationExpected", run_text)
+        install_text = steps["Install dependencies"]["run"]
         self.assertIn(
-            "python -m pip install -e . pytest", steps["Install dependencies"]["run"]
+            "python -m pip install --requirement requirements-dev.lock",
+            install_text,
+        )
+        self.assertIn(
+            "python -m pip install --no-deps --no-build-isolation -e .",
+            install_text,
         )
         self.assertEqual(
             set(workflow["on"]["workflow_dispatch"]["inputs"]), {"integration_profile"}
@@ -1182,6 +1188,8 @@ try {
         self.assertIn("-FullScope Static", runs)
         self.assertIn("-FullScope Runtime", runs)
         self.assertIn("-RunDependencyAudit", runs)
+        self.assertGreaterEqual(runs.count("requirements-dev.lock"), 2)
+        self.assertNotIn('pip install -e ".[dev]"', runs)
         runtimes = [
             job
             for job in data["jobs"].values()

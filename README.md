@@ -373,8 +373,15 @@ SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` �
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+.\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
 ```
+
+`requirements-dev.lock` is generated from `pyproject.toml` and
+`requirements-dev.in`. Refresh it with
+`uv pip compile pyproject.toml requirements-dev.in --all-extras --universal
+--no-annotate --output-file requirements-dev.lock` when dependency declarations
+change.
 
 快速反馈时只运行本次受影响的测试，例如：
 

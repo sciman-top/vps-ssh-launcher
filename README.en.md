@@ -311,8 +311,15 @@ Runtime dependencies are pinned to validated Paramiko 5.x, deprecating insecure 
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+.\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
 ```
+
+`requirements-dev.lock` is generated from `pyproject.toml` and
+`requirements-dev.in`. Refresh it with
+`uv pip compile pyproject.toml requirements-dev.in --all-extras --universal
+--no-annotate --output-file requirements-dev.lock` when dependency declarations
+change.
 
 Run focused tests for fast feedback:
 

@@ -43,7 +43,7 @@ try {
       return
     }
 
-    $bootstrap = 'python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e ".[dev]"'
+    $bootstrap = 'python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock; .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .'
     throw (
       "Gate '$GateId' needs an isolated project Python environment because it " +
       "checks the whole interpreter environment. Create one with '$bootstrap', " +

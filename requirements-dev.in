@@ -1,0 +1,7 @@
+# Direct build inputs for the reproducible development/CI environment.
+#
+# Runtime and tool dependencies remain declared in pyproject.toml. These two
+# packages are included here because editable installation needs the PEP 517
+# backend before the project itself can be installed.
+setuptools>=69
+wheel
