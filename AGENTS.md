@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
 **全局规则复核**: 9.93
-**最后更新**: 2026-11-11
+**最后更新**: 2026-11-17
 
 ## 1. 当前落点与目标归宿
 - source of truth：本文件第 A 节的仓库事实、当前代码与脚本、`scripts/run_gates.ps1` 的门禁结果；运行态配置真源在仓外，路径由 `Get-LauncherUserDataRoot` / `vps_ssh_launcher.config.app_config_dir()` 决定（Windows `%APPDATA%\vps-ssh-launcher`，其他平台 `~/.config/vps-ssh-launcher`），文件名 `target.json`。
@@ -49,7 +49,7 @@
 ## C. 门禁、证据与回滚
 - minimum gates：本节的 fixed order、focused 与 full closeout 即最低门禁。
 - 默认 `-Profile Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml`、CI 工作流即 `Full`；纯规则/文档/测试改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `check_docs.py`；工作树无改动时报告 `NoChanges`，不重复运行完整门禁。未识别路径一律按 `Full`。`-Profile Full` 仍是显式声明。
-- fixed order：`contract:catalog -> build -> test -> invariant -> hotspot`。`contract:catalog`（`scripts/cpa_catalog_check.py`，毫秒级）排在最前，catalog/别名漂移不等导入检查、套件或 `-Apply` 往返才暴露；`invariant`（`pip check` + `scripts/dependency_audit.py`）只在显式 `-RunDependencyAudit` 时插入，审计对象是门禁解释器里实际安装的全部包（排除 pip/setuptools/wheel 与本仓 editable 自身），不是单行的 `requirements.txt`；默认 `Full` 实际执行安装后导入检查、catalog 契约、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
+- fixed order：`contract:catalog -> build -> test -> invariant -> hotspot -> lint -> type`。`contract:catalog`（`scripts/cpa_catalog_check.py`，毫秒级）排在最前，catalog/别名漂移不等导入检查、套件或 `-Apply` 往返才暴露；`invariant`（`pip check` + `scripts/dependency_audit.py`）只在显式 `-RunDependencyAudit` 时插入，审计对象是门禁解释器里实际安装的全部包（排除 pip/setuptools/wheel 与本仓 editable 自身），不是单行的 `requirements.txt`；默认 `Full` 实际执行安装后导入检查、catalog 契约、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
 - 静态检查范围分两类：`scripts/`（含 `scripts/remote/` 远端运行时）纳入 ruff check / bandit；`ruff format --check` 覆盖 scripts 全树（含投影源，格式漂移会挡 Full 门禁）；mypy 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - 墙钟成本集中在 pytest（约 4–5 分钟，静态腿合计约 4 秒，套件内约 457 次子进程占约 226 秒），因此 full closeout 默认加 `-RunParallel`（4 worker，`--dist loadfile`）；普通并行门禁只运行一次 suite。需要证明并行与串行结果一致时才追加 `-ProveParallel`，由 `test:serial-recheck` 复核并落盘 `outputs/gates/receipts/parallel-proof.json`；同树后续可复用匹配的 test receipt。`-ReuseReceipts` 只用于显式 proof 场景跳过已有 proof 的串行复核。静态腿回执按内容树哈希+解释器运行时指纹+发行包集合复用；改文件、切换 Python/平台或升工具即失效。
