@@ -32,10 +32,10 @@ from vps_ssh_launcher.maintenance.config import (
 )
 from vps_ssh_launcher.maintenance.adapters import (
     MaintenanceBusy,
-    build_docker_upgrade_command,
-    build_xray_upgrade_command,
     execute_action,
 )
+from vps_ssh_launcher.maintenance.docker import build_docker_upgrade_command
+from vps_ssh_launcher.maintenance.xray import build_xray_upgrade_command
 from vps_ssh_launcher.maintenance.inventory import (
     _ALLOWED_FACT_KEYS,
     INVENTORY_COMMAND,

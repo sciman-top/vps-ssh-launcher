@@ -8,12 +8,6 @@ from typing import Any, Callable
 from .models import ActionStatus, MaintenanceAction
 from .resources import RESOURCES
 
-# Compatibility re-exports: adapters.py was once the only home of the command
-# builders, and existing callers/tests still import them from here. Keep the
-# names bound so moving the real owners does not break that surface.
-from .docker import build_docker_upgrade_command as build_docker_upgrade_command
-from .xray import build_xray_upgrade_command as build_xray_upgrade_command
-
 
 @dataclass(frozen=True)
 class AdapterResult:

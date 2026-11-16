@@ -22,22 +22,22 @@ CONFIG_FILE_NAME = APP_CONFIG_FILE
 
 def coerce_port(value: Any, *, context: str) -> int:
     """Normalize a port value and fail fast on invalid input."""
-    if isinstance(value, bool):
-        raise ValueError(
-            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {value!r}."
+
+    def invalid(got: Any) -> ValueError:
+        return ValueError(
+            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {got!r}."
         )
+
+    if isinstance(value, bool):
+        raise invalid(value)
     if isinstance(value, int):
         port = value
     elif isinstance(value, str) and value.strip().isdigit():
         port = int(value.strip())
     else:
-        raise ValueError(
-            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {value!r}."
-        )
+        raise invalid(value)
     if not MIN_PORT <= port <= MAX_PORT:
-        raise ValueError(
-            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {port!r}."
-        )
+        raise invalid(port)
     return port
 
 
