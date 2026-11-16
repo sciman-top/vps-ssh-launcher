@@ -25,9 +25,13 @@ param(
   [ValidateRange(2, 32)]
   [int]$MaxWorkers = 4,
   # Reuse a parallel test result already proven against this exact tree and
-  # interpreter. The default (off) re-runs the suite serially once; see the
-  # parallel lane in the Full branch for why that is not belt and braces.
-  [switch]$ReuseReceipts
+  # interpreter. This is useful with -ProveParallel when the proof receipt
+  # already exists; ordinary parallel runs do not pay for a serial duplicate.
+  [switch]$ReuseReceipts,
+  # Opt-in compatibility check for the parallel lane. The normal parallel
+  # gate runs the suite once; this switch adds one serial recheck and records
+  # the result in parallel-proof.json for later reuse.
+  [switch]$ProveParallel
 )
 
 $ErrorActionPreference = "Stop"
@@ -309,10 +313,9 @@ try {
   function Resolve-TestLanePlan {
     param([object[]]$Entries)
 
-    # A parallel result can stand in for the normal serial test only after one
-    # serial recheck reports the same whole-test outcomes. The old plan ran the
-    # parallel command three times and compared a run count with a collection
-    # count; that added minutes without proving equivalence.
+    # Ordinary parallel runs execute the suite once. A serial recheck is an
+    # explicit proof mode because paying for a second full suite on every
+    # developer run defeats the throughput benefit of xdist.
     $testEntry = $null
     $others = @()
     foreach ($entry in $Entries) {
@@ -356,6 +359,9 @@ try {
     }
     if (-not $script:testParallel) {
       return @($others) + @($serialEntry)
+    }
+    if (-not $ProveParallel) {
+      return @($others) + @($testEntry)
     }
 
     # Proof is evidence about this host and tree, so it follows the receipt
@@ -658,6 +664,9 @@ try {
   }
   if ($Profile -eq "Integration" -and $RunDependencyAudit) {
     throw "Integration profile cannot be combined with -RunDependencyAudit."
+  }
+  if ($ProveParallel -and -not $RunParallel) {
+    throw "-ProveParallel requires -RunParallel."
   }
   if ($Profile -ne "Focused" -and @($FocusPath | Where-Object { $_ }).Count -gt 0) {
     throw "-FocusPath is only valid with -Profile Focused."

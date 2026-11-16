@@ -200,7 +200,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -Profile Ful
 
 它只追加 `--cov=vps_ssh_launcher --cov=scripts` 与 `term-missing` 报告，不设阈值、不阻断。
 慢测试按需用 `pytest -q --durations=15 --durations-min=3` 定位（当前最长单例约 11s，全量约 4.5 分钟）；
-Full gate 可按需用 `-RunParallel` 启用 xdist；worker 使用独立 TEMP，且并行结论必须先与串行复核一致。
+Full gate 可按需用 `-RunParallel` 启用 xdist；worker 使用独立 TEMP。普通并行门禁只运行一次；需要等价性证据时追加 `-ProveParallel`。
 
 ### 后续维护优先级
 
@@ -405,11 +405,11 @@ refreshed lock reviewable against the declarations that pulled each pin in. Refr
 
 默认 profile 是 `Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml` 或 CI 工作流即等同 `Full`；纯测试/文档改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `scripts/check_docs.py`；工作树无改动时报告 `NoChanges`，不重复运行完整门禁；任何未识别路径一律按 `Full` 处理。`-Profile Full` 仍可显式指定。
 
-`Full` 只执行一次必要证明：catalog 一致性检查（`contract:catalog`，排最前）、安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；`ruff format --check` 覆盖 scripts 全树，mypy 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
+`Full` 只执行一次必要证明：catalog 一致性检查（`contract:catalog`，排最前）、安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。使用 `-RunParallel` 时 pytest 只跑一次并行 suite；只有显式追加 `-ProveParallel` 才会再跑一次串行复核。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；`ruff format --check` 覆盖 scripts 全树，mypy 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
 
 pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现 `tests/` 下的测试模块，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
 
-CI 将静态门禁在一个组合中运行一次，将 Runtime（安装后导入与 pytest）覆盖 Windows/Ubuntu 与 Python 3.11/3.13 的四个组合。需要单独选择范围时可使用 `-FullScope Static` 或 `-FullScope Runtime`；本地默认 `FullScope All`。
+CI 将静态门禁在一个组合中运行一次。Runtime 在 Windows/Linux 的 Python 3.11 组合运行完整 suite 并使用 `-RunParallel`；Python 3.13 组合运行核心 launcher 兼容性 smoke，覆盖配置、连接、执行和 CLI 入口，避免重复支付两套完整 suite 的成本。需要单独选择范围时可使用 `-FullScope Static` 或 `-FullScope Runtime`；本地默认 `FullScope All`。
 
 在删除被安全策略阻断的宿主上（例如本机注入的 safe-delete shim），每个临时目录清理都会耗满 `conftest.py` 的预算，把测试步从几分钟拖到十几分钟，并在 `faulthandler_timeout` 处反复 dump 栈。可显式降低预算换墙钟时间，**断言与覆盖面完全不变**：
 
@@ -440,12 +440,12 @@ Full 的墙钟几乎全在 pytest 上：静态腿合计约 4 秒，测试套件�
 
 默认 4 个工作进程（`-MaxWorkers` 可调，2–32），分发单位是 `--dist loadfile`：测试文件之间不共享内存状态，文件内部才共享 fixture。并行只改变执行方式，不改变断言。
 
-并行结果只有在被证明与串行等价之后才替代串行结论：`test` 并行跑一次，`test:serial-recheck` 再按单进程跑同一套件，并比对 passed/failed/skipped/errors 等整测试结果。`test:parallel-proof` 是这条串行复核产生的证明收据概念，不会再重复执行第三次完整套件；subtest 断言数可以不同，但整测试结果必须一致。
+普通并行门禁只运行一次 suite。需要证明与串行等价时显式追加 `-ProveParallel`：`test` 并行跑一次，`test:serial-recheck` 再按单进程跑同一套件，并比对 passed/failed/skipped/errors 等整测试结果。`test:parallel-proof` 是这条串行复核产生的证明收据概念，不会再重复执行第三次完整套件；subtest 断言数可以不同，但整测试结果必须一致。
 
-两条腿全过后结果记到 `outputs/gates/receipts/parallel-proof.json`。之后同一棵树会复用匹配的 test receipt；回执缺失或失效时才走并行单腿，不再做串行比对。已经用串行跑过同一棵树时可显式跳过字节比对：
+两条腿全过后结果记到 `outputs/gates/receipts/parallel-proof.json`。之后同一棵树会复用匹配的 test receipt；显式使用 `-ProveParallel` 时，已有 proof receipt 会跳过串行复核。普通 `-RunParallel` 不要求 proof receipt：
 
 ```powershell
-.\scripts\run_gates.ps1 -Profile Full -RunParallel -ReuseReceipts
+.\scripts\run_gates.ps1 -Profile Full -RunParallel -ProveParallel -ReuseReceipts
 ```
 
 `-RunParallel` 是请求而非承诺：解释器里没有 `pytest-xdist` 时自动退回串行，不改变门禁结论。并行运行会给每个 worker 独立 TEMP（`outputs/gates/tmp/run-<id>/<worker>`，收尾删除）；每次 gate 都使用新的 run 目录，旧 worker 的延迟清理不会与新一轮冲突。
@@ -460,7 +460,7 @@ Full 会把测试腿和 Linux 文件系统基线腿结果记成回执，放在 `
 .\scripts\run_gates.ps1 -RunDependencyAudit
 ```
 
-这会额外执行 `pip check` 与 `scripts/dependency_audit.py`（对门禁解释器里实际安装的包做审计，含 dev extra 与传递依赖；`pip`/`setuptools`/`wheel` 与本仓 editable 自身排除在外），要求隔离项目 Python。常规 CI 只在静态组合执行依赖审计；Runtime 兼容性矩阵覆盖 Windows/Ubuntu 与 Python 3.11/3.13 的四个组合。
+这会额外执行 `pip check` 与 `scripts/dependency_audit.py`（对门禁解释器里实际安装的包做审计，含 dev extra 与传递依赖；`pip`/`setuptools`/`wheel` 与本仓 editable 自身排除在外），要求隔离项目 Python。常规 CI 只在静态组合执行依赖审计；Runtime 兼容性矩阵在 Windows/Ubuntu 的 Python 3.11 组合运行完整 suite，在 Python 3.13 组合运行 launcher 核心兼容性 smoke。
 
 ## 真实 SSH 集成
 

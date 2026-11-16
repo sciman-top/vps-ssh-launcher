@@ -342,7 +342,7 @@ Unified local quality gate:
 
 The default `Auto` profile picks the gate from `git diff`: anything under `vps_ssh_launcher/`, `scripts/`, the entry scripts, `pyproject.toml` or the CI workflows runs the equivalent of `Full`; test-only or doc-only changes stay `Focused`; a documentation-only change just runs `git diff --check` and `scripts/check_docs.py`; a clean working tree reports `NoChanges` without repeating the full gate; any unrecognised path falls back to `Full`. `-Profile Full` still works explicitly.
 
-`Full` executes an installed-package import check, the catalog consistency check (`contract:catalog`), pytest, Bandit, Ruff lint/format, and Mypy. CI runs the static scope once and keeps pytest on both Windows and Ubuntu; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
+`Full` executes an installed-package import check, the catalog consistency check (`contract:catalog`), pytest, Bandit, Ruff lint/format, and Mypy. With `-RunParallel`, pytest runs once in the parallel lane; add `-ProveParallel` only when a serial recheck is needed. CI runs the static scope once, runs the full suite on Windows and Ubuntu with Python 3.11, and uses a focused launcher compatibility smoke on Python 3.13; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
 
 `Focused` accepts a Python file or directory. For source changes, pass the relevant tests explicitly in the same `-FocusPath` list; a single `test_*.py` runs only that file. Changes to `tests/conftest.py` or another test support module widen the behavior leg to `pytest tests` because they affect collection and fixtures. A source-only list still receives Ruff, format, and Mypy checks.
 
@@ -356,12 +356,12 @@ Almost all of the Full wall clock is pytest: the static legs add up to about fou
 
 Four workers by default (`-MaxWorkers`, 2 through 32) distributed per file with `--dist loadfile`: test files share no in-process state, only fixtures inside a file do. Parallelism changes how the suite runs, never what it asserts.
 
-A parallel result only replaces the serial one once it is proven equivalent: `test` runs the suite in parallel, and `test:serial-recheck` runs the same suite one process at a time and compares passed/failed/skipped/errors at the whole-test level. `test:parallel-proof` names the receipt produced by that serial recheck; it no longer runs a third copy of the full suite. Subtest assertion counts may differ, but whole-test outcomes must match.
+The normal parallel gate runs the suite once. Add `-ProveParallel` when you need an equivalence check: `test` runs the suite in parallel, and `test:serial-recheck` runs the same suite one process at a time and compares passed/failed/skipped/errors at the whole-test level. `test:parallel-proof` names the receipt produced by that serial recheck; it no longer runs a third copy of the full suite. Subtest assertion counts may differ, but whole-test outcomes must match.
 
-After both runs pass, the result is recorded in `outputs/gates/receipts/parallel-proof.json`. Later runs on the same tree reuse a matching test receipt; if that receipt is missing or stale, they run the parallel lane without another serial comparison. When the serial lane has already run against this tree, skip the byte comparison explicitly:
+After both runs pass, the result is recorded in `outputs/gates/receipts/parallel-proof.json`. Later `-ProveParallel` runs on the same tree reuse a matching proof receipt; ordinary `-RunParallel` runs do not require one:
 
 ```powershell
-.\scripts\run_gates.ps1 -Profile Full -RunParallel -ReuseReceipts
+.\scripts\run_gates.ps1 -Profile Full -RunParallel -ProveParallel -ReuseReceipts
 ```
 
 `-RunParallel` is a request, not a promise: without `pytest-xdist` installed the gate falls back to serial and still gives the same answer. A parallel run gives every worker its own TEMP (`outputs/gates/tmp/run-<id>/<worker>`, removed at the end), and each gate invocation gets a fresh run leaf so stale worker cleanup cannot collide with a new run.
@@ -568,8 +568,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -Profile Ful
 It only adds `--cov=vps_ssh_launcher --cov=scripts` with a `term-missing` report; no
 threshold, no blocking. Locate slow tests with `pytest -q --durations=15 --durations-min=3`
 (the longest single test is about 11s; the full suite lasts roughly 4.5 minutes). Full can
-enable xdist with `-RunParallel`; workers receive private TEMP roots and the parallel result
-must match the serial recheck before it is reused.
+enable xdist with `-RunParallel`; workers receive private TEMP roots. The normal parallel
+gate runs once; add `-ProveParallel` when an equivalence receipt is required.
 
 ## 🩺 Troubleshooting, Forensics & Evidence Boundaries
 

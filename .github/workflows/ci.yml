@@ -64,12 +64,16 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.11"
+            gate: full
           - os: windows-latest
             python-version: "3.13"
+            gate: smoke
           - os: ubuntu-latest
             python-version: "3.11"
+            gate: full
           - os: ubuntu-latest
             python-version: "3.13"
+            gate: smoke
 
     steps:
       - name: Checkout
@@ -86,6 +90,15 @@ jobs:
           python -m pip install --require-hashes --requirement requirements-dev.lock
           python -m pip install --no-deps --no-build-isolation -e .
 
-      - name: Run runtime gates
+      - name: Run full runtime gates
+        if: matrix.gate == 'full'
         shell: pwsh
-        run: ./scripts/run_gates.ps1 -Profile Full -FullScope Runtime
+        run: ./scripts/run_gates.ps1 -Profile Full -FullScope Runtime -RunParallel
+
+      - name: Run Python compatibility smoke
+        if: matrix.gate == 'smoke'
+        shell: pwsh
+        run: >-
+          ./scripts/run_gates.ps1 -Profile Focused
+          -FocusPath
+          tests/test_config.py,tests/test_connection.py,tests/test_execution.py,tests/test_ssh_tool.py

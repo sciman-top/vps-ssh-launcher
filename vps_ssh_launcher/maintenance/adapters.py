@@ -54,8 +54,8 @@ def execute_action(
     command = spec.build_command(pin)
 
     code, stdout, stderr = executor(command)
-    marker_lines = {line.strip() for line in f"{stdout}\n{stderr}".splitlines()}
-    if code == 75 and "MAINTENANCE_BUSY" in marker_lines:
+    all_marker_lines = {line.strip() for line in f"{stdout}\n{stderr}".splitlines()}
+    if code == 75 and "MAINTENANCE_BUSY" in all_marker_lines:
         raise MaintenanceBusy(
             "Host busy: another maintenance job holds the maintenance lock; "
             "no remote change was attempted."
@@ -69,7 +69,7 @@ def execute_action(
     # stderr receipt widens ONLY the refusal check: apply/rollback markers
     # keep their historical stdout-only contract.
     stdout_lines = stdout.splitlines()
-    marker_lines = (
+    stdout_receipt = (
         {stdout_lines[-1].strip()}
         if stdout_lines and stdout_lines[-1].strip()
         else set()
@@ -80,18 +80,18 @@ def execute_action(
         if stderr_lines and stderr_lines[-1].strip()
         else set()
     )
-    if "APPLY_REFUSED_BEFORE_MUTATION" in (marker_lines | stderr_receipt):
+    if "APPLY_REFUSED_BEFORE_MUTATION" in (stdout_receipt | stderr_receipt):
         return AdapterResult(
             "refused_before_mutation",
             "Remote adapter refused the change before any mutation; the host "
             "is untouched and the pin mismatch needs manual review.",
         )
-    if code == 0 and "APPLY_VERIFIED" in marker_lines:
+    if code == 0 and "APPLY_VERIFIED" in stdout_receipt:
         return AdapterResult(
             "verified",
             "Remote adapter completed and read back the target state.",
         )
-    if "ROLLBACK_VERIFIED" in marker_lines:
+    if "ROLLBACK_VERIFIED" in stdout_receipt:
         return AdapterResult(
             "rolled_back",
             "Remote adapter failed; its scoped rollback was verified.",
