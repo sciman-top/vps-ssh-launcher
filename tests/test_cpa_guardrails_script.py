@@ -3,6 +3,7 @@
 import ast
 import base64
 import datetime
+import http.server
 import json
 import hashlib
 import os
@@ -22,6 +23,7 @@ from cpa_catalog_expectations import (
 from script_validation_support import (
     ScriptValidationMixin,
     read_guardrail_source,
+    server_thread,
 )
 
 
@@ -248,22 +250,159 @@ docker() {{
         )[0]
         self.assertNotIn("mark_fail", ban_section)
         self.assertIn("this is an observation, not a gate", ban_section)
+
+        # Behavioural probes (21e1ac5 sentinel pattern) instead of pins on the
+        # hashing/pipeline spelling: the real credential label pipeline is
+        # extracted and executed on fixtures.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for the ban-signal pipeline probe")
+        pipeline_head = next(
+            line
+            for line in ban_section.splitlines()
+            if line.startswith("python3 - \"$BAN_TMP\" <<'PY'")
+        )
+        python_body = ban_section.split(pipeline_head + "\n", 1)[1].split("\nPY\n", 1)[
+            0
+        ]
+
+        def run_label_pipeline(labels: list[str]) -> str:
+            """Run the real credential_ban_signal pipeline over a fixture log."""
+            with tempfile.TemporaryDirectory() as directory:
+                ban_log = Path(directory) / "ban.log"
+                ban_log.write_text(
+                    "".join(
+                        f"invalid_grant account restricted auth_file=oauth/{label}\n"
+                        for label in labels
+                    ),
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                executable = str(Path(sys.executable).as_posix())
+                harness = (
+                    "set -euo pipefail\n"
+                    f'PYTHON_BIN="{executable}"\n'
+                    'python3() { "$PYTHON_BIN" "$@"; }\n'
+                    f'BAN_TMP="{ban_log.as_posix()}"\n'
+                    + pipeline_head
+                    + "\n"
+                    + python_body
+                    + "\nPY\n"
+                )
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", harness),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout
+
         # Credential labels must be hashed like the oauth-monitor section:
         # auth files are named after accounts, so a raw filename would put
         # account emails into the doctor output while the attribution
         # itself survives the hash.
-        self.assertIn("from hashlib import sha256", ban_section)
-        self.assertIn("sha256(label.encode()).hexdigest()[:8]", ban_section)
-        # The hash must sit inside the signal-print pipeline itself, not in
-        # a side branch: `python3 - <<'PY' | sort | uniq -c ...` feeding the
-        # credential_ban_signal printf.
-        self.assertIn(
-            "<<'PY' | sort | uniq -c | sort -rn | head -n 8",
-            ban_section,
+        labels = [f"user-{index}@gmail.com.json" for index in range(10)]
+        output = run_label_pipeline(["repeat-me@gmail.com.json"] * 3 + labels)
+        signal_lines = [
+            line
+            for line in output.splitlines()
+            if line.startswith("credential_ban_signal=")
+        ]
+        # The pipeline aggregates inside the signal print itself (bounded
+        # top-8, descending counts), not in a side branch.
+        self.assertLessEqual(len(signal_lines), 8)
+        self.assertGreaterEqual(len(signal_lines), 8)
+        self.assertTrue(
+            all(
+                re.fullmatch(r"credential_ban_signal=\d+ x [0-9a-f]{8}", line)
+                for line in signal_lines
+            ),
+            signal_lines,
         )
+        counts = [int(line.split("=", 1)[1].split(" ", 1)[0]) for line in signal_lines]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        self.assertEqual(counts[0], 3)
+        # The account email itself never reaches the doctor output.
+        self.assertNotIn("gmail.com", output)
+        self.assertNotIn("auth_file=", output)
+
         # The auth_index token sits inside parentheses; a plain $i never matches,
-        # which is how the first draft reported zero credentials.
-        self.assertIn("gsub(/[()]/,", source)
+        # which is how the first draft reported zero credentials. The real awk
+        # aggregation must strip them and print the attributed pair counts.
+        subst_section = source.split('echo "==model-substitution-by-credential=="', 1)[
+            1
+        ].split('echo "==syntax=="', 1)[0]
+        pipeline_tail = '"$SUBST_ALL_TMP" | sort | uniq -c | sort -rn | head -n 6 \\\n'
+        awk_start = subst_section.rindex(
+            "awk '{", 0, subst_section.index(pipeline_tail)
+        )
+        printf_index = subst_section.index('printf "model_substitution_credential=')
+        awk_pipeline = subst_section[
+            awk_start : subst_section.index("\n", printf_index)
+        ]
+
+        def run_credential_pipeline(lines: list[str]) -> list[str]:
+            with tempfile.TemporaryDirectory() as directory:
+                subst_log = Path(directory) / "subst.log"
+                subst_log.write_text(
+                    "".join(line + "\n" for line in lines),
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                harness = (
+                    "set -euo pipefail\n"
+                    f'SUBST_ALL_TMP="{subst_log.as_posix()}"\n' + awk_pipeline + "\n"
+                )
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", harness),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return [
+                    line.strip() for line in result.stdout.splitlines() if line.strip()
+                ]
+
+        warn = (
+            'upstream served model "{served}" for requested model "{requested}" '
+            "(auth_index={idx})"
+        )
+        attributed = run_credential_pipeline(
+            [
+                warn.format(
+                    served="gemini-3.8-flash-n",
+                    requested="gemini-3.8-flash-high",
+                    idx="a64956265d0f4506",
+                ),
+                warn.format(
+                    served="gemini-3.8-flash-n",
+                    requested="gemini-3.8-flash-high",
+                    idx="a64956265d0f4506",
+                ),
+                warn.format(
+                    served="gpt-5.6-terra",
+                    requested="gpt-5.6-terra",
+                    idx="0123abcdef",
+                ),
+            ]
+        )
+        self.assertEqual(
+            attributed,
+            [
+                "model_substitution_credential=2 x a64956265d0f4506 "
+                "gemini-3.8-flash-n for requested model gemini-3.8-flash-high",
+                "model_substitution_credential=1 x 0123abcdef "
+                "gpt-5.6-terra for requested model gpt-5.6-terra",
+            ],
+        )
         # Coverage must be scoped to the lane it describes, not every provider.
         self.assertIn("grep -c 'auth=antigravity-'", source)
 
@@ -2468,14 +2607,10 @@ except Exception as exc:
             source,
         )
         self.assertIn("$admissionRequestGuardHeadDeployedText", source)
-        self.assertIn(
-            'foreach ($argument in @("-C", $repoRoot, "show", $gitPath)) {',
-            source,
-        )
-        self.assertIn(
-            "[void]$startInfo.ArgumentList.Add($argument)",
-            source,
-        )
+        # The HEAD anchor itself is the mechanism (the helpers are probed
+        # behaviourally by test_head_blob_helpers_anchor_to_committed_bytes:
+        # committed generation, argument-list invocation, fail-closed miss).
+        self.assertIn('"HEAD:$(', source)
         self.assertIn("function Get-HeadBlobBytes", source)
         self.assertIn(
             "$projectionHeadSha256[$entry.Key] = Get-HeadBlobSha256 $entry.Key",
@@ -2668,6 +2803,92 @@ except Exception as exc:
         # into a phantom contract failure.
         self.assertNotIn("$admissionIntegrityPinText.Trim()", source)
 
+    def test_head_blob_helpers_anchor_to_committed_bytes(self) -> None:
+        """Run the real HEAD-blob helpers against a fixture git repository.
+
+        The projection drift gate is only as trustworthy as these helpers:
+        they must return the committed generation (never the working tree,
+        where a parallel session may hold uncommitted edits), pass repo
+        paths to git as argv elements so quoting can never reinterpret a
+        path with spaces, and fail closed on a path absent from HEAD.
+        """
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        source = read_guardrail_source()
+        helpers = source[
+            source.index("function Get-HeadBlobBytes") : source.index(
+                "$admissionIntegrityPinHeadValue = Get-HeadBlobText"
+            )
+        ]
+        committed = "committed generation\n"
+        space_committed = "space path generation\n"
+        expected_hash = hashlib.sha256(committed.encode("utf-8")).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "fixture-repo"
+            notes = repo / "notes"
+            notes.mkdir(parents=True)
+            (notes / "plain.txt").write_text(committed, encoding="utf-8", newline="\n")
+            (notes / "with space.txt").write_text(
+                space_committed, encoding="utf-8", newline="\n"
+            )
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": str(root / "gitconfig")}
+
+            def git(*args: str) -> None:
+                subprocess.run(
+                    ["git", "-C", repo.as_posix(), *args],
+                    capture_output=True,
+                    check=True,
+                    env=env,
+                )
+
+            git("init")
+            git("add", ".")
+            git(
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-m",
+                "fixture generation",
+            )
+            # A parallel session holds uncommitted working-tree edits.
+            (notes / "plain.txt").write_text(
+                "dirty working tree\n", encoding="utf-8", newline="\n"
+            )
+            script = (
+                f"$repoRoot = '{repo.as_posix()}'\n" + helpers + "\n"
+                'Write-Output ("TEXT=" + (Get-HeadBlobText '
+                '-RepoRelativePath "notes/plain.txt"))\n'
+                'Write-Output ("HASH=" + (Get-HeadBlobSha256 '
+                '-RepoRelativePath "notes/plain.txt"))\n'
+                "$spaceBytes = Get-HeadBlobBytes "
+                '-RepoRelativePath "notes/with space.txt"\n'
+                'Write-Output ("SPACE=" + '
+                "[Text.Encoding]::UTF8.GetString($spaceBytes))\n"
+                "try { $null = Get-HeadBlobText "
+                '-RepoRelativePath "notes/absent.txt" } '
+                "catch { Write-Output 'MISSING=THREW' }\n"
+            )
+            completed = subprocess.run(
+                [pwsh, "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(f"TEXT={committed}", completed.stdout)
+            self.assertNotIn("dirty working tree", completed.stdout)
+            self.assertIn(f"HASH={expected_hash}", completed.stdout)
+            self.assertIn(f"SPACE={space_committed}", completed.stdout)
+            self.assertIn("MISSING=THREW", completed.stdout)
+
     def test_fork_binary_ledger_is_a_bare_sha256(self) -> None:
         root = Path(__file__).parents[1]
         ledger = (root / "scripts/remote/fork-binary.sha256").read_text(
@@ -2718,7 +2939,14 @@ except Exception as exc:
         self.assertIn("ROLLBACK admission_restart", apply_payload)
 
     def test_cpa_guardrails_apply_requires_idle_lanes_before_mutation(self) -> None:
-        """A busy lane must defer Apply without truncating its config backup."""
+        """A busy lane must defer Apply without truncating its config backup.
+
+        The preflight gate is probed, not spell-checked: the real
+        PY_PREFLIGHT block runs against a fixture healthz server (the pinned
+        URL and deadline are sentinel-replaced, 21e1ac5 pattern) and must
+        accept an idle snapshot while refusing inflight, pending, and
+        degraded lane states before any mutation happens.
+        """
 
         source = read_guardrail_source()
         apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
@@ -2734,20 +2962,166 @@ except Exception as exc:
         preflight_start = apply_payload.rindex("<<'PY_PREFLIGHT'", 0, preflight + 1)
         preflight_end = apply_payload.rindex("PY_PREFLIGHT\n", 0, preflight + 1)
         preflight_block = apply_payload[preflight_start:preflight_end]
-        self.assertIn("idle.get('status') != 'ok'", preflight_block)
-        self.assertIn("lane['state'].get('inflight')", preflight_block)
-        self.assertIn("lane['state'].get('pending')", preflight_block)
-        self.assertIn("deadline = time.monotonic() + 45", preflight_block)
-        self.assertIn("time.sleep(1)", preflight_block)
+        # Drop the heredoc opener so the block is directly executable Python.
+        preflight_block = preflight_block.split("<<'PY_PREFLIGHT'\n", 1)[1]
+        # The mechanism stays: a bounded polling deadline against the live
+        # healthz endpoint, not a one-shot read.
+        self.assertIn("urllib.request.urlopen(", preflight_block)
+        self.assertIn("time.monotonic()", preflight_block)
+        self.assertIn("time.sleep(", preflight_block)
+
+        class FixtureHealthz(http.server.BaseHTTPRequestHandler):
+            """Loopback healthz fixture; state swapped per refusal case."""
+
+            state: dict[str, Any] = {"status": "ok", "lanes": {}}
+
+            def do_GET(self) -> None:  # noqa: N802 - stdlib signature
+                body = json.dumps(self.state).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), FixtureHealthz)
+        poller = server_thread(server, "apply-preflight-healthz")
+        poller.start()
+        try:
+            block = preflight_block.replace(
+                "http://127.0.0.1:8318/healthz",
+                f"http://127.0.0.1:{server.server_port}/healthz",
+            ).replace(
+                # Bound the drain window the way the probe bounds the target
+                # path: the mechanism under test is the deadline, not its
+                # production value.
+                "time.monotonic() + 45",
+                "time.monotonic() + 2",
+            )
+
+            def run_preflight() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sys.executable, "-c", block],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    check=False,
+                )
+
+            FixtureHealthz.state = {
+                "status": "ok",
+                "lanes": {"chatgpt-oauth": {"state": {"inflight": 0, "pending": 0}}},
+            }
+            idle = run_preflight()
+            self.assertEqual(idle.returncode, 0, idle.stderr)
+
+            FixtureHealthz.state = {
+                "status": "ok",
+                "lanes": {"chatgpt-oauth": {"state": {"inflight": 1, "pending": 0}}},
+            }
+            inflight = run_preflight()
+            self.assertNotEqual(inflight.returncode, 0)
+            self.assertIn(contract, inflight.stderr)
+
+            FixtureHealthz.state = {
+                "status": "ok",
+                "lanes": {"chatgpt-oauth": {"state": {"inflight": 0, "pending": 2}}},
+            }
+            pending = run_preflight()
+            self.assertNotEqual(pending.returncode, 0)
+            self.assertIn(contract, pending.stderr)
+
+            FixtureHealthz.state = {"status": "degraded", "lanes": {}}
+            degraded = run_preflight()
+            self.assertNotEqual(degraded.returncode, 0)
+            self.assertIn(contract, degraded.stderr)
+        finally:
+            server.shutdown()
+            poller.join(timeout=5)
+            server.server_close()
 
     def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
+        """Run the real scan preamble against fixture logs over a small cap.
+
+        The 64 MiB production cap is sentinel-scaled to 64 KiB (21e1ac5
+        pattern) and the pinned log path to a fixture file. Truncation must
+        report its byte accounting, drop the partial boundary line, and scan
+        only whole lines; an under-cap log must scan everything unannounced.
+        """
         source = read_guardrail_source()
         doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        scan_start = doctor.index("scan_cap_bytes = ")
+        scan_end = doctor.index("for line in log_handle:", scan_start)
+        scan_block = doctor[scan_start:scan_end]
 
-        self.assertIn("scan_cap_bytes = 64 * 1024 * 1024", doctor)
-        self.assertIn("log_scan_truncated", doctor)
-        # The partial line at the truncation boundary must be dropped.
-        self.assertIn("log_handle.readline()", doctor)
+        def run_scan(log_path: Path) -> subprocess.CompletedProcess[str]:
+            probe = (
+                "from pathlib import Path\n"
+                + scan_block.replace("64 * 1024 * 1024", "64 * 1024").replace(
+                    "Path('/var/log/nginx/cpa_gateway.access.log')",
+                    f"Path({log_path.as_posix()!r})",
+                )
+                + "scanned = 0\n"
+                "first_line = None\n"
+                "for line in log_handle:\n"
+                "    scanned += 1\n"
+                "    if first_line is None:\n"
+                "        first_line = line\n"
+                "print('SCAN_PROBE scanned=%d first=%r' % (scanned, first_line))\n"
+            )
+            return subprocess.run(
+                [sys.executable, "-c", probe],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            small = root / "small-access.log"
+            small.write_text(
+                "".join(f"L{i:04d}: {'x' * 93}\n" for i in range(5)),
+                encoding="utf-8",
+                newline="\n",
+            )
+            small_run = run_scan(small)
+            self.assertEqual(small_run.returncode, 0, small_run.stderr)
+            self.assertNotIn("log_scan_truncated", small_run.stdout)
+            self.assertIn("SCAN_PROBE scanned=5", small_run.stdout)
+
+            oversized = root / "oversized-access.log"
+            # Each record is exactly 100 bytes (7-char prefix + 92 x + LF) so
+            # the cap boundary lands at a computable record offset.
+            oversized.write_text(
+                "".join(f"L{i:04d}: {'x' * 92}\n" for i in range(1000)),
+                encoding="utf-8",
+                newline="\n",
+            )
+            total = oversized.stat().st_size
+            self.assertEqual(total, 100_000)
+            cap = 64 * 1024
+            boundary = total - cap
+            truncated = run_scan(oversized)
+            self.assertEqual(truncated.returncode, 0, truncated.stderr)
+            self.assertIn(
+                f"log_scan_truncated total_bytes={total} scanned_bytes={cap}",
+                truncated.stdout,
+            )
+            # The boundary lands mid-line (offset 34464 is inside L0344), so
+            # the partial remnant must be dropped and the first scanned line
+            # is the complete L0345 record.
+            self.assertGreaterEqual(boundary % 100, 1)
+            self.assertIn(
+                "SCAN_PROBE scanned=655 first='L0345: ",
+                truncated.stdout,
+            )
 
     def test_cpa_guardrails_doctor_observes_updater_timer_freshness(self) -> None:
         source = read_guardrail_source()
@@ -3098,8 +3472,6 @@ foreach ($case in @(
         # The wrapper must settle, then retry exactly once, at both call
         # sites (forward check and rollback verification).
         self.assertIn("assert_path_route_contract_settled", payload)
-        self.assertIn("sleep 2", payload)
-        self.assertIn("sleep 4", payload)
         self.assertEqual(payload.count("assert_path_route_contract_settled"), 3)
         self.assertIn(
             "|| rollback_failed=1",
@@ -3107,6 +3479,104 @@ foreach ($case in @(
         )
         # The raw assertion stays a pure single-shot probe.
         self.assertIn("assert_path_route_contract() {", payload)
+
+        # Behavioural probe: the real wrapper runs against stubbed curl/ss.
+        # The settle windows stay mechanism-level (bounded sleeps before the
+        # first attempt and before the single retry) without pinning the
+        # durations; the probe proves the retry happens at most once.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for the settle-wrapper probe")
+        raw_fn = (
+            "assert_path_route_contract() {"
+            + payload.split("assert_path_route_contract() {", 1)[1].split("\n}\n", 1)[0]
+            + "\n}\n"
+        )
+        settled_body = payload.split("assert_path_route_contract_settled() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        self.assertIn("sleep ", settled_body)
+        settled_fn = (
+            "assert_path_route_contract_settled() {"
+            + settled_body.replace("sleep 2", "sleep 0").replace("sleep 4", "sleep 0")
+            + "\n}\n"
+        )
+        active_path = "abcdef0123456789"
+        old_path = "0000000000000000"
+
+        def run_settled(
+            active_first: str, active_second: str
+        ) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as directory:
+                conf = Path(directory) / "cpa-site.conf"
+                conf.write_text(
+                    "server {\n  server_name example.com;\n}\n",
+                    encoding="utf-8",
+                )
+                calls_file = Path(directory) / "probe-calls"
+                stub = (
+                    "curl() {\n"
+                    '  local url="${*: -1}"\n'
+                    '  local calls=$(( $(cat "$PROBE_CALLS") + 1 ))\n'
+                    '  printf %s "$calls" > "$PROBE_CALLS"\n'
+                    "  local code\n"
+                    '  case "$url" in\n'
+                    f'    *"/{active_path}/v1/models")\n'
+                    f'      if [ "$calls" -le 4 ]; then code={active_first!r}; '
+                    f"else code={active_second!r}; fi ;;\n"
+                    "    *) code=404 ;;\n"
+                    "  esac\n"
+                    '  printf %s "$code"\n'
+                    "}\n"
+                    # Mimic the real ss column layout: the doctor greps for
+                    # the listen address followed by whitespace, and GNU grep
+                    # can never match the line's own trailing newline.
+                    'ss() { printf "LISTEN 0 128 0.0.0.0:8443 0.0.0.0:*\\n"; }\n'
+                )
+                script_text = (
+                    "set -u\n"
+                    f'PROBE_CALLS="{calls_file.as_posix()}"\n'
+                    ': > "$PROBE_CALLS"\n'
+                    f'NGINX_CONF="{conf.as_posix()}"\n'
+                    + stub
+                    + raw_fn
+                    + settled_fn
+                    + "\n"
+                    f'if assert_path_route_contract_settled "{active_path}" '
+                    f'"{old_path}"; then\n'
+                    '  echo "SETTLED_RC=0"\n'
+                    "else\n"
+                    '  echo "SETTLED_RC=$?"\n'
+                    "fi\n"
+                    'echo "PROBE_CALLS=$(cat "$PROBE_CALLS")"\n'
+                )
+                return subprocess.run(
+                    self._bash_command(bash, "-c", script_text),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    check=False,
+                )
+
+        # A settled reload passes on the first round: exactly one probe round.
+        steady = run_settled("401", "401")
+        self.assertEqual(steady.returncode, 0, steady.stderr)
+        self.assertIn("SETTLED_RC=0", steady.stdout)
+        self.assertIn("PROBE_CALLS=4", steady.stdout)
+
+        # A probe that lands during worker turnover fails once, then the
+        # single retry passes: exactly two rounds, no third.
+        flaky = run_settled("000", "401")
+        self.assertEqual(flaky.returncode, 0, flaky.stderr)
+        self.assertIn("SETTLED_RC=0", flaky.stdout)
+        self.assertIn("PROBE_CALLS=8", flaky.stdout)
+
+        # A genuine outage fails closed, still after exactly one retry.
+        outage = run_settled("000", "000")
+        self.assertIn("SETTLED_RC=1", outage.stdout)
+        self.assertIn("PROBE_CALLS=8", outage.stdout)
 
     def test_cpa_oauth_luna_deactivation_is_explicit_and_credential_destructive(
         self,
@@ -3530,18 +4000,62 @@ foreach ($case in @(
         """The post-mutation public-route greps keep their named ROLLBACK
         reasons reachable: the EXIT trap restores either way, but only a
         ``|| true`` guard lets the specific reason print instead of dying
-        silently at the assignment."""
+        silently at the assignment.
+
+        Behavioural probe: the real read lines extracted from the apply
+        payload run under ``set -euo pipefail`` against fixture nginx confs.
+        A dropped ``|| true`` (grep exits 1 on a conf without the path) would
+        abort before the named reason and turn this red.
+        """
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for the route-read probe")
         source = read_guardrail_source()
-        self.assertIn(
-            "PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' \"$NGINX_CONF\" | head -n 1 "
-            "| cut -d/ -f2 || true)",
-            source,
+        apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        readers = [
+            line
+            for line in apply_payload.splitlines()
+            if line.startswith(("PREFIX=$(grep", "RANDOM_PATH_AFTER=$(grep"))
+        ]
+        self.assertEqual(len(readers), 2)
+        for reader in readers:
+            # The read itself must stay failure-tolerant: the conf may lack
+            # the pattern entirely, and the guard reason must stay reachable.
+            self.assertIn("|| true)", reader)
+
+        def run_reads(conf_text: str) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as directory:
+                conf = Path(directory) / "cpa-site.conf"
+                conf.write_text(conf_text, encoding="utf-8", newline="\n")
+                script_text = (
+                    "set -euo pipefail\n"
+                    f'NGINX_CONF="{conf.as_posix()}"\n'
+                    + "\n".join(readers)
+                    + "\necho 'ROLLBACK gateway_throttle_contract'\n"
+                    'echo "CAPTURED:$PREFIX:$RANDOM_PATH_AFTER"\n'
+                )
+                return subprocess.run(
+                    self._bash_command(bash, "-c", script_text),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    check=False,
+                )
+
+        projected = run_reads(
+            "# managed by cpa-guardrail-apply\n"
+            "location ~ ^/0123456789abcdef/v1/ { return 401; }\n"
         )
-        self.assertIn(
-            "RANDOM_PATH_AFTER=$(grep -oE '/[0-9a-f]{16}/v1/' \"$NGINX_CONF\" "
-            "| head -n 1 | cut -d/ -f2 || true)",
-            source,
-        )
+        self.assertEqual(projected.returncode, 0, projected.stderr)
+        self.assertIn("ROLLBACK gateway_throttle_contract", projected.stdout)
+        self.assertIn("CAPTURED:0123456789abcdef:0123456789abcdef", projected.stdout)
+
+        pathless = run_reads("server {\n  listen 443 ssl;\n}\n")
+        self.assertEqual(pathless.returncode, 0, pathless.stderr)
+        self.assertIn("ROLLBACK gateway_throttle_contract", pathless.stdout)
+        self.assertIn("CAPTURED::", pathless.stdout)
 
     def test_cpa_oauth_quarantine_is_reversible_and_non_destructive(self) -> None:
         source = read_guardrail_source()
