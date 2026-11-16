@@ -87,6 +87,11 @@ class MaintenanceLockRegistryTests(unittest.TestCase):
             "system_maintenance_cron.ps1",
             "v2ray_agent_renewtls_cron.ps1",
             "v2ray-agent-script-update.sh",
+            # The fork rebuild compiles on the host for tens of minutes and then
+            # writes a build product another lane may consume; a drill override
+            # would let a maintenance run and a rebuild hold the fleet lock at
+            # the same time.
+            "cpa_fork_rebuild.ps1",
         }
         found: set[str] = set()
         for path, text in _script_texts():
