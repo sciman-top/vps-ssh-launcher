@@ -914,6 +914,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 - 同一任务的 Full、CI 或 lane receipt 只收集一次；修复后先验证真实失败，再做一次最终收口，不重复完整全套。历史追溯用的旧证据应迁往仓外归档或只读归档分支。
 - **交接书**：[20261108-bwg-cpa-handoff.md](docs/change-evidence/20261108-bwg-cpa-handoff.md)。接手 CPA 风控/性能工作时**先读这一篇**：它记录当前真实状态、可直接复用的结论、已更正的错误归因、未完成项（P1 arena 碎片 / P2 容器内存记账 / P3 v8.0.60 / P4 客户端行为），以及本会话踩过的操作陷阱与明确的禁止清单。
 - **最新增量复审**：[20261115-bwg-cpa-risk-review.md](docs/change-evidence/20261115-bwg-cpa-risk-review.md)。封号潮再起后的只读复审：24h 零账号级信号、6004 的 CN/INTL 跨 realm 扩散量化、缓存命中率的探活人口污染、以及大上下文会话的冷重启形态。**读交接书之后读这一篇**，它只写增量，不推翻交接书。
+- **多账号全线复审（最新）**：[20261116-bwg-cpa-multi-account-risk-review.md](docs/change-evidence/20261116-bwg-cpa-multi-account-risk-review.md)。覆盖全部 OAuth lane 与 API key 渠道：凭据计数更正（Antigravity 4 份）、长期日志窗零账号级信号、6004 池化别名放大在 admission 层的收窄修复、Gemini `RESOURCE_EXHAUSTED` 容量缺口、以及 `v8.0.61→v8.0.75` 与首字延迟的对应关系。
 
 ---
 
@@ -940,6 +941,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cpa-manual-rollback.md](docs/runbooks/cpa-manual-rollback.md) | CPA 部署版本、配置清单与投影环境的人工回滚方案 |
 | | [cpa-observed-baselines-and-upstream-log.md](docs/runbooks/cpa-observed-baselines-and-upstream-log.md) | 上游请求基线数据观测与延迟行为基准对照 |
 | | [cpa-context-speed-budget.md](docs/runbooks/cpa-context-speed-budget.md) | 上下文长度与吐字速度实测拆解、客户端可调项与已否决的"加速"方案 |
+| | [cpa-model-account-multi-channel.md](docs/runbooks/cpa-model-account-multi-channel.md) | 多 OAuth 账号 + 多 API key 渠道组合：封号/限流/降智/吐字四类风险的信号判读、作用域归属与操作纪律 |
 | | [cpa-fork-image-derivation-rfc.md](docs/runbooks/cpa-fork-image-derivation-rfc.md) | 派生镜像收敛决策记录、二进制指纹台账与 doctor 运行时一致性门禁（已实施） |
 | **客户端与 Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | 本地 Cockpit Sidecar 并发限制、等待上限（45s）与契约验收 |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |

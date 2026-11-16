@@ -67,6 +67,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `codex-key-exclusion-violation` | fail | `(gpt 路由 ∪ oauth alias) ⊆ codex_api_key_exclusions` | 防订阅模型被共享 API key 承载 |
 | `lane-route-coverage-missing` | fail | 每条声明 `admission_lane` 的路由其**全部** alias 都在该 lane 的 `models` 里；且该 lane 确实存在 | 清单声明"走共享账号"，lane 才是限流的实现。两者之间没有别的联接：在路由上新增一个没进 lane 的名字 = 这个名字**无并发上限、无容量熔断**地打共享账号，正是自伤封号的形状 |
 | `capacity-probe-window` | warn | `probe_bytes >= 262144` | 非流式响应检查有界前缀；SSE 逐事件检查，单事件受同一上限约束，流总长度不再截断错误检测。超大事件不能证明恢复成功 |
+| `lane-pooled-model-scope` | 实现约束（由 `tests/test_cpa_policy_runtime.py` 钉住，不在审计器内） | `pooled_models ⊆ models`，且名字确实被 `pooled_aliases` 登记 | 池化别名同时由第二个 provider 承载时，按模型名判 lane 会把唯一备份路由一起冻住（2026-11-16：6004 一次冷却同时删掉 WorkBuddy 与 OpenCode）。`pooled_models` 让 admission 把这类信号收窄到模型作用域并按 300 s 封顶 |
+| `lane-gemini-capacity-marker` | 实现约束（由 `tests/test_cpa_policy_runtime.py` 钉住，不在审计器内） | `antigravity-oauth` 的容量判定必须覆盖 `resource_exhausted` | Google 的配额拒绝是 `RESOURCE_EXHAUSTED`，不含任何 `rate limit`/`quota exceeded` 字样；缺这条判据时配额耗尽会被当"非容量"透传给客户端，而车道保持打开继续打同一账号 |
 
 ## 3. 姿态半边（连接"宣告"与"实测"）
 

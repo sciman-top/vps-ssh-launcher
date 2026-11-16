@@ -73,6 +73,15 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # slow upstream costs a warm wait instead of a client abort plus a retry.
     ("requests", "streaming", "keepalive-seconds"): 15,
     ("requests", "streaming", "send-keepalive-before-ft"): True,
+    # Safe bootstrap retry: upstream resends a turn whose stream failed before
+    # the first byte reached the client. It is exactly the "never show a dead
+    # turn" behaviour that keeps a client from re-issuing the same request
+    # itself (each client retry is a fresh upstream spend against a shared
+    # account). Upstream default is 0/disabled; 1 is the value its own example
+    # config documents, so this is not a new posture -- it is the reviewed one
+    # written down. Complements the absence of `request-retry` (0) at the lane
+    # level: bootstrap retries stop once bytes are on the wire.
+    ("requests", "streaming", "bootstrap-retries"): 1,
     # Error request dumps can contain prompts, headers, and client keys. Keep
     # CPA's own retained-file cap small; the updater also enforces a 24h age
     # bound independently.

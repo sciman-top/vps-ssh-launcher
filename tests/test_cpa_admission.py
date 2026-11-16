@@ -76,6 +76,7 @@ workbuddy_6004_retry_after = cast(Any, MODULE["workbuddy_6004_retry_after"])
 completed_response_text_state = cast(Any, MODULE["completed_response_text_state"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
+oauth_risk_signal = cast(Any, MODULE["oauth_risk_signal"])
 shared_route_model_lanes = cast(Any, MODULE["_shared_route_model_lanes"])
 request_body_memory_limit = cast(
     int, MODULE["ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES"]
@@ -629,6 +630,92 @@ def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> 
         }
     ).encode()
     assert antigravity_risk_signal(200, restricted) == ("account_restricted", None)
+    # A Google client need not echo @type; the duration-shaped hint is still
+    # explicit provider evidence and must bound the lane's strict backoff.
+    untyped = json.dumps({"error": {"details": [{"retryDelay": "2m"}]}}).encode()
+    assert antigravity_risk_signal(429, untyped) == (None, 120)
+    # A single unwrapped detail object keeps its evidence instead of being
+    # dropped as "not a list".
+    unwrapped = json.dumps(
+        {
+            "error": {
+                "details": {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "TOS_VIOLATION",
+                }
+            }
+        }
+    ).encode()
+    assert antigravity_risk_signal(403, unwrapped) == ("account_restricted", None)
+    # Some transports flatten ErrorInfo onto the error object itself.
+    flat = json.dumps({"error": {"reason": "POLICY_VIOLATION"}}).encode()
+    assert antigravity_risk_signal(403, flat) == ("account_restricted", None)
+    # A flattened reason is uppercase on the wire; matching must not depend on
+    # the provider preserving case.
+    lower = json.dumps({"error": {"reason": "tos_violation"}}).encode()
+    assert antigravity_risk_signal(403, lower) == ("account_restricted", None)
+
+
+def test_gemini_resource_exhausted_cools_the_lane() -> None:
+    """Google's own quota verdict must reach the ladder before the exemptions.
+
+    RESOURCE_EXHAUSTED appears in none of the configured marker lists (no
+    "quota exceeded" / "rate limit" substring), so a 400- or 200-shaped wrapper
+    carried it past capacity_scope: the client saw the refusal while the lane
+    stayed open and kept spending the same account's quota.
+    """
+
+    config = load_config(
+        Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json",
+        route_manifest_path=ROUTE_MANIFEST_PATH,
+    )
+    lane_config = lane(config, "antigravity-oauth")
+    exhausted = json.dumps(
+        {
+            "error": {
+                "code": 400,
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "RESOURCE_EXHAUSTED",
+                    }
+                ],
+            }
+        }
+    ).encode()
+    assert capacity_scope(400, exhausted, None, lane_config) == "lane"
+    assert capacity_scope(200, exhausted, None, lane_config) == "lane"
+    # The marker is scoped to the lane it belongs to: no other lane declares
+    # it, so the guard cannot leak a Google verdict onto another provider.
+    for other in ("chatgpt-oauth", "zhipu-coding-plan"):
+        assert not any(
+            marker in lane(config, other)["capacity_markers"]
+            for marker in MODULE["GEMINI_CAPACITY_MARKERS"]
+        )
+
+
+def test_standing_restriction_markers_cover_every_durable_lane() -> None:
+    """A suspension outranks the recoverable shapes each lane lets through.
+
+    The transient-tolerance paths exist because a fallback leg can return a
+    rejection that looks like a bare 401/403. A standing restriction is the
+    provider saying the account is gone; letting it ride the capacity ladder
+    hides the state and keeps spending requests on a suspended account.
+    """
+
+    for lane_name in ("chatgpt-oauth", "workbuddy-oauth"):
+        body = json.dumps(
+            {"error": {"message": "Your account has been disabled.", "code": 403}}
+        ).encode()
+        assert oauth_risk_signal(lane_name, 403, body) == ("account_restricted", None)
+    # The recoverable shapes those lanes deliberately tolerate are unchanged.
+    assert oauth_risk_signal("chatgpt-oauth", 403, b"<html>denied</html>") == (
+        None,
+        None,
+    )
+    credits = json.dumps({"code": 6008, "msg": "Credits exhausted."}).encode()
+    assert oauth_risk_signal("workbuddy-oauth", 429, credits) == (None, None)
 
 
 @pytest.mark.parametrize(
@@ -1058,6 +1145,27 @@ def test_config_rejects_boolean_version(tmp_path: Path) -> None:
     with pytest.raises(
         ValueError, match="admission config must be a version 1 mapping"
     ):
+        load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
+
+
+def test_config_rejects_pooled_models_outside_the_lane(tmp_path: Path) -> None:
+    """A pooled declaration that names an unserved model would never match.
+
+    `pooled_models` narrows the capacity scope for a specific name; a typo
+    would silently leave the pooled alias on the lane-wide path again, so the
+    config load fails closed instead.
+    """
+
+    raw_config = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    workbuddy = next(
+        item for item in raw_config["lanes"] if item["name"] == "workbuddy-oauth"
+    )
+    workbuddy["pooled_models"] = ["deepseek-v4.1-flash-typo"]
+    config_path = tmp_path / "cpa-admission.json"
+    config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+    with pytest.raises(ValueError, match="pooled_models must be listed"):
         load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
 
 
@@ -6523,12 +6631,20 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
             finish.set()
             assert response.read() == b'{"code":6003,"msg":"frequency limited"} '
             deadline = time.monotonic() + 2
-            while not proxy.lanes["workbuddy-oauth"].snapshot()["cooldown_active"]:
+            while not proxy.lanes["workbuddy-oauth"].snapshot()["model_cooldowns"]:
                 assert time.monotonic() < deadline, (
                     "ladder cooldown not armed after EOF"
                 )
                 time.sleep(0.005)
-            assert proxy.lanes["workbuddy-oauth"].snapshot()["hold_reason"] is None
+            lane_state = proxy.lanes["workbuddy-oauth"].snapshot()
+            assert lane_state["hold_reason"] is None
+            # 6003 lands on the requested model, not on the whole alias: a
+            # lane-wide park here would also remove the OpenCode backup that
+            # serves the same pooled name (see capacity_scope / the pooled
+            # bound in the request path). The cooldown is still visible and
+            # bounded, and the disk state keeps no operator hold.
+            assert lane_state["cooldown_scope"] == "model"
+            assert 0 < lane_state["model_cooldowns"]["deepseek-v4.1-flash"] <= 300
             assert json.loads(path.read_text())["hold_reason"] is None
         finally:
             finish.set()

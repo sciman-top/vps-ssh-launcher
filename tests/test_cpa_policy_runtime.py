@@ -40,6 +40,53 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('retry_after["max-retry-credentials"] = 3', apply_source)
 
+    def test_safe_bootstrap_retry_is_pinned_once(self) -> None:
+        """A dead pre-first-byte stream must be retried once, not by the client.
+
+        Upstream defaults `requests.streaming.bootstrap-retries` to 0. Leaving it
+        unpinned meant every pre-first-byte failure surfaced to the client, which
+        then re-issued the same turn itself -- an extra upstream spend against a
+        shared account for a turn the gateway could have replayed safely. The
+        value stays 1: bootstrap retries stop as soon as a byte reaches the
+        client, and `routing.retry.request-retry` stays 0, so this cannot turn
+        into a retry loop.
+        """
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
+        self.assertEqual(
+            policy["EXPECTED_CONFIG_PATHS"][
+                ("requests", "streaming", "bootstrap-retries")
+            ],
+            1,
+        )
+
+    def test_gemini_capacity_marker_is_lane_scoped(self) -> None:
+        """RESOURCE_EXHAUSTED must cool the Antigravity lane, and only it.
+
+        The string appears in no capacity_markers list (there is no "quota
+        exceeded"/"rate limit" substring), so the classifier needed its own
+        marker. Pinning it here keeps a future lane edit from dropping the only
+        signal Google sends for a quota refusal.
+        """
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        admission = runpy.run_path(
+            str(repo_root / "scripts" / "remote" / "cpa-admission.py")
+        )
+        self.assertEqual(admission["GEMINI_CAPACITY_MARKERS"], ("resource_exhausted",))
+        manifest = json.loads(
+            (repo_root / "scripts" / "remote" / "cpa-admission.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lanes = {lane["name"]: lane for lane in manifest["lanes"]}
+        pooled = lanes["workbuddy-oauth"]["pooled_models"]
+        self.assertEqual(pooled, ["deepseek-v4.1-flash"])
+        self.assertTrue(set(pooled) <= set(lanes["workbuddy-oauth"]["models"]))
+
     def test_sidecar_projection_checks_installed_app_before_mutation(self) -> None:
         source = (
             Path(__file__).parents[1] / "scripts/cockpit_sidecar_guardrails.ps1"

@@ -153,6 +153,9 @@
       ],
       "zero_cost_models": [
         "hy4free"
+      ],
+      "pooled_models": [
+        "deepseek-v4.1-flash"
       ]
     }
   ]

@@ -1646,6 +1646,16 @@ if (
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
+# Safe bootstrap retry for streaming turns. Upstream defaults this to 0, so a
+# stream that failed before its first byte reached the client surfaced as a dead
+# turn and the client re-issued it -- a second upstream spend against a shared
+# account for work the gateway could have replayed itself. 1 is the value
+# upstream documents; it never fires after a byte is on the wire, and
+# routing.retry.request-retry stays 0 so this cannot become a retry loop.
+requests_streaming_after = requests_after.setdefault("streaming", {})
+if not isinstance(requests_streaming_after, dict):
+    raise SystemExit("REFUSE requests.streaming must be a mapping")
+requests_streaming_after["bootstrap-retries"] = 1
 requests_after["payload"] = {
     "override": [
         {

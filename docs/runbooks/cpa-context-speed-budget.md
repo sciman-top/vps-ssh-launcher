@@ -92,3 +92,25 @@ WorkBuddy 99%；修复前误报 45–49%，见 [cpa-gateway](cpa-gateway.md) 的
 | 给 WorkBuddy/Codex 开 `support-prompt-cache-key` | 该键只为 openai-compat provider 派生；Codex 执行器本就用 `prompt_cache_key` / session 派生键，开启后无收益，却会改变发往上游的请求形态 |
 | 调大 `queue_timeout` 或 Nginx `read_timeout` | 排队不发生在 admission；调大只会拉长最坏等待 |
 | 上游 `v8.0.60` 之外的本地补丁 | 上游已有正式修复（缓存前缀保持、连接归还），本地打补丁会与下次换芯冲突 |
+
+## 6. 2026-11-16 追加：首字延迟的上游修复与客户端会话锚点（`repo_verified`）
+
+本轮 `/healthz` 1h 窗口：缓存命中 91–96%（`gpt-6-luna` 96.0%），但
+`gpt-6-luna` 的 `first_text_ms` p90 仍是 **30.8 s**、max 85.3 s。命中率不是问题，
+**首字前的等待才是**。上游 `v8.0.61..v8.0.75` 里与这段等待直接相关的有两处：
+
+- `2c5b01f4`：Claude 默认传输关闭空闲连接复用（`MaxIdleConnsPerHost=-1`）并回滚
+  post-`message_stop` 的 body drain —— 已完成但未释放的连接不再把下一条请求挂在
+  同一个流后面。缺这条时表现为"上一条答完，下一条静默很久才出字"。
+- `84534584`：文档明确 **Merkle LCP 压缩匹配要求至少 2 轮相同尾部**。客户端若把
+  历史整体替换成摘要而不带 `X-Session-ID`，会话亲和就失去锚点，缓存与凭据一起漂移。
+
+**客户端可执行项（按收益）**：
+
+1. 长上下文压缩后**显式带 `X-Session-ID`**；纯摘要压缩不算"相同尾部"。
+2. 需要"接着聊"时用新会话 + 摘要，而不是在同一 `hash` 里换模型（11-15 §9.1 实测
+   13 次冷重启中 6 次是客户端会话内换模型）。
+3. 先跑 [冷重启归因探针](cpa-failure-triage.md) 再决定是否调参：没有归因的"提速"
+   都是猜。
+
+**仍不做**：任何改写前缀的中间层动作（§4 的否决不因本轮证据改变）。

@@ -320,6 +320,7 @@ class ScriptValidationMixin:
                     "streaming": {
                         "keepalive-seconds": 15,
                         "send-keepalive-before-ft": True,
+                        "bootstrap-retries": 1,
                     },
                 },
                 "routing": {

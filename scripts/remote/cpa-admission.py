@@ -448,6 +448,46 @@ WORKBUDDY_6004_RESET_RE = re.compile(
     r"(?P<date>\d{4}-\d{2}-\d{2})[ T]"
     r"(?P<time>\d{2}:\d{2}:\d{2})\s*UTC\+8"
 )
+# A standing account-level restriction, carried in prose rather than in a typed
+# error field. Every lane that can be suspended has returned this shape at some
+# point: ChatGPT/Codex, WorkBuddy/CodeBuddy, and Antigravity's PERMISSION_DENIED
+# wave. The list is applied to every durable lane so a suspension cannot reach
+# the capacity ladder (60/120/240/480/900 s) and be retried into a wider
+# enforcement response; see oauth_risk_signal.
+STANDING_RESTRICTION_MARKERS = (
+    "account has been suspended",
+    "account has been disabled",
+    "account is suspended",
+    "account is disabled",
+    "account suspended",
+    "account disabled",
+    "account_deactivated",
+    "account_deactivated_by_provider",
+)
+
+# Account-level suspension reasons carried in a Google ErrorInfo detail (the
+# shape Antigravity returned in the 2026-11-06/07 wave) or in a message body.
+STANDING_RESTRICTION_REASONS = (
+    "TOS_VIOLATION",
+    "POLICY_VIOLATION",
+    "SERVICE_DISABLED",
+    "ACCOUNT_DISABLED",
+    "ACCOUNT_SUSPENDED",
+)
+
+# Gemini-family transports report quota pressure as RESOURCE_EXHAUSTED: in the
+# ErrorInfo reason, in the error status word, or in a gRPC status code. None of
+# those strings contain "rate limit"/"quota exceeded"/"usage limit", so without
+# this marker a genuine Google quota refusal that arrives as HTTP 200 (or that
+# CPA re-wraps) is forwarded to the client and never cools the lane -- the one
+# direction this gateway must never fail in, because the next request spends
+# more of the same account's quota. Antigravity-only: the WorkBuddy/Zhipu lanes
+# return provider-specific 6xxx codes instead.
+GEMINI_CAPACITY_MARKERS = ("resource_exhausted",)
+# Magnitude bound for a credential-scoped cooling signal on a lane whose model
+# names are declared pooled (`pooled_models`): the signal is still honoured, but
+# it may not park a name that a second provider also serves.
+POOLED_LANE_MODEL_COOLDOWN_SECONDS = 300
 
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
@@ -764,6 +804,19 @@ def load_config(
             raise ValueError(
                 f"lanes[{index}].zero_cost_models must be non-empty strings"
             )
+        # Optional: models this lane serves under a pooled alias, i.e. names a
+        # second provider also sells. Absent => empty, which keeps the
+        # historical lane-wide capacity breaker for any older projected JSON.
+        pooled = raw_lane.get("pooled_models", [])
+        if not isinstance(pooled, list) or not all(
+            isinstance(item, str) and item.strip() for item in pooled
+        ):
+            raise ValueError(f"lanes[{index}].pooled_models must be non-empty strings")
+        normalized_pooled = frozenset(item.strip().lower() for item in pooled)
+        if not normalized_pooled.issubset(set(normalized_models)):
+            raise ValueError(
+                f"lanes[{index}].pooled_models must be listed in lanes[{index}].models"
+            )
         # Optional per-lane request-rate guard. Absent => unlimited (historical
         # behavior), so an older projected JSON keeps its semantics. A positive
         # integer bounds normal admissions inside a rolling 60s window.
@@ -797,6 +850,7 @@ def load_config(
                 "zero_cost_models": frozenset(
                     item.strip().lower() for item in zero_cost
                 ),
+                "pooled_models": normalized_pooled,
                 "requests_per_minute": rpm,
             }
         )
@@ -1110,19 +1164,16 @@ def oauth_risk_signal(
                 hold = "account_restricted"
             elif error.get("type") == "authentication_error":
                 hold = hold or "authentication_required"
+            # A standing restriction is the provider saying the account is
+            # gone, not "slow down". It outranks the recoverable shapes that
+            # pass through this lane (6xxx frequency windows, bare 401/403
+            # fallback-leg rejections): letting it ride the capacity ladder
+            # both hides the real state from the operator and keeps spending
+            # requests on a suspended account. Both the pre-existing markers
+            # and the shared restriction list apply, so the ChatGPT lane
+            # cannot silently fall behind WorkBuddy in what it recognizes.
             message = str(error.get("message", "")).lower()
-            if any(
-                marker in message
-                for marker in (
-                    "account has been suspended",
-                    "account has been disabled",
-                    "account is suspended",
-                    "account is disabled",
-                    "account_deactivated",
-                    "account suspended",
-                    "account disabled",
-                )
-            ):
+            if any(marker in message for marker in STANDING_RESTRICTION_MARKERS):
                 hold = "account_restricted"
             if lane_name == "workbuddy-oauth" and code == 11140:
                 hold = "account_restricted"
@@ -1180,7 +1231,9 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
         status_word = str(error.get("status", "")).upper()
         if status_word in ("PERMISSION_DENIED", "UNAUTHENTICATED"):
             hold = hold or "authentication_required"
-        text = str(error.get("message", "")).lower()
+        text = " ".join(
+            str(error.get(field, "")) for field in ("message", "reason")
+        ).lower()
         if any(
             marker in text
             for marker in (
@@ -1195,30 +1248,47 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
             )
         ):
             hold = "account_restricted"
+        # Some transports flatten ErrorInfo onto the error object itself
+        # (reason: TOS_VIOLATION) instead of nesting it under details; the
+        # 2026-11-06/07 appeals all carried the reason somewhere in that shape.
+        # Classify it the same way whether nested or flat, so a revocation is
+        # never downgraded to the weaker auth hold.
+        if str(error.get("reason", "")).upper() in STANDING_RESTRICTION_REASONS:
+            hold = "account_restricted"
         details = error.get("details")
+        if isinstance(details, dict):
+            # A single detail object has been observed unwrapped; normalise it
+            # into the list walk instead of dropping the evidence.
+            details = [details]
         for detail in details if isinstance(details, list) else []:
             if not isinstance(detail, dict):
                 continue
-            kind = detail.get("@type")
+            kind = str(detail.get("@type", "") or "")
             value = None
-            if kind == "type.googleapis.com/google.rpc.RetryInfo":
+            if kind.endswith("google.rpc.RetryInfo"):
                 value = detail.get("retryDelay")
-            elif kind == "type.googleapis.com/google.rpc.ErrorInfo":
+            elif kind.endswith("google.rpc.ErrorInfo"):
                 # TOS_VIOLATION is what the 2026-11-06/07 enforcement wave
                 # returns: the account is not merely unauthenticated, its Cloud
                 # Code access was revoked. Keep an explicit list so an unknown
                 # future reason falls back to the conservative auth hold rather
                 # than silently becoming an "appeal" instruction.
-                if detail.get("reason") in (
-                    "SERVICE_DISABLED",
-                    "ACCOUNT_DISABLED",
-                    "ACCOUNT_SUSPENDED",
-                    "TOS_VIOLATION",
-                    "POLICY_VIOLATION",
+                if str(detail.get("reason", "")).upper() in (
+                    STANDING_RESTRICTION_REASONS
                 ):
                     hold = "account_restricted"
                 metadata = detail.get("metadata")
                 if isinstance(metadata, dict):
+                    value = metadata.get("quotaResetDelay")
+            if value is None and kind == "":
+                # Google clients do not always echo @type. A duration-shaped
+                # retryDelay under a retry-shaped key is explicit provider
+                # evidence, which is exactly what the lane's strict backoff
+                # exists to honour, so accept it instead of parsing the 429 as
+                # "no hint" and letting the local ladder outrun the reset.
+                value = detail.get("retryDelay")
+                metadata = detail.get("metadata")
+                if not value and isinstance(metadata, dict):
                     value = metadata.get("quotaResetDelay")
             # RetryInfo uses protobuf Duration; ErrorInfo also uses Go-style
             # h/m/s durations in the pinned CPA source. No free-text guessing.
@@ -1289,6 +1359,14 @@ def capacity_scope(
     # no error entry at all and the dump above is empty. Scan the raw body
     # alongside the dump so every wrapper shape reaches the exemptions below.
     raw_text = error_text + body_prefix.decode("utf-8", errors="replace").lower()
+    if config.get("name") == "antigravity-oauth" and any(
+        marker in raw_text for marker in GEMINI_CAPACITY_MARKERS
+    ):
+        # RESOURCE_EXHAUSTED is Google's own quota verdict and appears in no
+        # other marker list, so it must reach the ladder before the routing/
+        # auth exemptions below can interpret a 400-shaped wrapper as "not
+        # capacity" and forward it.
+        return "lane"
     # A response that carries both a model-specific marker and a
     # credential/account marker must stay lane-scoped.  Narrowing it to the
     # model would let sibling requests continue against a shared account while
@@ -1328,6 +1406,21 @@ def capacity_scope(
     ):
         return None
     return "lane" if status in config["capacity_statuses"] else None
+
+
+def _generic_capacity_scope(
+    status: int, body_prefix: bytes, retry_after: str | None, config: dict[str, Any]
+) -> str | None:
+    """Judge capacity the way the lane would if its models were not pooled.
+
+    The pooled narrowing must only apply to a signal that already qualified on
+    the generic path; dropping `pooled_models` is exactly that question, so the
+    request path asks it once here instead of duplicating the marker lists.
+    """
+
+    return capacity_scope(
+        status, body_prefix, retry_after, {**config, "pooled_models": ()}
+    )
 
 
 def is_capacity_response(
@@ -4700,6 +4793,21 @@ class Handler(BaseHTTPRequestHandler):
             )
             if stream_probe is not None and stream_probe.has_error:
                 capacity_kind = stream_probe.scope
+            # A credential-scoped signal on a pooled lane must not become a
+            # alias-wide park. `deepseek-v4.1-flash` is declared as a pooled
+            # alias (WorkBuddy primary, OpenCode backup) and this gateway gates
+            # by model name, so a lane-wide park of hours also deletes the
+            # healthy backup route and every sibling credential -- the exact
+            # 2026-11-06 shape that made one account's 6004 reset the whole
+            # alias. Keep the cooling signal, clamp its magnitude so the next
+            # attempt reaches a sibling credential or the backup provider; only
+            # standing restriction holds (account_restricted,
+            # authentication_required) park the lane for review.
+            pooled_models = frozenset((lane_config or {}).get("pooled_models") or ())
+            requested_name = routing_model(observed_model or "")
+            pooled_lane = bool(
+                pooled_models and requested_name.strip().lower() in pooled_models
+            )
             if lane_name in DURABLE_OAUTH_LANES:
                 body_hold, body_delay = oauth_risk_signal(
                     lane_name,
@@ -4714,6 +4822,29 @@ class Handler(BaseHTTPRequestHandler):
                 if body_delay is not None:
                     retry_after = max(retry_after or 0, body_delay)
                     capacity_kind = "lane"
+            if (
+                pooled_lane
+                and lane_config is not None
+                and capacity_kind == "lane"
+                and hold_reason is None
+                and _generic_capacity_scope(
+                    response.status if stream_probe is not None else 200,
+                    b"" if stream_probe is not None else bytes(probe),
+                    retry_after_header,
+                    lane_config,
+                )
+                is not None
+            ):
+                # Delay magnitude stays bounded; the scope does not widen to
+                # the alias. The re-test above drops the pooled marker so only
+                # a signal that was already capacity-shaped on the generic path
+                # is narrowed -- 6003 stays the lane-wide credential signal it
+                # has always been. See the comment above the durable-lane branch.
+                capacity_kind = "model"
+                retry_after = min(
+                    retry_after or POOLED_LANE_MODEL_COOLDOWN_SECONDS,
+                    POOLED_LANE_MODEL_COOLDOWN_SECONDS,
+                )
             if stream_probe is not None:
                 # Preserve the model scope of 6004 while carrying its reset
                 # deadline into LaneState.release().  The generic
