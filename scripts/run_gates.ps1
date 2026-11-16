@@ -24,9 +24,11 @@ param(
   [switch]$RunParallel,
   [ValidateRange(2, 32)]
   [int]$MaxWorkers = 4,
-  # Reuse a parallel test result already proven against this exact tree and
-  # interpreter. This is useful with -ProveParallel when the proof receipt
-  # already exists; ordinary parallel runs do not pay for a serial duplicate.
+  # Explicit proof escape hatch for -ProveParallel: trust the recorded
+  # parallel-proof.json without revalidating its tree or worker count. The
+  # test receipt itself is still content-keyed, so a changed tree still
+  # re-runs the suite; ordinary parallel runs never pay for a serial
+  # duplicate, with or without this switch.
   [switch]$ReuseReceipts,
   # Opt-in compatibility check for the parallel lane. The normal parallel
   # gate runs the suite once; this switch adds one serial recheck and records
@@ -260,7 +262,8 @@ try {
       [string]$RelativePath,
       [string]$Status,
       [double]$Seconds,
-      [int]$Workers = 0
+      [int]$Workers = 0,
+      [int]$Tests = 0
     )
 
     $directory = Split-Path -Parent $RelativePath
@@ -276,6 +279,12 @@ try {
       workers = $Workers
       host = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
       recorded_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+    # Whole-test outcomes from the run's own summary line (~collected on a
+    # green run): makes suite growth an observable in the receipt instead of
+    # a number that only exists in review ledgers.
+    if ($Tests -gt 0) {
+      $receipt["tests"] = $Tests
     }
     $receipt | ConvertTo-Json | Set-Content -LiteralPath $RelativePath -Encoding utf8
   }
@@ -1000,6 +1009,22 @@ try {
     # Only the parallel result and its serial recheck are compared; mapping
     # progress lines for every other leg would be pure overhead.
     $legSummary = Get-PytestSummaryVector -Lines $legOutput
+    # Whole-test count for the receipt: same stable names the parallel proof
+    # compares, so subtest churn cannot move the recorded number.
+    $legTestCount = 0
+    if ($legSummary.sawRun) {
+      $legTestCount = @(
+        @($legSummary.counts) | ForEach-Object {
+          $parts = $_ -split "=", 2
+          if (@("passed", "failed", "skipped", "errors") -contains $parts[0]) {
+            [int]$parts[1]
+          }
+        }
+      ) | Measure-Object -Sum | Select-Object -ExpandProperty Sum
+      if ($null -eq $legTestCount) {
+        $legTestCount = 0
+      }
+    }
 
     if ($entry.Id -eq "test" -and $script:testParallel) {
       $script:parallelSummary = $legSummary
@@ -1016,7 +1041,8 @@ try {
           -RelativePath (Join-Path $script:receiptDirectory "parallel-proof.json") `
           -Status "PASS" `
           -Seconds $legWatch.Elapsed.TotalSeconds `
-          -Workers $MaxWorkers
+          -Workers $MaxWorkers `
+          -Tests $legTestCount
         Write-Host "    parallel proven for this tree: later runs skip the serial recheck"
       }
     }
@@ -1032,7 +1058,8 @@ try {
         -RelativePath (Join-Path $script:receiptDirectory $entry.Receipt) `
         -Status "PASS" `
         -Seconds $legWatch.Elapsed.TotalSeconds `
-        -Workers $receiptWorkers
+        -Workers $receiptWorkers `
+        -Tests $legTestCount
     }
   }
 } finally {

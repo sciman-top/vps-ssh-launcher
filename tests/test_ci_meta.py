@@ -235,6 +235,16 @@ try {
                 any("--cov=vps_ssh_launcher" in item["command"] for item in test_runs),
                 result.stdout,
             )
+            # The receipts this run rewrote must carry the whole-test count
+            # parsed from the stub summary line ("1 passed in 0.1s") next to
+            # the lane bookkeeping, so suite size stays an observable.
+            recorded = json.loads((receipts / "test.json").read_text(encoding="utf-8"))
+            self.assertEqual(recorded["workers"], 2, result.stdout)
+            self.assertEqual(recorded["tests"], 1, result.stdout)
+            proof = json.loads(
+                (receipts / "parallel-proof.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(proof["tests"], 1, result.stdout)
 
     def test_auto_profile_fails_closed_when_git_is_unavailable(self) -> None:
         powershell = shutil.which("pwsh")
