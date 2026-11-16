@@ -661,13 +661,11 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = claude_lane_config()
-    loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
-    proxy = AdmissionProxy(
-        loaded,
-        **{
+    with _admission_stack(
+        Upstream,
+        config_loader=claude_lane_config,
+        proxy_overrides={
             {
                 "antigravity-oauth": "state_path",
                 "claude-oauth": "claude_state_path",
@@ -675,46 +673,38 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
                 "workbuddy-oauth": "workbuddy_state_path",
             }[lane_name]: path
         },
-    )
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    first = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    second = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    model = {
-        "antigravity-oauth": "gemini-3.8-flash-high",
-        "claude-oauth": "claude-sonnet-5-5",
-        "chatgpt-oauth": "gpt-6-luna",
-        "workbuddy-oauth": "deepseek-v4.1-flash",
-    }[lane_name]
-    body = json.dumps({"model": model, "input": "hello"}).encode()
-    try:
-        first.request("POST", "/v1/responses", body)
-        response = first.getresponse()
-        assert response.status == 200
-        deadline = time.monotonic() + 2
-        while proxy.lanes[lane_name].snapshot()["hold_reason"] is None:
-            assert time.monotonic() < deadline
-            time.sleep(0.005)
-        assert not finish.is_set()  # upstream has not ended the response
-        second.request("POST", "/v1/responses", body)
-        rejected = second.getresponse()
-        assert rejected.status == 403
-        rejected.read()
-        response.close()
-        first.close()
-        assert received == [body]
-        assert json.loads(path.read_text())["hold_reason"] == "account_restricted"
-    finally:
-        finish.set()
-        first.close()
-        second.close()
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+    ) as stack:
+        proxy = stack["proxy"]
+        first = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        second = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        model = {
+            "antigravity-oauth": "gemini-3.8-flash-high",
+            "claude-oauth": "claude-sonnet-5-5",
+            "chatgpt-oauth": "gpt-6-luna",
+            "workbuddy-oauth": "deepseek-v4.1-flash",
+        }[lane_name]
+        body = json.dumps({"model": model, "input": "hello"}).encode()
+        try:
+            first.request("POST", "/v1/responses", body)
+            response = first.getresponse()
+            assert response.status == 200
+            deadline = time.monotonic() + 2
+            while proxy.lanes[lane_name].snapshot()["hold_reason"] is None:
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+            assert not finish.is_set()  # upstream has not ended the response
+            second.request("POST", "/v1/responses", body)
+            rejected = second.getresponse()
+            assert rejected.status == 403
+            rejected.read()
+            response.close()
+            first.close()
+            assert received == [body]
+            assert json.loads(path.read_text())["hold_reason"] == "account_restricted"
+        finally:
+            finish.set()
+            first.close()
+            second.close()
 
 
 @pytest.mark.parametrize(
@@ -794,47 +784,40 @@ def test_antigravity_proxy_stops_after_risk_response_without_replaying(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    lane(loaded, "antigravity-oauth")["queue_timeout_seconds"] = 0.01
-    proxy = AdmissionProxy(loaded, state_path=risk_state_path(tmp_path))
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    body = b'{"model":"gemini-3.8-flash-high","messages":[]}'
-    try:
-        client.request("POST", "/v1/messages", body)
-        response = client.getresponse()
-        assert response.status == status
-        assert response.read() == payload
-        deadline = time.monotonic() + 2
-        while proxy.lanes["antigravity-oauth"].snapshot()["inflight"]:
-            assert time.monotonic() < deadline
-            time.sleep(0.005)
-        client.request("POST", "/v1/messages", body)
-        response = client.getresponse()
-        assert response.status == (
-            403 if expected == "operator_review_required" else 429
-        )
-        assert response.getheader("X-CPA-Admission-Reason") == expected
-        if expected == "operator_review_required":
-            assert response.getheader("Retry-After") is None
-        else:
-            assert int(response.getheader("Retry-After") or "0") >= (
-                59 if b"100000" not in payload else 99999
+    with _admission_stack(
+        Upstream,
+        lane_overrides={"queue_timeout_seconds": 0.01},
+        lane_name="antigravity-oauth",
+        proxy_overrides={"state_path": risk_state_path(tmp_path)},
+    ) as stack:
+        proxy = stack["proxy"]
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        body = b'{"model":"gemini-3.8-flash-high","messages":[]}'
+        try:
+            client.request("POST", "/v1/messages", body)
+            response = client.getresponse()
+            assert response.status == status
+            assert response.read() == payload
+            deadline = time.monotonic() + 2
+            while proxy.lanes["antigravity-oauth"].snapshot()["inflight"]:
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+            client.request("POST", "/v1/messages", body)
+            response = client.getresponse()
+            assert response.status == (
+                403 if expected == "operator_review_required" else 429
             )
-        response.read()
-        assert received == [body]
-    finally:
-        client.close()
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+            assert response.getheader("X-CPA-Admission-Reason") == expected
+            if expected == "operator_review_required":
+                assert response.getheader("Retry-After") is None
+            else:
+                assert int(response.getheader("Retry-After") or "0") >= (
+                    59 if b"100000" not in payload else 99999
+                )
+            response.read()
+            assert received == [body]
+        finally:
+            client.close()
 
 
 def test_sse_reader_backpressures_slow_consumer_and_cancels_full_queue() -> None:
@@ -2980,18 +2963,8 @@ def test_proxy_preserves_chunked_stream_framing() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream = _ephemeral_upstream(UpstreamHandler)
-    upstream_thread = server_thread(upstream)
-    upstream_thread.start()
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = server_thread(admission)
-    admission_thread.start()
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=3
-        )
+    with _admission_stack(UpstreamHandler) as stack:
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
         client.request(
             "POST",
             "/v1/responses",
@@ -3003,13 +2976,6 @@ def test_proxy_preserves_chunked_stream_framing() -> None:
         assert response.getheader("Transfer-Encoding") == "chunked"
         assert response.read() == b"data: one\n\ndata: two\n\n"
         client.close()
-    finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
 
 
 def test_queued_stream_sends_headers_and_heartbeat_before_admission() -> None:
@@ -3198,40 +3164,30 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream = _ephemeral_upstream(UpstreamHandler)
-    upstream_thread = server_thread(upstream)
-    upstream_thread.start()
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    for lane_cfg in loaded["lanes"]:
-        if lane_cfg["name"] == "zhipu-coding-plan":
-            lane_cfg["requests_per_minute"] = 2
-            # Production queues a short window delay; this test exercises the
-            # refusal edge after that budget is exhausted.
-            lane_cfg["queue_timeout_seconds"] = 0
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = server_thread(admission)
-    admission_thread.start()
+    # Production queues a short window delay; this test exercises the refusal
+    # edge after that budget is exhausted.
+    with _admission_stack(
+        UpstreamHandler,
+        lane_overrides={"requests_per_minute": 2, "queue_timeout_seconds": 0},
+        lane_name="zhipu-coding-plan",
+    ) as stack:
 
-    def post() -> Any:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
-        client.request(
-            "POST",
-            "/v1/responses",
-            body=b'{"model":"glm-5.3","input":"hi"}',
-            headers={"Content-Type": "application/json"},
-        )
-        response = client.getresponse()
-        response.read()
-        status = response.status
-        reason = response.getheader("X-CPA-Admission-Reason")
-        retry_after = response.getheader("Retry-After")
-        client.close()
-        return status, reason, retry_after
+        def post() -> Any:
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"glm-5.3","input":"hi"}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            response.read()
+            status = response.status
+            reason = response.getheader("X-CPA-Admission-Reason")
+            retry_after = response.getheader("Retry-After")
+            client.close()
+            return status, reason, retry_after
 
-    try:
         assert post()[0] == 200
         assert post()[0] == 200
         status, reason, retry_after = post()
@@ -3239,13 +3195,6 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
         assert reason == "rate_limited"
         assert retry_after is not None and 1 <= int(retry_after) <= 60
         assert hits["count"] == 2  # the refused request never reached upstream
-    finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
 
 
 def test_rate_guard_window_recovers_after_sixty_seconds(monkeypatch: Any) -> None:
@@ -3472,19 +3421,9 @@ def test_rejects_encoded_request_before_upstream(
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream = _ephemeral_upstream(Upstream)
-    upstream_thread = server_thread(upstream)
-    upstream_thread.start()
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = server_thread(admission)
-    admission_thread.start()
-    body = b'{"model":"gpt-6-luna","input":"hello"}'
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
+    with _admission_stack(Upstream) as stack:
+        body = b'{"model":"gpt-6-luna","input":"hello"}'
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
         client.request(
             "POST",
             "/v1/responses",
@@ -3507,13 +3446,6 @@ def test_rejects_encoded_request_before_upstream(
             assert payload["error"]["code"] == expected_reason
             assert hits == []
         client.close()
-    finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
 
 
 def test_rejects_truncated_chunked_request_body() -> None:
@@ -4499,17 +4431,22 @@ def _admission_stack(
     lane_overrides: dict[str, Any] | None = None,
     lane_name: str = "chatgpt-oauth",
     configure: Callable[[dict[str, Any]], None] | None = None,
+    config_loader: Callable[[], dict[str, Any]] | None = None,
+    proxy_overrides: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Live AdmissionProxy/Server stack over a loopback upstream.
 
     Yields ``{"upstream", "proxy", "port"}`` and performs the suite's standard
-    bounded teardown. ``lane_overrides`` mutate one lane of ``config()``;
+    bounded teardown. ``lane_overrides`` mutate one lane of the loaded config;
     ``configure`` runs after the upstream is up but before the proxy spawns
     its threads, so tests can monkeypatch module globals the constructor
     captures. ``heartbeat_interval=None`` keeps the proxy default.
+    ``config_loader`` replaces the ``config()`` fixture (the claude-lane
+    family); ``proxy_overrides`` feed extra ``AdmissionProxy`` keyword
+    arguments such as the per-lane risk state paths.
     """
     upstream, upstream_thread = _serve_local(upstream_handler)
-    loaded = config()
+    loaded = (config_loader or config)()
     loaded["upstream_port"] = upstream.server_address[1]
     if lane_overrides:
         lane(loaded, lane_name).update(lane_overrides)
@@ -4518,6 +4455,8 @@ def _admission_stack(
     proxy_kwargs: dict[str, Any] = {}
     if heartbeat_interval is not None:
         proxy_kwargs["heartbeat_interval"] = heartbeat_interval
+    if proxy_overrides:
+        proxy_kwargs.update(proxy_overrides)
     proxy = AdmissionProxy(loaded, **proxy_kwargs)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
     admission_thread = server_thread(admission)
@@ -5714,42 +5653,31 @@ def test_non_sse_fixed_length_truncation_is_not_reported_as_success(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    proxy = AdmissionProxy(loaded)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(server) for server in (upstream, admission)]
-    for thread in threads:
-        thread.start()
-    client = http.client.HTTPConnection("127.0.0.1", admission.server_port, timeout=3)
-    caplog.set_level(logging.INFO)
-    try:
-        client.request(
-            "POST",
-            "/v1/chat/completions",
-            body=b'{"model":"gpt-6-luna"}',
-            headers={"Content-Type": "application/json"},
-        )
-        response = client.getresponse()
-        assert response.status == 200
-        with pytest.raises(http.client.IncompleteRead) as incomplete:
-            response.read()
-        assert incomplete.value.partial == payload
+    with _admission_stack(Upstream) as stack:
+        proxy = stack["proxy"]
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        caplog.set_level(logging.INFO)
+        try:
+            client.request(
+                "POST",
+                "/v1/chat/completions",
+                body=b'{"model":"gpt-6-luna"}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            with pytest.raises(http.client.IncompleteRead) as incomplete:
+                response.read()
+            assert incomplete.value.partial == payload
 
-        deadline = time.monotonic() + 2
-        while proxy.lanes["chatgpt-oauth"].snapshot()["inflight"]:
-            assert time.monotonic() < deadline
-            time.sleep(0.005)
-        assert "upstream_error lane=chatgpt-oauth" in caplog.text
-        assert "successful=true" not in caplog.text
-    finally:
-        client.close()
-        for server in (admission, upstream):
-            server.shutdown()
-            server.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+            deadline = time.monotonic() + 2
+            while proxy.lanes["chatgpt-oauth"].snapshot()["inflight"]:
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+            assert "upstream_error lane=chatgpt-oauth" in caplog.text
+            assert "successful=true" not in caplog.text
+        finally:
+            client.close()
 
 
 def test_keep_alive_connection_reset_after_a_response_is_absorbed() -> None:
@@ -6573,31 +6501,31 @@ def test_json_risk_latches_before_response_eof(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = claude_lane_config()
-    loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
-    proxy = AdmissionProxy(loaded, **{state_arg: path})
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    try:
-        client.request("POST", "/v1/chat/completions", json.dumps({"model": model}))
-        response = client.getresponse()
-        assert response.status == 200
-        deadline = time.monotonic() + 2
-        while proxy.lanes[lane_name].snapshot()["hold_reason"] is None:
-            assert time.monotonic() < deadline, "risk not latched before upstream EOF"
-            time.sleep(0.005)
-        assert proxy.lanes[lane_name].snapshot()["inflight"] == 1
-        assert json.loads(path.read_text())["hold_reason"] is not None
-        finish.set()
-        assert response.read() == payload + b" "
-    finally:
-        finish.set()
-        client.close()
+    with _admission_stack(
+        Upstream,
+        config_loader=claude_lane_config,
+        proxy_overrides={state_arg: path},
+    ) as stack:
+        proxy = stack["proxy"]
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        try:
+            client.request("POST", "/v1/chat/completions", json.dumps({"model": model}))
+            response = client.getresponse()
+            assert response.status == 200
+            deadline = time.monotonic() + 2
+            while proxy.lanes[lane_name].snapshot()["hold_reason"] is None:
+                assert time.monotonic() < deadline, (
+                    "risk not latched before upstream EOF"
+                )
+                time.sleep(0.005)
+            assert proxy.lanes[lane_name].snapshot()["inflight"] == 1
+            assert json.loads(path.read_text())["hold_reason"] is not None
+            finish.set()
+            assert response.read() == payload + b" "
+        finally:
+            finish.set()
+            client.close()
 
 
 def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> None:
@@ -6624,38 +6552,35 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = claude_lane_config()
-    loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
-    proxy = AdmissionProxy(loaded, workbuddy_state_path=path)
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    try:
-        client.request(
-            "POST", "/v1/chat/completions", json.dumps({"model": "deepseek-v4.1-flash"})
-        )
-        response = client.getresponse()
-        assert response.status == 200
-        finish.set()
-        assert response.read() == b'{"code":6003,"msg":"frequency limited"} '
-        deadline = time.monotonic() + 2
-        while not proxy.lanes["workbuddy-oauth"].snapshot()["cooldown_active"]:
-            assert time.monotonic() < deadline, "ladder cooldown not armed after EOF"
-            time.sleep(0.005)
-        assert proxy.lanes["workbuddy-oauth"].snapshot()["hold_reason"] is None
-        assert json.loads(path.read_text())["hold_reason"] is None
-    finally:
-        finish.set()
-        client.close()
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+    with _admission_stack(
+        Upstream,
+        config_loader=claude_lane_config,
+        proxy_overrides={"workbuddy_state_path": path},
+    ) as stack:
+        proxy = stack["proxy"]
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        try:
+            client.request(
+                "POST",
+                "/v1/chat/completions",
+                json.dumps({"model": "deepseek-v4.1-flash"}),
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            finish.set()
+            assert response.read() == b'{"code":6003,"msg":"frequency limited"} '
+            deadline = time.monotonic() + 2
+            while not proxy.lanes["workbuddy-oauth"].snapshot()["cooldown_active"]:
+                assert time.monotonic() < deadline, (
+                    "ladder cooldown not armed after EOF"
+                )
+                time.sleep(0.005)
+            assert proxy.lanes["workbuddy-oauth"].snapshot()["hold_reason"] is None
+            assert json.loads(path.read_text())["hold_reason"] is None
+        finally:
+            finish.set()
+            client.close()
 
 
 def test_workbuddy_6004_response_header_does_not_prearm_lane_cooldown(
@@ -6784,34 +6709,27 @@ def test_invalid_gateway_key_cannot_latch_oauth_account(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = claude_lane_config()
-    loaded["upstream_port"] = upstream.server_port
     state_path = risk_state_path(tmp_path)
-    proxy = AdmissionProxy(loaded, **{state_arg: state_path})
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    try:
-        for _ in range(2):
-            client.request("POST", "/v1/responses", json.dumps({"model": model}))
-            response = client.getresponse()
-            assert response.status == 401 and response.read() == payload
-            deadline = time.monotonic() + 2
-            while proxy.lanes[lane_name].snapshot()["inflight"]:
-                assert time.monotonic() < deadline
-                time.sleep(0.005)
-            assert proxy.lanes[lane_name].snapshot()["hold_reason"] is None
-            assert json.loads(state_path.read_text())["hold_reason"] is None
-    finally:
-        client.close()
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+    with _admission_stack(
+        Upstream,
+        config_loader=claude_lane_config,
+        proxy_overrides={state_arg: state_path},
+    ) as stack:
+        proxy = stack["proxy"]
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        try:
+            for _ in range(2):
+                client.request("POST", "/v1/responses", json.dumps({"model": model}))
+                response = client.getresponse()
+                assert response.status == 401 and response.read() == payload
+                deadline = time.monotonic() + 2
+                while proxy.lanes[lane_name].snapshot()["inflight"]:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.005)
+                assert proxy.lanes[lane_name].snapshot()["hold_reason"] is None
+                assert json.loads(state_path.read_text())["hold_reason"] is None
+        finally:
+            client.close()
 
 
 def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
@@ -6840,37 +6758,29 @@ def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = claude_lane_config()
-    loaded["upstream_port"] = upstream.server_port
-    proxy = AdmissionProxy(loaded, claude_state_path=risk_state_path(tmp_path))
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-        conn.request(
-            "POST",
-            "/v1/messages",
-            json.dumps({"model": "claude-sonnet-5-5", "input": "hello"}).encode(),
-            headers={"Accept-Encoding": "gzip, deflate"},
-        )
-        response = conn.getresponse()
-        assert response.status == 200
-        content_type = response.getheader("Content-Type") or ""
-        payload = response.read()
-        conn.close()
-        assert "accept-encoding" not in seen
-        assert "text/event-stream" in content_type
-        assert payload == upstream_body
-    finally:
-        conn.close()
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+    with _admission_stack(
+        Upstream,
+        config_loader=claude_lane_config,
+        proxy_overrides={"claude_state_path": risk_state_path(tmp_path)},
+    ) as stack:
+        conn = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        try:
+            conn.request(
+                "POST",
+                "/v1/messages",
+                json.dumps({"model": "claude-sonnet-5-5", "input": "hello"}).encode(),
+                headers={"Accept-Encoding": "gzip, deflate"},
+            )
+            response = conn.getresponse()
+            assert response.status == 200
+            content_type = response.getheader("Content-Type") or ""
+            payload = response.read()
+            conn.close()
+            assert "accept-encoding" not in seen
+            assert "text/event-stream" in content_type
+            assert payload == upstream_body
+        finally:
+            conn.close()
 
 
 def test_upstream_content_encoding_fails_closed_on_sse(tmp_path: Path) -> None:
@@ -6896,46 +6806,39 @@ def test_upstream_content_encoding_fails_closed_on_sse(tmp_path: Path) -> None:
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = _ephemeral_upstream(Upstream)
-    loaded = claude_lane_config()
-    loaded["upstream_port"] = upstream.server_port
-    proxy = AdmissionProxy(loaded, claude_state_path=risk_state_path(tmp_path))
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [server_thread(s) for s in (upstream, server)]
-    for thread in threads:
-        thread.start()
-    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    try:
-        conn.request(
-            "POST",
-            "/v1/messages",
-            json.dumps(
-                {"model": "claude-sonnet-5-5", "input": "hello", "stream": True}
-            ).encode(),
-        )
-        response = conn.getresponse()
-        assert response.status == 200
-        payload = response.read()
-        text = payload.decode("utf-8", errors="replace")
-        assert b"\x1f\x8b" not in payload  # encoded body must never relay
-        assert "upstream_content_encoding" in text
-        # A Messages client needs a typed error event; the bare OpenAI-style
-        # ``data: {"error": ...}`` frame (and its ``[DONE]`` sentinel) is a
-        # protocol violation there. Terminal event, not a dangling stream.
-        decoded = json.loads(text.split("data: ", 1)[1].split("\n", 1)[0])
-        assert decoded["type"] == "error"
-        assert decoded["error"]["code"] == "upstream_content_encoding"
-        assert "event: error" in text
-        assert "data: [DONE]" not in text
-        assert proxy.lanes["claude-oauth"].snapshot()["hold_reason"] is None
-    finally:
-        terminal.set()
-        conn.close()
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for thread in threads:
-            thread.join(timeout=2)
+    with _admission_stack(
+        Upstream,
+        config_loader=claude_lane_config,
+        proxy_overrides={"claude_state_path": risk_state_path(tmp_path)},
+    ) as stack:
+        proxy = stack["proxy"]
+        conn = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+        try:
+            conn.request(
+                "POST",
+                "/v1/messages",
+                json.dumps(
+                    {"model": "claude-sonnet-5-5", "input": "hello", "stream": True}
+                ).encode(),
+            )
+            response = conn.getresponse()
+            assert response.status == 200
+            payload = response.read()
+            text = payload.decode("utf-8", errors="replace")
+            assert b"\x1f\x8b" not in payload  # encoded body must never relay
+            assert "upstream_content_encoding" in text
+            # A Messages client needs a typed error event; the bare OpenAI-style
+            # ``data: {"error": ...}`` frame (and its ``[DONE]`` sentinel) is a
+            # protocol violation there. Terminal event, not a dangling stream.
+            decoded = json.loads(text.split("data: ", 1)[1].split("\n", 1)[0])
+            assert decoded["type"] == "error"
+            assert decoded["error"]["code"] == "upstream_content_encoding"
+            assert "event: error" in text
+            assert "data: [DONE]" not in text
+            assert proxy.lanes["claude-oauth"].snapshot()["hold_reason"] is None
+        finally:
+            terminal.set()
+            conn.close()
 
 
 def test_request_path_hold_is_attributable_from_the_log(
