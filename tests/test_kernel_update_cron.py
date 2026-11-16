@@ -1,7 +1,9 @@
 """test_kernel_update_cron.py - split from test_scripts.py (domain: kernel)."""
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -85,9 +87,9 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('[string]$Schedule = ""', text)
         self.assertIn("$canonicalScheduleByKernel", text)
         self.assertIn("is the sibling $siblingKernel lane's canonical slot", text)
-        self.assertIn("TARGET_VERSION", text)
-        self.assertIn("EXPECTED_SHA256", text)
-        self.assertIn("EXPECTED_VASMA_SHA256", text)
+        # TARGET_VERSION/EXPECTED_SHA256/EXPECTED_VASMA_SHA256 and the whole
+        # __SENTINEL__ substitution pipeline are covered behaviourally by
+        # test_wrapper_install_substitution_resolves_every_sentinel.
         self.assertIn("verify_target_xray", text)
         self.assertIn("verify_target_singbox", text)
         self.assertIn("pinned Xray version and hash already match", text)
@@ -98,8 +100,6 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
         self.assertIn("lock_file='$MaintenanceLockFile'", text)
-        self.assertIn('LOCK_FILE="__LOCK_FILE__"', text)
-        self.assertIn("s|__LOCK_FILE__|", text)
         self.assertIn("CONFIG_CHANGED=0", text)
         self.assertIn("config_hash_before", text)
         self.assertIn("merged sing-box config changed; runtime restart required", text)
@@ -154,26 +154,9 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("tail -n 8", text)
         self.assertNotIn('cat "`$log_file"', text)
 
-        # A vasma script update rewrites /usr/bin/vasma bytes and silently
-        # invalidates the wrapper's embedded EXPECTED_VASMA_SHA256; the next
-        # weekly run then fails closed with exit 13 before any gate saw it
-        # coming (recurred 2026-10-23 and 2026-10-29). The read lane must
-        # compare both embedded pins against live state so the staleness is
-        # visible between the two -Apply transactions. Verdicts only: the
-        # probe must not echo the raw vasma transcript or imply trust by
-        # printing embedded and live hashes as a matched pair.
-        self.assertIn("==kernel-pin==", text)
-        self.assertIn("vasma_live_sha256=", text)
-        self.assertIn("pin_freshness script=", text)
-        self.assertIn("vasma_pin=", text)
-        self.assertIn("binary_pin=", text)
-        self.assertIn("pinned_version=", text)
-        self.assertIn('s/^EXPECTED_VASMA_SHA256="\\([0-9a-fA-F]*\\)"/\\1/p', text)
-        self.assertIn("state=missing", text)
-        # A missing vasma binary must not read as hash drift, and a missing
-        # wrapper must still carry the full verdict token set.
-        self.assertIn("vasma_state=absent", text)
-        self.assertIn("state=missing vasma_pin=missing binary_pin=missing", text)
+        # The ==kernel-pin== verdict family (fresh/stale/absent/missing, and
+        # the never-print-a-matched-trust-pair rule) is covered behaviourally
+        # by test_pin_freshness_probe_reports_missing_absent_fresh_and_stale.
         # Pin shape is validated whenever a value is provided: the pins are
         # interpolated into the remote bash payload in read mode too, so an
         # unvalidated value must never reach the projection.
@@ -244,8 +227,8 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
         self.assertIn("menu_update_allowed='$menuUpdateAllowed'", text)
-        self.assertIn('MENU_UPDATE_ALLOWED="__MENU_UPDATE_ALLOWED__"', text)
-        self.assertIn("s/__MENU_UPDATE_ALLOWED__/`$menu_update_allowed/", text)
+        # The __MENU_UPDATE_ALLOWED__ sentinel pipeline is covered by
+        # test_wrapper_install_substitution_resolves_every_sentinel.
         # The guard must sit on the only path that reaches the menu pipe, so a
         # manually managed core can never receive the 16->1->1 keystrokes.
         guard_idx = text.index('MENU_UPDATE_ALLOWED" != "1" ]')
@@ -255,6 +238,325 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
             "run the controlled manual core swap, then re-pin",
             text,
         )
+
+    @staticmethod
+    def _main_payload_section(source: str, start_marker: str, end_marker: str) -> str:
+        # The main remote payload is one PS here-string; slice a marker-bound
+        # section out of it with the same backtick/CRLF normalization the
+        # embedded-wrapper renderer applies.
+        start = source.index(start_marker)
+        end = source.index(end_marker, start)
+        section = source[start:end]
+        return section.replace("`", "").replace("\r\n", "\n").replace("\r", "\n")
+
+    def test_wrapper_install_substitution_resolves_every_sentinel(self) -> None:
+        # The deployed wrapper ships with __SENTINEL__ placeholders that its
+        # own install step resolves through one embedded sed line. Execute
+        # that exact line against a copy of the payload: a new placeholder
+        # without a matching substitution must fail here instead of deploying
+        # literally, and the resolved values must stay readable by the shapes
+        # the probe family greps back (LOCK_FILE, TARGET_VERSION, pins).
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        sentinel_values = {
+            "__LOCK_FILE__": "/run/vps-ssh-launcher-maintenance.lock",
+            "__TARGET_VERSION__": "v9.9.9",
+            "__EXPECTED_SHA256__": "a" * 64,
+            "__EXPECTED_VASMA_SHA256__": "b" * 64,
+            "__MENU_UPDATE_ALLOWED__": "1",
+        }
+        expected_sentinels = {
+            "write_xray_wrapper": (
+                "__EXPECTED_SHA256__",
+                "__EXPECTED_VASMA_SHA256__",
+                "__LOCK_FILE__",
+                "__MENU_UPDATE_ALLOWED__",
+                "__TARGET_VERSION__",
+            ),
+            # No menu sentinel on the sing-box wrapper: MENU_UPDATE_ALLOWED=0
+            # is an xray-lane-only concept (zz's manually managed core).
+            "write_singbox_wrapper": (
+                "__EXPECTED_SHA256__",
+                "__EXPECTED_VASMA_SHA256__",
+                "__LOCK_FILE__",
+                "__TARGET_VERSION__",
+            ),
+        }
+        for wrapper_name, script_variable in (
+            ("write_xray_wrapper", "xray_script"),
+            ("write_singbox_wrapper", "singbox_script"),
+        ):
+            with self.subTest(wrapper=wrapper_name):
+                wrapper = self._render_embedded_wrapper(source, wrapper_name)
+                sentinels = sorted(set(re.findall(r"__[A-Z][A-Z0-9_]*__", wrapper)))
+                self.assertEqual(tuple(sentinels), expected_sentinels[wrapper_name])
+                # The resolving sed line is not part of the embedded payload:
+                # it runs right after the heredoc lands on disk, inside the
+                # PS function body. Slice the whole function region for it.
+                function_start = source.index(f"{wrapper_name}()")
+                function_end = source.index(
+                    "write_singbox_wrapper() {"
+                    if wrapper_name == "write_xray_wrapper"
+                    else "install_cron() {"
+                )
+                sed_lines = [
+                    line.strip()
+                    for line in source[function_start:function_end].splitlines()
+                    if line.strip().startswith('sed -i "s|__')
+                ]
+                self.assertEqual(len(sed_lines), 1, wrapper)
+                # PS escapes $ as `$ inside its double-quoted here-string;
+                # the runtime command sees plain $ once PS unescapes it, so
+                # apply the same normalization as the payload renderer.
+                sed_command = sed_lines[0].replace("`", "")
+                script_ref = f'"${script_variable}"'
+                with tempfile.TemporaryDirectory() as directory:
+                    deployed = Path(directory) / "wrapper.sh"
+                    deployed.write_text(wrapper, encoding="utf-8", newline="\n")
+                    harness = "\n".join(
+                        [
+                            "set -eu",
+                            f"lock_file='{sentinel_values['__LOCK_FILE__']}'",
+                            f"target_version='{sentinel_values['__TARGET_VERSION__']}'",
+                            f"expected_sha256='{sentinel_values['__EXPECTED_SHA256__']}'",
+                            f"expected_vasma_sha256='{sentinel_values['__EXPECTED_VASMA_SHA256__']}'",
+                            f"menu_update_allowed='{sentinel_values['__MENU_UPDATE_ALLOWED__']}'",
+                            f"{script_variable}='{self._bash_path(bash, deployed)}'",
+                            sed_command,
+                            "echo '==left=='",
+                            f"grep -E '__[A-Z][A-Z0-9_]*__' {script_ref} || echo NONE",
+                            "echo '==resolved=='",
+                            f"grep -E '^(LOCK_FILE|TARGET_VERSION|EXPECTED_SHA256|"
+                            f"EXPECTED_VASMA_SHA256|MENU_UPDATE_ALLOWED)=' {script_ref}",
+                        ]
+                    )
+                    completed = subprocess.run(
+                        self._bash_command(bash, "-s"),
+                        input=harness.encode("utf-8"),
+                        capture_output=True,
+                        timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                        check=False,
+                    )
+                    output = (completed.stdout + completed.stderr).decode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                    self.assertEqual(completed.returncode, 0, output)
+                    left = output.split("==left==", 1)[1].split("==resolved==", 1)[0]
+                    self.assertIn("NONE", left, output)
+                    resolved = output.split("==resolved==", 1)[1]
+                    for name in (
+                        "LOCK_FILE",
+                        "TARGET_VERSION",
+                        "EXPECTED_SHA256",
+                        "EXPECTED_VASMA_SHA256",
+                    ):
+                        self.assertIn(
+                            f'{name}="{sentinel_values["__" + name + "__"]}"',
+                            resolved,
+                            output,
+                        )
+                    if wrapper_name == "write_xray_wrapper":
+                        self.assertIn('MENU_UPDATE_ALLOWED="1"', resolved, output)
+                    else:
+                        self.assertNotIn("MENU_UPDATE_ALLOWED=", resolved, output)
+
+    def test_pin_freshness_probe_reports_missing_absent_fresh_and_stale(self) -> None:
+        # Recurrence guard (2026-10-23, 2026-10-29): a vasma script update
+        # rewrites /usr/bin/vasma bytes and silently invalidates the wrapper's
+        # embedded EXPECTED_VASMA_SHA256, so the next weekly run fails closed
+        # with exit 13 before any gate saw it coming. Execute the read lane's
+        # pin_freshness block against fixture scripts and binaries: it must
+        # classify fresh/stale/absent/missing from live state, report a
+        # missing wrapper with the full verdict token set, and never print a
+        # matched embedded/live trust pair (context hash once, at most).
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        section = self._main_payload_section(
+            source, "echo '==kernel-pin=='", "echo '==kernel-update-log=='"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            live_xray = root / "bins" / "xray"
+            live_singbox = root / "bins" / "sing-box"
+            live_xray.parent.mkdir()
+            # Shebang-prefixed fixture content: MSYS executable detection is
+            # content-based (chmod on the Windows filesystem does not make an
+            # arbitrary file -x), so the block's [ -x ] guards must see these
+            # as runnable on Windows too. The bytes only feed sha256sum.
+            live_xray.write_bytes(b"#!/bin/sh\nxray-fixture\n")
+            live_singbox.write_bytes(b"#!/bin/sh\nsingbox-fixture\n")
+            vasma_primary = root / "vasma-primary"
+            vasma_primary.write_bytes(b"#!/bin/sh\necho vasma-fixture\n")
+            live_xray_sha = hashlib.sha256(live_xray.read_bytes()).hexdigest()
+            vasma_sha = hashlib.sha256(vasma_primary.read_bytes()).hexdigest()
+
+            # Path indirection only: the block's logic is executed verbatim,
+            # with the hardcoded host paths redirected to scenario fixtures.
+            section = section.replace(
+                "/usr/bin/vasma /usr/sbin/vasma",
+                "$VASMA_CANDIDATE_A $VASMA_CANDIDATE_B",
+            )
+            section = section.replace(
+                "live_binary=/etc/v2ray-agent/xray/xray",
+                "live_binary=$XRAY_LIVE_BINARY",
+            )
+            section = section.replace(
+                "live_binary=/etc/v2ray-agent/sing-box/sing-box",
+                "live_binary=$SINGBOX_LIVE_BINARY",
+            )
+
+            def deployed_script(
+                path: Path,
+                target_version: str = "",
+                expected_sha256: str = "",
+                expected_vasma_sha256: str = "",
+            ) -> None:
+                lines = ["#!/usr/bin/env bash"]
+                if target_version:
+                    lines.append(f'TARGET_VERSION="{target_version}"')
+                if expected_sha256:
+                    lines.append(f'EXPECTED_SHA256="{expected_sha256}"')
+                if expected_vasma_sha256:
+                    lines.append(f'EXPECTED_VASMA_SHA256="{expected_vasma_sha256}"')
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+            zero_sha = "0" * 64
+            stale_vasma_sha = "c" * 64
+            absent_xray = root / "absent-xray-wrapper.sh"
+            absent_singbox = root / "absent-singbox-wrapper.sh"
+            stale_script = root / "stale-wrapper.sh"
+            deployed_script(
+                stale_script,
+                target_version="v9.9.9",
+                expected_vasma_sha256=stale_vasma_sha,
+            )
+            absent_vasma_script = root / "absent-vasma-wrapper.sh"
+            deployed_script(
+                absent_vasma_script,
+                target_version="v9.9.9",
+                expected_sha256=live_xray_sha,
+                expected_vasma_sha256=stale_vasma_sha,
+            )
+            stale_binary_script = root / "stale-binary-wrapper.sh"
+            deployed_script(
+                stale_binary_script,
+                target_version="v9.9.9",
+                expected_sha256=zero_sha,
+                expected_vasma_sha256=vasma_sha,
+            )
+            fresh_script = root / "fresh-wrapper.sh"
+            deployed_script(
+                fresh_script,
+                target_version="v9.9.9",
+                expected_sha256=live_xray_sha,
+                expected_vasma_sha256=vasma_sha,
+            )
+
+            def harness_for(
+                xray_script: Path,
+                singbox_script: Path,
+                vasma_present: bool,
+            ) -> str:
+                return "\n".join(
+                    [
+                        "set -u",
+                        "VASMA_CANDIDATE_A="
+                        + (
+                            f"'{self._bash_path(bash, vasma_primary)}'"
+                            if vasma_present
+                            else "'/nonexistent/vasma-a'"
+                        ),
+                        "VASMA_CANDIDATE_B='"
+                        + self._bash_path(bash, root / "vasma-fallback")
+                        + "'",
+                        f"XRAY_LIVE_BINARY='{self._bash_path(bash, live_xray)}'",
+                        f"SINGBOX_LIVE_BINARY='{self._bash_path(bash, live_singbox)}'",
+                        f"xray_script='{self._bash_path(bash, xray_script)}'",
+                        f"singbox_script='{self._bash_path(bash, singbox_script)}'",
+                        f"chmod +x '{self._bash_path(bash, vasma_primary)}' "
+                        f"'{self._bash_path(bash, live_xray)}' "
+                        f"'{self._bash_path(bash, live_singbox)}' 2>/dev/null || true",
+                        section,
+                    ]
+                )
+
+            def run_probe(harness: str) -> str:
+                completed = subprocess.run(
+                    self._bash_command(bash, "-s"),
+                    input=harness.encode("utf-8"),
+                    capture_output=True,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                self.assertEqual(completed.returncode, 0, output)
+                return output
+
+            missing_line = (
+                "state=missing vasma_pin=missing binary_pin=missing "
+                "pinned_version=unknown"
+            )
+
+            missing_output = run_probe(
+                harness_for(absent_xray, absent_singbox, vasma_present=False)
+            )
+            self.assertIn("==kernel-pin==", missing_output)
+            self.assertIn("vasma_live_sha256=missing", missing_output)
+            self.assertEqual(missing_output.count("pin_freshness "), 2, missing_output)
+            self.assertEqual(missing_output.count(missing_line), 2, missing_output)
+
+            stale_output = run_probe(harness_for(stale_script, absent_singbox, True))
+            self.assertIn(f"vasma_live_sha256={vasma_sha}", stale_output)
+            self.assertIn(
+                "vasma_pin=stale binary_pin=missing pinned_version=v9.9.9",
+                stale_output,
+            )
+            # Never print a matched trust pair: the stale embedded pin value
+            # must not appear anywhere in the probe output.
+            self.assertNotIn(stale_vasma_sha, stale_output)
+
+            absent_output = run_probe(
+                harness_for(absent_vasma_script, absent_singbox, vasma_present=False)
+            )
+            self.assertIn(
+                "vasma_pin=absent binary_pin=fresh pinned_version=v9.9.9",
+                absent_output,
+            )
+
+            stale_binary_output = run_probe(
+                harness_for(stale_binary_script, absent_singbox, True)
+            )
+            self.assertIn(
+                "vasma_pin=fresh binary_pin=stale pinned_version=v9.9.9",
+                stale_binary_output,
+            )
+
+            fresh_output = run_probe(harness_for(fresh_script, absent_singbox, True))
+            self.assertIn(
+                "vasma_pin=fresh binary_pin=fresh pinned_version=v9.9.9",
+                fresh_output,
+            )
+            # The live vasma hash is context evidence: even on a full match it
+            # appears exactly once (never paired with the embedded pin).
+            self.assertEqual(fresh_output.count(vasma_sha), 1, fresh_output)
 
     def test_menu_guard_blocks_manually_managed_core_before_vasma(self) -> None:
         # Behavioural probe (stubbed dependencies + the real branch bodies):
