@@ -56,10 +56,40 @@
       "auto_compact_token_limit": 900000
     },
     {
+      "slug": "deepseek-v4.1-flash-sg",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
+    },
+    {
+      "slug": "deepseek-v4.1-flash-oc",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
+    },
+    {
       "slug": "gemini-3.8-flash-high",
       "context_window": 1048576,
       "max_context_window": 1048576,
       "auto_compact_token_limit": 943718
+    },
+    {
+      "slug": "gemini-4-hydrogen-xhigh",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "auto_compact_token_limit": 943718
+    },
+    {
+      "slug": "claude-sonnet-5-5-high",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
+    },
+    {
+      "slug": "hy4free",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
     }
   ]
 }

@@ -163,6 +163,38 @@ def update_model_context_pins(
     # generated catalog carries the separate max_context_window field too.
     editor_changed = align(editor["models"], "model_id", False)
     catalog_changed = align(catalog["models"], "slug", True)
+
+    # A provider refresh can add a model to the generated catalog before the
+    # experimental editor list is updated.  Contract entries must exist in the
+    # editor as well: otherwise the next managed rebuild can silently discard
+    # the repository pin.  Copy only identity/display metadata from the
+    # generated catalog and take all context values from the reviewed contract.
+    editor_ids = {
+        model.get("model_id")
+        for model in editor["models"]
+        if isinstance(model, dict) and isinstance(model.get("model_id"), str)
+    }
+    catalog_by_slug = {
+        model.get("slug"): model
+        for model in catalog["models"]
+        if isinstance(model, dict) and isinstance(model.get("slug"), str)
+    }
+    for slug, pin in expected.items():
+        if slug in editor_ids:
+            continue
+        source = catalog_by_slug.get(slug)
+        if source is None:
+            continue
+        entry: dict[str, Any] = {
+            "model_id": slug,
+            "display_name": source.get("display_name", slug),
+            "context_window": pin["context_window"],
+            "auto_compact_token_limit": pin["auto_compact_token_limit"],
+        }
+        editor["models"].append(entry)
+        editor_ids.add(slug)
+        editor_changed += len(entry)
+
     if not editor_changed and not catalog_changed:
         return Path(), 0, 0
     backup = create_cockpit_backup(sources, backup_root, "cockpit-context-pins")
