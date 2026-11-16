@@ -283,9 +283,19 @@ try {
             )
             fake_bin = root / "bin"
             fake_bin.mkdir()
-            (fake_bin / "git.cmd").write_text(
-                "@echo off\r\nexit /b 17\r\n", encoding="ascii"
-            )
+            # Platform-native stub: a .cmd file is only resolvable on Windows,
+            # where it won this test's CI run; on Linux the runner must find
+            # an executable `git` shim or the real git answers and the probe
+            # reports a clean tree instead of the failure this test plants.
+            if os.name == "nt":
+                (fake_bin / "git.cmd").write_text(
+                    "@echo off\r\nexit /b 17\r\n",
+                    encoding="ascii",
+                )
+            else:
+                stub = fake_bin / "git"
+                stub.write_text("#!/bin/sh\nexit 17\n", encoding="utf-8")
+                stub.chmod(0o755)
             env = os.environ.copy()
             env.update(
                 {

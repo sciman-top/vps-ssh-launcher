@@ -187,6 +187,24 @@ try {
       New-Item -ItemType Directory -Path (Join-Path $workerRoot "gw$index") -Force |
         Out-Null
     }
+    if ($IsWindows) {
+      # POSIX workers inherit a private temp from their own os. A Windows
+      # worker tree inside the checkout would otherwise carry the checkout's
+      # broad ACLs into every fixture, and credential-shaped fixtures (SSH
+      # keys, target.json) then fail the launcher's own privacy contract on
+      # a shared runner. Harden to the same tolerated principals as
+      # vps_ssh_launcher.windows_acl: owner rights, SYSTEM, Administrators;
+      # the inheritable grants cover the per-worker leaves created below.
+      $aclGrant = @(
+        "*S-1-3-4:(OI)(CI)F"
+        "*S-1-5-18:(OI)(CI)F"
+        "*S-1-5-32-544:(OI)(CI)F"
+      )
+      & icacls $workerRoot /inheritance:r /grant:r @aclGrant | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        throw "Gate worker temp root could not be made private: $workerRoot"
+      }
+    }
     return @{
       PYTEST_XDIST_AUTO_NUM_WORKERS = [string]$WorkerCount
       # Per run: a crashed run cannot leave fixtures for the next one to
