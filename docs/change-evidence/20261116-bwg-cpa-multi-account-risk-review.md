@@ -195,7 +195,8 @@ admission 侧 `waited_ms` 未出现异常（`inflight=0`、四车道无 pending�
 **门禁实测**（2026-11-17 00:2x +08，本机 Windows）：受影响四件套 `test_cpa_guardrails_script` /
 `test_cpa_admission` / `test_cpa_policy_runtime` / `test_cpa_updater_apply` = **435 passed,
 4 skipped**；`ruff check` / `ruff format --check` 干净；`check_docs.py` = `DOCS_CHECK=PASS (42
-documents)`；`cpa_catalog_check.py` = `CATALOG_CHECK=PASS`。全量 suite 结果见本轮提交信息。
+documents)`；`cpa_catalog_check.py` = `CATALOG_CHECK=PASS`；全量 `pytest -q` = **1723 passed, 31 skipped,
+815 subtests passed**（257 s）。
 
 ### 6.1 `bootstrap-retries = 1` 的理由与边界
 
