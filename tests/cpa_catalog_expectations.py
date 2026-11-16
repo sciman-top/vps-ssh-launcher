@@ -94,7 +94,12 @@ ALL_OAUTH_ROUTE_ALIASES = (
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
 # claude-oauth retired 2026-10-20 (see above).
 ADMISSION_LANE_MODELS = {
-    "workbuddy-oauth": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "hy4free"],
+    "workbuddy-oauth": ["deepseek-v4.1-flash"],
+    "workbuddy-intl-oauth": [
+        "deepseek-v4.1-flash-intl",
+        "deepseek-v4.1-flash-sg",
+        "hy4free",
+    ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
@@ -107,9 +112,14 @@ WORKBUDDY_PLUGIN_MODELS = {
     # 2026-11-15: hy4free is a zero-cost (x0.00 credits) fallback and is now
     # exclusive to intl, so the CN pool carries only the paid primary. Both
     # realms answer the same upstream id hy4-free, so this narrows the
-    # candidate pool; it does not declare a new model.
+    # candidate pool; it does not declare a new model. The plugin pin remains
+    # the upstream id; CPA's forked client alias is declared separately.
     "cn": ["deepseek-v4.1-flash"],
     "intl": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "hy4free"],
+}
+WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
+    "cn": ["deepseek-v4.1-flash"],
+    "intl": ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg", "hy4free"],
 }
 
 # Every model cpa-admission must register across the shared-account lanes.

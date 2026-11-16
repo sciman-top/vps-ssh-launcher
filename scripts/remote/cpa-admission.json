@@ -118,7 +118,42 @@
     {
       "name": "workbuddy-oauth",
       "models": [
-        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash"
+      ],
+      "max_inflight": 1,
+      "max_pending": 4,
+      "queue_timeout_seconds": 120,
+      "requests_per_minute": 18,
+      "cooldown_schedule_seconds": [
+        60,
+        120,
+        240,
+        480,
+        900
+      ],
+      "cooldown_cap_seconds": 900,
+      "capacity_statuses": [
+        429,
+        503
+      ],
+      "model_capacity_markers": [],
+      "capacity_markers": [
+        "server_is_overloaded",
+        "overloaded_error",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "resource exhausted",
+        "resource_exhausted",
+        "quota exceeded",
+        "usage limit",
+        "usage_limit_reached"
+      ]
+    },
+    {
+      "name": "workbuddy-intl-oauth",
+      "models": [
+        "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
         "hy4free"
       ],
@@ -153,9 +188,6 @@
       ],
       "zero_cost_models": [
         "hy4free"
-      ],
-      "pooled_models": [
-        "deepseek-v4.1-flash"
       ]
     }
   ]

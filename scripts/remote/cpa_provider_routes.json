@@ -1,8 +1,6 @@
 {
   "version": 1,
-  "pooled_aliases": [
-    "deepseek-v4.1-flash"
-  ],
+  "pooled_aliases": [],
   "probe_lint_rules": [
     "F",
     "E9"
@@ -176,6 +174,11 @@
     "workbuddy": [
       {
         "name": "deepseek-v4.1-flash",
+        "alias": "deepseek-v4.1-flash-intl",
+        "max-context-length": 1000000
+      },
+      {
+        "name": "deepseek-v4.1-flash",
         "max-context-length": 1000000
       },
       {
@@ -188,7 +191,15 @@
       }
     ]
   },
-  "oauth_model_aliases": {},
+  "oauth_model_aliases": {
+    "workbuddy": [
+      {
+        "name": "deepseek-v4.1-flash",
+        "alias": "deepseek-v4.1-flash-intl",
+        "fork": true
+      }
+    ]
+  },
   "codex_api_key_routes": [],
   "claude_api_key_routes": [],
   "retired_hosts": [
@@ -310,7 +321,7 @@
       "models": [
         "deepseek-v4.1-flash"
       ],
-      "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn. 2026-11-15: hy4free is removed from models_cn and stays exclusive to the intl realm. It is a zero-cost (x0.00 credits) fallback, so keeping it off the CN credentials leaves them carrying only the paid primary and keeps failure attribution per realm clean. The upstream id is the same hy4-free on both realms, so this narrows the candidate pool; it does not declare a new model.",
+      "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn. 2026-11-17: the client bare name belongs to this CN admission lane. The INTL client alias deepseek-v4.1-flash-intl maps to the same upstream model on the separate workbuddy-intl-oauth lane. The plugin's credit scheduler still supports failover across its configured auth pool; this manifest split isolates admission state and client entry points.",
       "shared_consumption": true,
       "admission_lane": "workbuddy-oauth"
     },
@@ -322,9 +333,9 @@
         "deepseek-v4.1-flash-sg",
         "hy4free"
       ],
-      "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl",
+      "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl. 2026-11-17: the INTL client entry point is the forked alias deepseek-v4.1-flash-intl, while the plugin keeps its upstream pin deepseek-v4.1-flash. deepseek-v4.1-flash-sg remains the second INTL model bucket.",
       "shared_consumption": true,
-      "admission_lane": "workbuddy-oauth"
+      "admission_lane": "workbuddy-intl-oauth"
     }
   ]
 }

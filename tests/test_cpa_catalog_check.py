@@ -31,12 +31,28 @@ def test_derived_lanes_match_the_deployable_admission_config() -> None:
     assert derived == deployed
 
 
-def test_plugin_lane_uses_the_widest_realm_not_a_union() -> None:
+def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
-    # The intl realm is the superset; a union would keep cn's order and the
-    # checker would report a phantom drift against cpa-admission.json.
-    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy") == [
+    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "cn") == [
+        "deepseek-v4.1-flash"
+    ]
+    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "intl") == [
         "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-sg",
+        "hy4free",
+    ]
+    assert cpa_catalog_check.plugin_lane_aliases(
+        manifest,
+        "workbuddy",
+        cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "intl"),
+    )[:2] == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg"]
+    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "missing") == []
+    errors: list[str] = []
+    derived = cpa_catalog_check.derive_lanes(manifest, errors)
+    assert errors == []
+    assert derived["workbuddy-oauth"] == ["deepseek-v4.1-flash"]
+    assert derived["workbuddy-intl-oauth"] == [
+        "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
         "hy4free",
     ]

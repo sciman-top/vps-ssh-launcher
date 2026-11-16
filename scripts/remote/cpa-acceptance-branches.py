@@ -27,7 +27,7 @@ from pathlib import Path
 ADMISSION = Path("/opt/cliproxyapi/cpa-admission.py")
 CONFIG = Path("/opt/cliproxyapi/cpa-admission.json")
 ROUTES = Path("/opt/cliproxyapi/cpa_provider_routes.json")
-LANES = ("antigravity", "chatgpt", "claude", "workbuddy")
+LANES = ("antigravity", "chatgpt", "claude", "workbuddy", "workbuddy-intl")
 
 
 def free_port():
@@ -72,7 +72,7 @@ def start_shadow(config_path, port, workdir):
     command = [sys.executable, "-P", str(ADMISSION), str(config_path)]
     # A missing circuit-state file is a refusal, not "start clean" (that is how
     # an operator hold survives a restart), so the shadow seeds a clear marker.
-    for lane in ("antigravity", "chatgpt", "claude", "workbuddy"):
+    for lane in LANES:
         (workdir / ("%s-risk.json" % lane)).write_text(
             json.dumps({"version": 1, "not_before": 0, "hold_reason": None}),
             encoding="utf-8",
@@ -83,6 +83,7 @@ def start_shadow(config_path, port, workdir):
         ("--chatgpt-state-file", "chatgpt"),
         ("--claude-state-file", "claude"),
         ("--workbuddy-state-file", "workbuddy"),
+        ("--workbuddy-intl-state-file", "workbuddy-intl"),
     ):
         command += [flag, str(workdir / ("%s-risk.json" % lane))]
     log = open(workdir / "shadow.log", "wb")
@@ -181,17 +182,22 @@ def main():
             )
         )
 
-        # 2. a standing restriction on the same lane must park it, not cool it.
+        # 2. a standing restriction on the INTL lane must park that lane, not
+        # the CN lane. This is the controlled proof that the second bucket is
+        # an independent admission/state boundary.
         Upstream.body = json.dumps(
             {"error": {"message": "Your account has been disabled.", "code": 403}}
         ).encode()
         post(port, "deepseek-v4.1-flash-sg")
-        state = settle(port, "workbuddy-oauth")
+        state = settle(port, "workbuddy-intl-oauth")
+        cn_state = settle(port, "workbuddy-oauth")
         checks.append(
             (
-                "standing-restriction",
-                state.get("hold_reason") == "account_restricted",
-                "hold_reason=%s" % state.get("hold_reason"),
+                "intl-standing-restriction-isolated",
+                state.get("hold_reason") == "account_restricted"
+                and cn_state.get("hold_reason") is None,
+                "intl_hold_reason=%s cn_hold_reason=%s"
+                % (state.get("hold_reason"), cn_state.get("hold_reason")),
             )
         )
 

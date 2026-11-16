@@ -1,6 +1,6 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-08 当前状态**：CPA `v8.0.61`（运行时为本地 fork 二进制
+**截至 2026-11-08 的最后已知插件状态**：CPA `v8.0.61`（运行时为本地 fork 二进制
 `681ce41b+gemini-raw`，SHA `31f2f9d9…`）+ WorkBuddy `0.9.89`（官方
 `cpa-multi-plugins v0.8.97` 构建，生产 `.so` SHA `f2c678ff…`）。
 0.9.89 只把 **模型级**上游故障（HTTP 500 + 业务码 `11134`）记入 #35 冷却表
@@ -8,6 +8,9 @@
 `model_provider_fault` 轮换掉该死组合；不改账号选择、粘性、并发与
 `max-retry-credentials`。doctor 版本门禁随之钉 `0.9.89`，证据见
 [v8.0.61 窗台账](../change-evidence/20261108-bwg-cpa-v8061-wb0989-gemini-raw.md)。
+2026-11-17 的 CN/INTL 改动只调整 CPA 模型别名、admission lane 与风险状态文件，
+不更换 WorkBuddy 插件二进制、不改 OAuth 凭据；加载与受控验收须以本次
+change-evidence 记录为准。
 **2026-11-07 历史状态**：CPA `v8.0.59` + WorkBuddy `0.9.88`（官方
 `cpa-multi-plugins v0.8.96` 构建，生产 `.so` SHA `6b2b2284…`）。本地
 canonical UID 补丁（`7093a190…`）与 0.9.85 INT 共享窗口补丁均已退役为重建
@@ -192,18 +195,30 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 加入 CN 凭据属真实远端写入（config.yaml 变更 + 新凭据落盘），按 change-evidence 流程执行；仅限用户本人完成浏览器 OAuth（腾讯实名体系），agent 不代登录、不代注册。CN 出口为 bwg 美国 IP 访问 copilot.tencent.com，与国内版典型用户地理画像差异明显；CN 侧是否按 IP 地理聚合风控（对照 `14003`）零实测证据，加入前由用户自决。流程：
 
 1. 管理页把 `login_region` 切到 `cn` **之后**再发起 CN 登录——这是 token 血统正确性要求，不只操作卫生：上游 issue #36 实证 intl 态下登录的凭据带 IDE 平台血统、走错头族（0.9.58 起登录平台持久化到 auth 文件已修，但血统在登录时铸定，事后不可迁移）。完成后立即把 `login_region` 翻回 `intl`。该值粘性且只影响新登录（存量凭据的请求路由恒按各自 auth 文件的域分派），残留 `cn` 会让后续新登录意外进 CN realm。
-2. 同日钉定 `models_cn` 为该账号实际权益模型集。CN 目录真源是 copilot.tencent.com 按凭据返回（5 分钟缓存），不钉定会复刻 2026-10-18 INTL 目录 26 个幻影模型进入 `/v1/models` 的教训；`step-5-preview` 同样禁止写入或猜测。
-3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。2026-10-24 的已知例外是两边均钉定 `deepseek-v4.1-flash`：credits 模式下该公共名的冷却回退可跨运营实体（无法按 realm 指定）。不要把该别名当作严格的 CN/INTL 路由；需要客户端可选 realm 时，先实现并验收 realm-aware alias 与调度。
-   2026-11-06 增补 `hy4free`：WorkBuddy CN 与 INTL 均免费支持（x0.00 credits），当时作为两边均钉定的第二个公共池化模型。
-   **2026-11-15 更正**：两个 realm 的上游 id 是同一个 `hy4-free`（容器日志 137/137 均为
-   `upstream served model "hy4-free" for requested model "hy4free"`），因此**无法**拆成
-   `hy4free` / `hy4free-sg` 两个可独立冷却的模型；`models_cn`/`models_intl` 是候选
-   过滤白名单，只能收窄归属。现按"免费回退与付费主力分域"改为 `models_cn` 只留
-   `deepseek-v4.1-flash`、`hy4free` 归 INTL 独用：CN 的 10 份凭据只承载付费主力，
-   归因面干净；`hy4free` 作为零成本回退留在 INTL 的 7 份凭据上。注意这是
-   **行为收缩**——CN 侧不再能以 `hy4free` 兜底。`deepseek-v4.1-flash` 仍是两边
-   公共池化别名（保持跨 realm 兜底），`hy4free` 已从 `pooled_aliases` 移除。
-4. 当日按独立受控变更验收：config 变更前后快照、`/v1/models` 读回只含钉定集、CN 账号单发受控验证、doctor 全绿，记入 change-evidence。
+2. `models_cn`/`models_intl` 是插件候选 pin，保持原始上游模型名：CN 为
+   `deepseek-v4.1-flash`；INTL 为 `deepseek-v4.1-flash`、
+   `deepseek-v4.1-flash-sg`、`hy4free`。它们用于收窄候选目录，不能把相同的
+   `deepseek-v4.1-flash` 变成 realm-aware 账号选择器。
+3. CPA admission 的客户端/状态分流如下：
+
+   | 请求名 | Admission lane | 持久状态 |
+   | --- | --- | --- |
+   | CN 裸名 `deepseek-v4.1-flash` | `workbuddy-oauth` | `workbuddy-risk.json` |
+   | INTL `deepseek-v4.1-flash-intl`（`fork=true`，上游仍为 `deepseek-v4.1-flash`） | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` |
+   | INTL `deepseek-v4.1-flash-sg`、`hy4free` | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` |
+
+   `deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶；`hy4free` 是 INTL 唯一的
+   零成本模型，能越过该 lane 的 6008 计费冷却。`6008` 按请求的 admission lane
+   记录冷却，不新建持久账号 hold。
+4. **分 lane 不等于分凭据。** WorkBuddy 的 `credits` scheduler 仍能在配置的 auth
+   pool 中回退；上面的 alias 与状态文件只隔离客户端入口和 admission breaker，
+   不强制 INTL 请求只选 INTL 凭据，也不证明 realm、额度或风控域独立。不得据此
+   自动换账号、跨 realm 续打、清 cooldown 或推断账号健康。若将来需要严格
+   per-auth realm 绑定，必须单独实现并通过 scheduler 行为验收。
+5. 当日按独立受控变更验收：配置前后快照、`/v1/models` 读回、两条 lane 的
+   `/healthz` 与状态文件归属、CN 裸名和 INTL alias/`sg`/`hy4free` 的单发受控
+   验收分别留痕。单发通过只证明当次路由与响应，不证明长期 QoS、账号资格或
+   provider 的全局限流隔离。
 
 Strict doctor 不把登录窗口中的 `cn` 当作立即失败，但会显式输出
 `workbuddy-login_region=cn expected=intl warning=sticky_cn_new_logins_only`；
@@ -308,7 +323,8 @@ Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；
 | 信号 | 处置 |
 | --- | --- |
 | `403 request illegal`、`11140`、官方客户端也提示账号受限 | 暂停当前调用任务并关闭调用端重试；保持凭据，不换账号、IP、设备或 token，不刷新 OAuth、不清冷却、不再用探针确认。保存时间、客户端/插件版本、模型、request ID 与脱敏错误，按官方支持渠道反馈。没有官方恢复信号前不要自动续打。 |
-| `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止调用端自动重试并保留 `Retry-After` / reset 信息；同一请求只允许 CPA 当前配置的最多 3 个凭据做有界回退，不跨 realm 续打、不继续进入 OpenCode、不调用 cooldown-clear。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。2026-10-21 晚实测（CPA v8.0.35）：6004 生产 wrapper 形状=HTTP 500+`server_error`/`internal_server_error` 信封（message 尾段内嵌转义的上游 JSON，raw 正文自带 reset 时间戳），admission 归 lane 阶梯自恢复、无 hold，与官方频率限制自恢复语义一致，勿当缺陷或回归。 |
+| `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止调用端自动重试并保留 `Retry-After` / reset 信息；同一请求只允许 CPA 当前配置的最多 3 个凭据做有界回退，不调用 cooldown-clear。CN/INTL admission lane 分离不约束 WorkBuddy scheduler 的 auth 候选，不能把 lane 名当作“不得跨 realm 续打”的凭据保证。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。2026-10-21 晚实测（CPA v8.0.35）：6004 生产 wrapper 形状=HTTP 500+`server_error`/`internal_server_error` 信封（message 尾段内嵌转义的上游 JSON，raw 正文自带 reset 时间戳），admission 归冷却阶梯自恢复、无 hold，与官方频率限制自恢复语义一致，勿当缺陷或回归。 |
+| `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。`hy4free` 零成本例外仍可通过 INTL lane 的计费冷却。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
 | `14003` "模型繁忙"（官方归模型侧；2026-10-20 增补，同日策略更新） | 先分流：双账号同现且面板额度未耗尽支持模型/通道侧故障的判断，但不能单独排除共享出口或账号风控；单账号独现也不足以确认账号受限，须结合完整错误及官方账号状态。停止调用端连点重试（实测 Codex 客户端 5 连发会加深突发画像）。自 2026-10-20 起 admission 对模型侧 14003 **不再置 operator-review hold**：无 `Retry-After` 的 429 只落冷却阶梯首档（当前首档 60 秒，阶梯 60/120/240/480/900 秒；可信上游期限可延长窗口），窗后允许后续请求但不保证上游恢复；账号型信号（`rate_limit_error`/6003/6004/11140/认证类）仍照旧持锁。人工干预仅在整个阶梯走完仍失败时按 [cpa-gateway 人工恢复](cpa-gateway.md#oauth-持久化风险状态的人工恢复) 评估。实测窗口 2026-10-20 为 ~31 分钟自愈（[台账 §6](../change-evidence/20261020-bwg-cpa-v8035-canary.md)）；社区"按出口 IP 聚合"属非官方观测，不将换网络试探作为常规恢复动作。**2026-10-21 缺陷收口**：部署后首波 14003 经 CPA 包装信封（wrapper `type=rate_limit_error`）误置 durable hold——wrapper 标签击败 header 层阶梯改动（生产形状未被原钉住测试覆盖）；已修复并部署（[台账](../change-evidence/20261021-bwg-workbuddy-14003-wrapper-fix.md)，pin `19d64361`）：分类按 wrapper message 内嵌上游 code，wrapper-14003 归阶梯自恢复，裸 rate_limit_error/内嵌 6003/6004 仍持锁。 |
 | `11115 INPUT TOO LONG` | 按官方错误码说明缩短输入或压缩上下文，在本地检查请求大小；该码本身不是账号受限证据，不换号重发超长请求。 |
 | `11128`、超时或普通 5xx | 不循环重发原请求。保留一次脱敏错误上下文并停止自动化；若是请求格式错误，在本地修正后再按官方支持路径评估，不通过反复探测来确认账号状态。 |
@@ -323,16 +339,14 @@ admission 按瞬时信号走冷却阶梯、不再落持久人工锁；只有 JSO
 `lane_hold_latched lane=… reason=… source=…` 定位来源，再按
 [CPA 故障归因 runbook](cpa-failure-triage.md) 的释放流程处理。
 
-**6004 在 admission 侧的窗口（2026-11-06 增补）**：`deepseek-v4.1-flash` 是
-`pooled_aliases`（WorkBuddy 主、OpenCode `priority: -1` 备），而 admission 按**模型名**
-判 lane。6004 的 reset 曾被整段镜像进模型冷却（实测一次 22254s），于是
-`lane_reject reason=model_cooldown` 在 CPA 之前就挡掉所有 provider——客户端报
-`Shared upstream lane workbuddy-oauth is cooling down or busy; retry after 22210s`，
-而同一账号在官方客户端正常，OpenCode 备份也永远轮不到。现改为按
-`WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300` 封顶：最多停 5 分钟，之后请求可再落到别的
-凭据或备份 provider。注意这**不**恢复 CPA 侧无界的自动回退——`routing.retry.request-retry: 0`
-与 `max-retry-credentials: 3`（2026-11-08 再评审，原为 1）只允许单请求至多触达
-3 个凭据（见 §7 与 `cpa_policy.py` 的期望值）。
+**6004 在 admission 侧的窗口（2026-11-17 更新）**：6004 按上游给出的模型级
+信号进入模型冷却，`WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300` 将本地预测窗口
+封顶在 5 分钟；有可信的更长上游 `Retry-After` 时仍尊重上游期限。现行
+`pooled_aliases` 不再包含 WorkBuddy 裸名，OpenCode 只通过
+`deepseek-v4.1-flash-oc` 单宿别名访问。CN 裸名与 INTL fork alias 分属两个
+admission lane；INTL 的 `deepseek-v4.1-flash-sg` 仍是可单独观察和冷却的第二模型桶。
+此模型级状态属于 admission，不改插件的 auth 选择，也不解除 provider 限制。
+单请求最多 3 个凭据（`request-retry=0`）的有界回退仍按现有配置执行。
 
 与[事故响应 runbook](cpa-ban-throttle-incident-response.md) 的词汇对应（2026-10-19 增补）：本页 `6003/6004`（官方频率限制）、`11128/11140`（需结合完整错误判断的 request illegal 信号）、`11115`（官方 INPUT TOO LONG）对应其增补词汇表 workbuddy 各行；社区观测另录 `14003`（按出口 IP 聚合的限流定量画像）、`11158`（intl 免费号模型级墙）、`11134/11102`（模型级故障/下线）、`14018`（credits）；另有 HTTP 200 空内容完成形态（额度到量的降智式表现，上游 [#6526](https://github.com/router-for-me/CLIProxyAPI/issues/6526)，2026-10-21 增补）——先查面板 credits/额度再归因，勿当健康绿灯。处置入口仍是本页 §4 表 + 事故 runbook 分级；账号级 vs 通道级的判别法（官方桌面同账号 A/B 单发）以事故 runbook 行为准。
 

@@ -112,10 +112,17 @@ RISK_STATE_DIR = "/var/lib/cpa-admission"
 # bcrypt hash (one-way), so this file is the only machine-readable source;
 # it never leaves the host and must be chmod 600.
 MANAGEMENT_KEY_FILE = "/root/.cpa-management-key"
-# The four durable state files admission is launched with (bootstrap argv);
+# The five durable state files admission is launched with (bootstrap argv);
 # the lane mapping is by filename prefix (antigravity-risk.json ->
-# antigravity-oauth lane).
-RISK_FILE_PREFIXES = ("antigravity", "claude", "chatgpt", "workbuddy")
+# antigravity-oauth lane). Keep the INTL WorkBuddy prefix before the broader
+# CN prefix because ``workbuddy-intl-oauth`` must read its own state bucket.
+RISK_FILE_PREFIXES = (
+    "antigravity",
+    "claude",
+    "chatgpt",
+    "workbuddy-intl",
+    "workbuddy",
+)
 
 LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 

@@ -6,6 +6,7 @@ exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; exit 1; }
 
 DIR=/opt/cliproxyapi
+RISK_STATE_DIR=/var/lib/cpa-admission
 ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
 ADMISSION_LAUNCHER=$DIR/cpa-admission-launch.sh
 ADMISSION_BOOTSTRAP=/usr/local/libexec/cpa_admission_bootstrap.py
@@ -176,6 +177,21 @@ if [ -f "$ADMISSION_CONFIG" ]; then
 else
   : > "$BK/cpa-admission.json.missing"
 fi
+# The INTL WorkBuddy lane has its own durable breaker bucket. Older hosts
+# predate this file, so capture both its absence and any existing regular file
+# before the first mutation; rollback must restore the exact pre-transaction
+# state instead of leaving a new lane with an orphaned or stale hold marker.
+if [ -e "$RISK_STATE_DIR/workbuddy-intl-risk.json" ]; then
+  if [ -L "$RISK_STATE_DIR/workbuddy-intl-risk.json" ] ||
+     [ ! -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" ]; then
+    echo "REFUSE workbuddy-intl-risk-state is not a regular file"
+    discard_empty_backup
+    exit 1
+  fi
+  cp -a "$RISK_STATE_DIR/workbuddy-intl-risk.json" "$BK/workbuddy-intl-risk.json"
+else
+  : > "$BK/workbuddy-intl-risk.json.missing"
+fi
 if [ -f "$ADMISSION_UNIT" ]; then
   cp -a "$ADMISSION_UNIT" "$BK/cpa-admission.service"
 else
@@ -279,6 +295,12 @@ restore_all() {
     cp -a "$BK/cpa-admission.json" "$ADMISSION_CONFIG" || rollback_failed=1
   else
     rm -f "$ADMISSION_CONFIG" || rollback_failed=1
+  fi
+  if [ -f "$BK/workbuddy-intl-risk.json" ]; then
+    mkdir -p "$RISK_STATE_DIR" || rollback_failed=1
+    cp -a "$BK/workbuddy-intl-risk.json" "$RISK_STATE_DIR/workbuddy-intl-risk.json" || rollback_failed=1
+  elif [ -f "$BK/workbuddy-intl-risk.json.missing" ]; then
+    rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" || rollback_failed=1
   fi
   if [ -f "$BK/cpa-admission.service" ]; then
     cp -a "$BK/cpa-admission.service" "$ADMISSION_UNIT" || rollback_failed=1
@@ -886,7 +908,7 @@ def model_entry(name):
 
 
 def oauth_model_setting(entry):
-    allowed = {"name", "alias", "max-context-length"}
+    allowed = {"name", "alias", "max-context-length", "fork"}
     if (
         not isinstance(entry, dict)
         or "name" not in entry
@@ -896,11 +918,16 @@ def oauth_model_setting(entry):
         raise SystemExit("REFUSE OAuth model setting entry is invalid")
     name = entry.get("name")
     alias = entry.get("alias")
+    fork = entry.get("fork")
     max_context_length = entry.get("max-context-length")
     if not isinstance(name, str) or not name.strip():
         raise SystemExit("REFUSE OAuth model setting name must be non-empty")
     if alias is not None and (not isinstance(alias, str) or not alias.strip()):
         raise SystemExit("REFUSE OAuth model setting alias must be non-empty")
+    if fork is not None and type(fork) is not bool:
+        raise SystemExit("REFUSE OAuth model setting fork must be boolean")
+    if fork is not None and alias is None:
+        raise SystemExit("REFUSE OAuth model setting fork requires an alias")
     if type(max_context_length) is not int or max_context_length <= 0:
         raise SystemExit(
             "REFUSE OAuth model setting max-context-length must be a positive integer"
@@ -908,6 +935,8 @@ def oauth_model_setting(entry):
     setting = {"name": name.strip(), "max-context-length": max_context_length}
     if alias is not None:
         setting["alias"] = alias.strip()
+    if fork:
+        setting["fork"] = True
     return setting
 
 
@@ -1352,6 +1381,54 @@ oauth_route_aliases = {
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
+oauth_route_aliases.update(
+    str(model["alias"]).strip().lower()
+    for provider in route_manifest.get("plugin_routes", [])
+    if isinstance(provider, dict)
+    for model in provider.get("models", [])
+    if isinstance(model, dict)
+    and isinstance(model.get("alias"), str)
+    and model["alias"].strip()
+)
+oauth_route_aliases.update(
+    model.strip().lower()
+    for route in route_manifest.get("plugin_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, str) and model.strip()
+)
+oauth_route_aliases.update(
+    entry["alias"].strip().lower()
+    for entries in (route_manifest.get("oauth_model_aliases") or {}).values()
+    if isinstance(entries, list)
+    for entry in entries
+    if isinstance(entry, dict)
+    and isinstance(entry.get("alias"), str)
+    and entry["alias"].strip()
+)
+oauth_alias_sources = {
+    str(model["name"]).strip().lower()
+    for provider in route_manifest.get("providers", [])
+    if isinstance(provider, dict)
+    for model in provider.get("models", [])
+    if isinstance(model, dict)
+    and isinstance(model.get("name"), str)
+}
+oauth_alias_sources.update(
+    str(model["name"]).strip().lower()
+    for route in route_manifest.get("oauth_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict)
+    and isinstance(model.get("name"), str)
+)
+oauth_alias_sources.update(
+    model.strip().lower()
+    for route in route_manifest.get("plugin_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, str) and model.strip()
+)
 oauth_block_after = config_after.setdefault("oauth", {})
 if not isinstance(oauth_block_after, dict):
     raise SystemExit("REFUSE oauth must be a mapping")
@@ -1561,11 +1638,19 @@ for channel, entries in oauth_aliases_manifest.items():
         raise SystemExit(
             f"REFUSE oauth_model_aliases.{channel} alias is not an OAuth route alias"
         )
+    if not all(entry["fork"] for entry in normalized_aliases):
+        raise SystemExit(
+            f"REFUSE oauth_model_aliases.{channel} must fork every alias"
+        )
     # A rename must take its upstream source out of the same channel's
     # exclusion list. Drop only an exact-name exclusion; a wildcard that still
     # matches the source is an unsafe broader rule and is refused.
     for entry in normalized_aliases:
         source = entry["name"].lower()
+        if source not in oauth_alias_sources:
+            raise SystemExit(
+                f"REFUSE oauth_model_aliases.{channel} source is not an upstream model"
+            )
         remaining_exclusions = []
         for pattern in oauth_exclusions.get(channel, []):
             if not isinstance(pattern, str):
@@ -2192,6 +2277,9 @@ expected = {
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
+    ],
+    "workbuddy-intl-oauth": [
+        "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
         "hy4free",
     ],
@@ -2201,6 +2289,7 @@ expected_max_inflight = {
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
+    "workbuddy-intl-oauth": 1,
 }
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):
@@ -2224,7 +2313,8 @@ for lane in lanes:
     if lane.get("cooldown_cap_seconds") > config["retry_after_max_seconds"]:
         raise SystemExit(1)
     expected_rpm = {"chatgpt-oauth": 24, "zhipu-coding-plan": 30,
-                    "antigravity-oauth": 18, "workbuddy-oauth": 18}
+                    "antigravity-oauth": 18, "workbuddy-oauth": 18,
+                    "workbuddy-intl-oauth": 18}
     if lane.get("requests_per_minute") != expected_rpm.get(lane.get("name")):
         raise SystemExit(1)
     if 429 not in lane.get("capacity_statuses", []):
@@ -2235,6 +2325,85 @@ PY
 then
   restore_all
   echo "ROLLBACK admission_config_contract"
+  exit 1
+fi
+if ! python3 - "$RISK_STATE_DIR/workbuddy-intl-risk.json" <<'PY'
+import json
+import os
+import pwd
+import grp
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+directory = path.parent
+if directory.is_symlink() or not directory.is_dir():
+    raise SystemExit("workbuddy-intl risk state directory is not a directory")
+owner = pwd.getpwnam("nobody").pw_uid
+group = grp.getgrnam("nogroup").gr_gid
+directory_stat = directory.stat()
+if (
+    directory_stat.st_uid != owner
+    or directory_stat.st_gid != group
+    or stat.S_IMODE(directory_stat.st_mode) != 0o700
+):
+    raise SystemExit("workbuddy-intl risk state directory permissions drift")
+
+if path.exists() or path.is_symlink():
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit("workbuddy-intl risk state is not a regular file")
+    file_stat = path.stat()
+    if (
+        file_stat.st_uid != owner
+        or file_stat.st_gid != group
+        or stat.S_IMODE(file_stat.st_mode) != 0o600
+    ):
+        raise SystemExit("workbuddy-intl risk state permissions drift")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SystemExit("workbuddy-intl risk state is invalid JSON") from None
+    if (
+        not isinstance(value, dict)
+        or value.get("version") != 1
+        or type(value.get("not_before")) not in (int, float)
+        or (
+            "hold_reason" in value
+            and value["hold_reason"] is not None
+            and not isinstance(value["hold_reason"], str)
+        )
+    ):
+        raise SystemExit("workbuddy-intl risk state schema drift")
+    print("workbuddy-intl-risk-state=EXISTING")
+else:
+    payload = json.dumps(
+        {"version": 1, "not_before": 0, "hold_reason": None},
+        separators=(",", ":"),
+    )
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(directory))
+    try:
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, owner, group)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if fd != -1:
+            os.close(fd)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    print("workbuddy-intl-risk-state=INITIALIZED")
+PY
+then
+  restore_all
+  echo "ROLLBACK workbuddy-intl-risk_state"
   exit 1
 fi
 if ! grep -Fq 'ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh' "$ADMISSION_UNIT" ||

@@ -430,6 +430,9 @@ expected = {
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
+    ],
+    "workbuddy-intl-oauth": [
+        "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
         "hy4free",
     ],
@@ -440,12 +443,14 @@ expected_max_inflight = {
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
+    "workbuddy-intl-oauth": 1,
 }
 expected_rpm = {
     "chatgpt-oauth": 24,
     "zhipu-coding-plan": 30,
     "antigravity-oauth": 18,
     "workbuddy-oauth": 18,
+    "workbuddy-intl-oauth": 18,
 }
 if set(lanes) != set(expected):
     raise SystemExit(1)
@@ -471,7 +476,7 @@ for name, models in expected.items():
         or not isinstance(snapshot.get("model_cooldowns"), dict)
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "workbuddy-oauth"} and (
+    if name in {"antigravity-oauth", "workbuddy-oauth", "workbuddy-intl-oauth"} and (
         snapshot.get("strict_backoff") is not True
         or snapshot.get("state_persisted") is not True
         or snapshot.get("state_write_failed") is not False
@@ -482,7 +487,12 @@ for name, models in expected.items():
         or snapshot.get("state_write_failed") is not False
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "workbuddy-oauth", "chatgpt-oauth"}:
+    if name in {
+        "antigravity-oauth",
+        "workbuddy-oauth",
+        "workbuddy-intl-oauth",
+        "chatgpt-oauth",
+    }:
         # Report the running breaker, not the write-ahead disk marker which
         # legitimately says unverified_request while a request is in flight.
         reason = snapshot.get("hold_reason")
@@ -565,6 +575,20 @@ then
   echo workbuddy-risk-state-permissions=OK
 else
   mark_fail workbuddy-risk-state-permissions
+fi
+if python3 - <<'PY'
+import grp, pathlib, pwd
+p = pathlib.Path('/var/lib/cpa-admission/workbuddy-intl-risk.json')
+uid = pwd.getpwnam('nobody').pw_uid
+gid = grp.getgrnam('nogroup').gr_gid
+assert not p.is_symlink() and p.is_file()
+assert p.stat().st_uid == uid and p.stat().st_gid == gid and p.stat().st_mode & 0o777 == 0o600
+assert p.parent.stat().st_uid == uid and p.parent.stat().st_gid == gid and p.parent.stat().st_mode & 0o777 == 0o700
+PY
+then
+  echo workbuddy-intl-risk-state-permissions=OK
+else
+  mark_fail workbuddy-intl-risk-state-permissions
 fi
 MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
 MGMT_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
@@ -1408,7 +1432,32 @@ try:
     }
     configured_oauth = config.get("oauth", {}).get("settings", {})
     for channel, entries in expected_oauth.items():
-        if configured_oauth.get(channel) != entries:
+        configured_entries = configured_oauth.get(channel)
+        normalized_entries = [
+            {
+                key: value
+                for key, value in entry.items()
+                if key in {"name", "alias", "max-context-length"}
+                and value not in (None, "")
+            }
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+        normalized_configured = (
+            [
+                {
+                    key: value
+                    for key, value in entry.items()
+                    if key in {"name", "alias", "max-context-length"}
+                    and value not in (None, "")
+                }
+                for entry in configured_entries
+                if isinstance(entry, dict)
+            ]
+            if isinstance(configured_entries, list)
+            else configured_entries
+        )
+        if normalized_configured != normalized_entries:
             print(
                 "MODEL_CONTEXT_OAUTH_DRIFT channel="
                 + channel
@@ -1622,13 +1671,30 @@ allowed = {
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 } | {
     # Plugin credentials (e.g. the workbuddy plugin) advertise the models
-    # pinned in their plugin config; the manifest carries that list so the
-    # catalog contract can allow their contribution.
+     # pinned in their plugin config; the manifest carries that list so the
+     # catalog contract can allow their contribution.
     model_name
     for route in manifest.get("plugin_routes", [])
     if isinstance(route, dict)
     for model_name in route.get("models", [])
     if isinstance(model_name, str)
+ } | {
+     # A forked plugin client alias is a separate admission entry point. It
+     # is allowed only when its source is pinned by that provider INTL
+     # plugin realm; the policy checker validates the ownership and fork flag.
+     entry["alias"]
+     for provider, entries in manifest.get("oauth_model_aliases", {}).items()
+     if isinstance(provider, str) and isinstance(entries, list)
+     for entry in entries
+     if isinstance(entry, dict) and isinstance(entry.get("alias"), str)
+     and any(
+         isinstance(route, dict)
+         and route.get("provider") == provider
+         and route.get("realm") == "intl"
+         and isinstance(route.get("models"), list)
+         and entry.get("name") in route.get("models", [])
+         for route in manifest.get("plugin_routes", [])
+     )
 }
 if not allowed:
     raise SystemExit(1)
@@ -2838,6 +2904,7 @@ from pathlib import Path
 STATE_FILES = {
     "chatgpt-oauth": "chatgpt-risk.json",
     "workbuddy-oauth": "workbuddy-risk.json",
+    "workbuddy-intl-oauth": "workbuddy-intl-risk.json",
     "antigravity-oauth": "antigravity-risk.json",
     "claude-oauth": "claude-risk.json",
 }

@@ -570,7 +570,12 @@ if command -v python3 >/dev/null 2>&1; then
 import json
 from pathlib import Path
 held = []
-for name in ('chatgpt-risk.json', 'workbuddy-risk.json', 'antigravity-risk.json'):
+for name in (
+    'chatgpt-risk.json',
+    'workbuddy-risk.json',
+    'workbuddy-intl-risk.json',
+    'antigravity-risk.json',
+):
     try:
         data = json.loads((Path('/var/lib/cpa-admission') / name).read_text())
     except (OSError, ValueError):

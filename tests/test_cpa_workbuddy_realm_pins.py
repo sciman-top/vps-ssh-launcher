@@ -35,11 +35,13 @@ def test_intl_default_keeps_the_free_fallback() -> None:
     )
 
 
-def test_realms_stay_disjoint_except_the_paid_primary() -> None:
+def test_realms_share_the_upstream_primary_on_separate_lanes() -> None:
     cn = set(_default("$ModelsCn").split(","))
     intl = set(_default("$ModelsIntl").split(","))
-    assert cn & intl == {"deepseek-v4.1-flash"}
+    assert cn == {"deepseek-v4.1-flash"}
+    assert "deepseek-v4.1-flash" in intl
     assert "hy4free" in intl and "hy4free" not in cn
+    assert cn & intl == {"deepseek-v4.1-flash"}
 
 
 def test_manifest_matches_the_pin_defaults() -> None:
@@ -47,10 +49,17 @@ def test_manifest_matches_the_pin_defaults() -> None:
     realms = {r["realm"]: set(r["models"]) for r in routes["plugin_routes"]}
     assert realms["cn"] == set(_default("$ModelsCn").split(","))
     assert realms["intl"] == set(_default("$ModelsIntl").split(","))
+    roles = {
+        route["realm"]: route["admission_lane"] for route in routes["plugin_routes"]
+    }
+    assert roles == {
+        "cn": "workbuddy-oauth",
+        "intl": "workbuddy-intl-oauth",
+    }
 
 
-def test_hy4free_is_no_longer_a_pooled_alias() -> None:
-    """Only one route declares hy4free, so keeping it pooled would fail the audit."""
+def test_hy4free_is_not_a_pooled_alias() -> None:
+    """hy4free is exclusive to the independent INTL lane."""
 
     routes = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert "hy4free" not in routes["pooled_aliases"]
@@ -58,12 +67,20 @@ def test_hy4free_is_no_longer_a_pooled_alias() -> None:
     assert holders == ["intl"]
 
 
-def test_deepseek_flash_stays_pooled_across_realms() -> None:
+def test_shared_upstream_pin_maps_to_the_intl_workbuddy_alias() -> None:
     routes = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert "deepseek-v4.1-flash" in routes["pooled_aliases"]
-    holders = [
-        r["realm"]
-        for r in routes["plugin_routes"]
-        if "deepseek-v4.1-flash" in r["models"]
+    # CN and INTL are separate client/admission identities. The shared
+    # upstream name is translated only in the INTL plugin realm; it is not a
+    # cross-provider pooled alias.
+    assert routes["pooled_aliases"] == []
+    alias_entries = routes["oauth_model_aliases"]["workbuddy"]
+    assert alias_entries == [
+        {
+            "name": "deepseek-v4.1-flash",
+            "alias": "deepseek-v4.1-flash-intl",
+            "fork": True,
+        }
     ]
-    assert holders == ["cn", "intl"]
+    intl = next(r for r in routes["plugin_routes"] if r["realm"] == "intl")
+    assert "deepseek-v4.1-flash" in intl["models"]
+    assert "deepseek-v4.1-flash-intl" not in intl["models"]

@@ -83,8 +83,8 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             )
         )
         lanes = {lane["name"]: lane for lane in manifest["lanes"]}
-        pooled = lanes["workbuddy-oauth"]["pooled_models"]
-        self.assertEqual(pooled, ["deepseek-v4.1-flash"])
+        pooled = lanes["workbuddy-oauth"].get("pooled_models", [])
+        self.assertEqual(pooled, [])
         self.assertTrue(set(pooled) <= set(lanes["workbuddy-oauth"]["models"]))
 
     def test_sidecar_projection_checks_installed_app_before_mutation(self) -> None:
@@ -438,6 +438,36 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config["oauth"]["settings"]["codex"] = json.loads(
             json.dumps(route_manifest["oauth_settings"]["codex"])
         )
+        self.assertEqual(
+            config["oauth"]["model-alias"]["workbuddy"],
+            [
+                {
+                    "name": "deepseek-v4.1-flash",
+                    "alias": "deepseek-v4.1-flash-intl",
+                    "fork": True,
+                }
+            ],
+        )
+        config["oauth"]["model-alias"]["workbuddy"][0]["fork"] = False
+        self.assertTrue(
+            any(
+                "oauth.model-alias.workbuddy rename drift" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        config["oauth"]["model-alias"] = json.loads(
+            json.dumps(route_manifest["oauth_model_aliases"])
+        )
+        config["oauth"]["model-alias"]["codex"] = [{"name": "stale", "alias": "old"}]
+        self.assertTrue(
+            any(
+                "undeclared channel" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        config["oauth"]["model-alias"] = json.loads(
+            json.dumps(route_manifest["oauth_model_aliases"])
+        )
         config["api-keys"]["openai-compatibility"].append(
             {
                 "name": "unexpected",
@@ -497,6 +527,22 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(
             any("names undeclared model" in issue for issue in issues),
+            issues,
+        )
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["oauth_model_aliases"]["workbuddy"][0]["name"] = (
+            "deepseek-v4.1-flash-unknown"
+        )
+        issues = policy["_route_manifest_issues"](manifest)
+        self.assertTrue(
+            any("source is not an upstream model" in issue for issue in issues),
+            issues,
+        )
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["oauth_model_aliases"]["workbuddy"][0]["fork"] = False
+        issues = policy["_route_manifest_issues"](manifest)
+        self.assertTrue(
+            any("fork=true" in issue for issue in issues),
             issues,
         )
 

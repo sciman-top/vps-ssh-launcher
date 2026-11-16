@@ -105,17 +105,30 @@ def _run(
 
     upstream, upstream_thread = _serve(CreditsUpstream)
     loaded = config()
-    loaded_lane = lane(loaded, "workbuddy-oauth")
-    loaded_lane["max_inflight"] = 2
-    loaded_lane["queue_timeout_seconds"] = 1
+    # The test intentionally shortens both lane queues, but keeps their
+    # production routing and independent persistent circuit state.
+    for lane_name in ("workbuddy-oauth", "workbuddy-intl-oauth"):
+        loaded_lane = lane(loaded, lane_name)
+        loaded_lane["max_inflight"] = 2
+        loaded_lane["queue_timeout_seconds"] = 1
     loaded["upstream_port"] = upstream.server_port
-    state_path = tmp_path / "workbuddy-risk.json"
+    cn_state_path = tmp_path / "workbuddy-risk.json"
+    intl_state_path = tmp_path / "workbuddy-intl-risk.json"
     # LaneState refuses to construct without a readable, schema-valid state file.
-    state_path.write_text(
-        json.dumps({"version": 1, "not_before": 0, "hold_reason": None}),
+    initial_state = json.dumps({"version": 1, "not_before": 0, "hold_reason": None})
+    cn_state_path.write_text(
+        initial_state,
         encoding="utf-8",
     )
-    proxy = AdmissionProxy(loaded, workbuddy_state_path=state_path)
+    intl_state_path.write_text(
+        initial_state,
+        encoding="utf-8",
+    )
+    proxy = AdmissionProxy(
+        loaded,
+        workbuddy_state_path=cn_state_path,
+        workbuddy_intl_state_path=intl_state_path,
+    )
     server = AdmissionServer(("127.0.0.1", 0), proxy)
     admission_worker = server_thread(server)
     admission_worker.start()
@@ -130,8 +143,11 @@ def _run(
         upstream.server_close()
         admission_worker.join(timeout=3)
         upstream_thread.join(timeout=3)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    return responses, {"calls": calls, "state": state}
+    states = {
+        "cn": json.loads(cn_state_path.read_text(encoding="utf-8")),
+        "intl": json.loads(intl_state_path.read_text(encoding="utf-8")),
+    }
+    return responses, {"calls": calls, "states": states}
 
 
 def test_6008_arms_the_capacity_ladder_without_a_hold(tmp_path: Path) -> None:
@@ -143,10 +159,18 @@ def test_6008_arms_the_capacity_ladder_without_a_hold(tmp_path: Path) -> None:
     operator-review gate manufactured the false "all 14 credentials dead,
     purchase add-on" verdict.
     """
-    responses, info = _run(tmp_path, ["deepseek-v4.1-flash-sg"])
-    assert len(responses) == 1
-    assert info["state"]["hold_reason"] is None
-    assert info["state"]["not_before"] > 0
+    responses, info = _run(
+        tmp_path,
+        ["deepseek-v4.1-flash-sg", "deepseek-v4.1-flash"],
+    )
+    assert len(responses) == 2
+    assert info["states"]["intl"]["hold_reason"] is None
+    assert info["states"]["intl"]["not_before"] > 0
+    # A 6008 on the INTL second bucket must not cool the CN bare-name lane.
+    # The CN request therefore reaches the fake upstream as well.
+    assert info["calls"] == ["deepseek-v4.1-flash-sg", "deepseek-v4.1-flash"]
+    assert info["states"]["cn"]["hold_reason"] is None
+    assert info["states"]["cn"]["not_before"] > 0
 
 
 def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
@@ -161,15 +185,21 @@ def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
     """
     responses, info = _run(
         tmp_path,
-        ["deepseek-v4.1-flash-sg", "deepseek-v4.1-flash", "hy4free"],
+        [
+            "deepseek-v4.1-flash-sg",
+            "deepseek-v4.1-flash-intl",
+            "deepseek-v4.1-flash",
+            "hy4free",
+        ],
     )
-    assert info["state"]["hold_reason"] is None
-    # The first paid request reached the upstream and armed the cooldown...
+    assert info["states"]["intl"]["hold_reason"] is None
+    # The first paid INTL request reached the upstream and armed that lane...
     assert info["calls"][0] == "deepseek-v4.1-flash-sg", info["calls"]
-    # ...the zero-cost model was still admitted past that cooldown...
+    # ...the other paid INTL alias was refused locally, while CN remained
+    # independent and the zero-cost INTL model still passed its cooldown...
+    assert "deepseek-v4.1-flash-intl" not in info["calls"], info["calls"]
+    assert "deepseek-v4.1-flash" in info["calls"], info["calls"]
     assert "hy4free" in info["calls"], info["calls"]
-    # ...and the second paid request was refused locally, never reaching it.
-    assert "deepseek-v4.1-flash" not in info["calls"], info["calls"]
     refused = responses[-1].decode("utf-8", errors="replace")
     assert "operator_review_required" not in refused
 
@@ -188,4 +218,4 @@ def test_credits_refusal_stays_a_typed_messages_error(tmp_path: Path) -> None:
 def test_a_rate_window_code_does_not_latch_the_billing_hold(tmp_path: Path) -> None:
     """6004 is a model rate window; it must not be recorded as drained credits."""
     _, info = _run(tmp_path, ["deepseek-v4.1-flash-sg"], code=6004)
-    assert info["state"]["hold_reason"] != "account_credits_exhausted"
+    assert info["states"]["intl"]["hold_reason"] != "account_credits_exhausted"

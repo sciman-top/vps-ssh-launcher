@@ -135,6 +135,7 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
         "zhipu-coding-plan",
         "antigravity-oauth",
         "workbuddy-oauth",
+        "workbuddy-intl-oauth",
     }
     lanes = snapshot.get("lanes")
     if not isinstance(lanes, dict) or set(lanes) != required:
@@ -143,7 +144,7 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
             Finding(
                 "live-health-lane-set",
                 SEVERITY_FAIL,
-                f"admission lanes are {found!r}; expected the four reviewed lanes",
+                f"admission lanes are {found!r}; expected the five reviewed lanes",
             )
         ]
     findings: list[Finding] = []
@@ -152,6 +153,7 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
         "zhipu-coding-plan": 30,
         "antigravity-oauth": 18,
         "workbuddy-oauth": 18,
+        "workbuddy-intl-oauth": 18,
     }
     for name in sorted(required):
         lane = lanes[name]
@@ -256,7 +258,7 @@ def advertised_aliases(routes: dict[str, Any]) -> dict[str, str]:
                 owners.setdefault(alias, label)
     for route in routes.get("plugin_routes", []):
         label = f"plugin:{route.get('provider')}:{route.get('realm')}"
-        for alias in route.get("models", []):
+        for alias in _plugin_route_aliases(routes, route):
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
     return owners
@@ -290,7 +292,7 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
                 seen.setdefault(alias, []).append(label)
     for route in routes.get("plugin_routes", []):
         label = f"plugin:{route.get('provider')}:{route.get('realm')}"
-        for alias in route.get("models", []):
+        for alias in _plugin_route_aliases(routes, route):
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
     return [(alias, owners) for alias, owners in seen.items() if len(owners) > 1]
@@ -303,6 +305,37 @@ def _pooled_aliases(routes: dict[str, Any]) -> set[str]:
     if not isinstance(raw, list):
         return set()
     return {alias for alias in raw if isinstance(alias, str) and alias}
+
+
+def _plugin_route_aliases(routes: dict[str, Any], route: dict[str, Any]) -> list[str]:
+    """Return the client-visible names for one plugin realm.
+
+    The WorkBuddy plugin keeps its upstream pin as ``deepseek-v4.1-flash`` on
+    both realms. The INTL client-facing name is a manifest alias, so the
+    admission and audit contracts must translate only that realm while
+    leaving the CN bare name untouched.
+    """
+
+    provider = route.get("provider")
+    realm = route.get("realm")
+    aliases: dict[str, str] = {}
+    raw_aliases = routes.get("oauth_model_aliases")
+    if isinstance(raw_aliases, dict):
+        entries = raw_aliases.get(provider)
+        if isinstance(entries, list):
+            for entry in entries:
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("name"), str)
+                    and isinstance(entry.get("alias"), str)
+                ):
+                    aliases[entry["name"].strip()] = entry["alias"].strip()
+    result: list[str] = []
+    for model in route.get("models", []) or []:
+        if not isinstance(model, str):
+            continue
+        result.append(aliases.get(model, model) if realm == "intl" else model)
+    return result
 
 
 def _plaintext_provider_findings(routes: dict[str, Any]) -> list[Finding]:
@@ -404,11 +437,7 @@ def _declared_lane_coverage(
         entries.append((f"oauth:{route.get('name')}", lane, aliases))
     for route in routes.get("plugin_routes", []):
         lane = route.get("admission_lane")
-        aliases = [
-            model
-            for model in route.get("models", [])
-            if isinstance(model, str) and model
-        ]
+        aliases = _plugin_route_aliases(routes, route)
         if isinstance(lane, str) and lane:
             entries.append(
                 (f"plugin:{route.get('provider')}:{route.get('realm')}", lane, aliases)

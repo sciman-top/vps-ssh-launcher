@@ -17,9 +17,9 @@ It reads repository files only: no network, no remote host, no credential.
 
 The manifest does not name admission lanes directly (``chatgpt-plus-oauth``
 feeds the ``chatgpt-oauth`` lane, ``zhipu-plan`` the ``zhipu-coding-plan``
-lane, ``plugin_routes`` the ``workbuddy-oauth`` lane), so that mapping lives
-in ``LANE_SOURCES`` -- one table, validated in both directions, instead of the
-same knowledge copied into four files.
+lane, and each plugin realm maps to its own WorkBuddy lane), so that mapping
+lives in ``LANE_SOURCES`` -- one table, validated in both directions, instead
+of the same knowledge copied into four files.
 
 Exit codes: 0 consistent, 1 drift found, 2 usage/IO error.
 """
@@ -40,12 +40,13 @@ MANIFEST = ROOT / "scripts" / "remote" / "cpa_provider_routes.json"
 ADMISSION_CONFIG = ROOT / "scripts" / "remote" / "cpa-admission.json"
 EXPECTATIONS = ROOT / "tests" / "cpa_catalog_expectations.py"
 
-# lane name -> (kind, source name in the manifest)
-LANE_SOURCES: dict[str, tuple[str, str]] = {
+# lane name -> (kind, source name, optional plugin realm)
+LANE_SOURCES: dict[str, tuple[str, ...]] = {
     "chatgpt-oauth": ("oauth_route", "chatgpt-plus-oauth"),
     "antigravity-oauth": ("oauth_route", "antigravity-oauth"),
     "zhipu-coding-plan": ("provider", "zhipu-plan"),
-    "workbuddy-oauth": ("plugin", "workbuddy"),
+    "workbuddy-oauth": ("plugin", "workbuddy", "cn"),
+    "workbuddy-intl-oauth": ("plugin", "workbuddy", "intl"),
 }
 
 TOMBSTONE_KEYS = (
@@ -122,23 +123,44 @@ def _by_name(entries: Any) -> dict[str, dict[str, Any]]:
     }
 
 
-def plugin_lane_models(manifest: dict[str, Any], provider: str) -> list[str]:
-    """Widest realm model list for a plugin provider, in manifest order.
+def plugin_lane_models(
+    manifest: dict[str, Any], provider: str, realm: str
+) -> list[str]:
+    """Plugin pin list for one provider realm, in manifest order.
 
-    The admission lane serves every realm, so the canonical lane list is the
-    widest realm (intl supersets cn); taking a union instead would invent an
-    order the admission config never uses.
+    These are the upstream IDs the plugin scheduler sees. Forked CPA client
+    aliases live in each computed lane's ``client_aliases`` instead.
     """
-    widest: list[str] = []
+    matches: list[list[str]] = []
     for route in manifest.get("plugin_routes", []) or []:
-        if not isinstance(route, dict) or route.get("provider") != provider:
+        if (
+            not isinstance(route, dict)
+            or route.get("provider") != provider
+            or route.get("realm") != realm
+        ):
             continue
-        models = [
-            name for name in route.get("models", []) or [] if isinstance(name, str)
-        ]
-        if len(models) > len(widest):
-            widest = models
-    return widest
+        matches.append(
+            [name for name in route.get("models", []) or [] if isinstance(name, str)]
+        )
+    return matches[0] if len(matches) == 1 else []
+
+
+def plugin_lane_aliases(
+    manifest: dict[str, Any], provider: str, models: list[str]
+) -> list[str]:
+    """Forked CPA aliases for this plugin pin set, without duplicating them."""
+    raw_aliases = manifest.get("oauth_model_aliases")
+    entries = raw_aliases.get(provider, []) if isinstance(raw_aliases, dict) else []
+    if not isinstance(entries, list):
+        entries = []
+    by_source = {
+        entry["name"].strip(): entry["alias"].strip()
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("name"), str)
+        and isinstance(entry.get("alias"), str)
+    }
+    return [by_source.get(model, model) for model in models]
 
 
 def derive_lanes(manifest: dict[str, Any], errors: list[str]) -> dict[str, list[str]]:
@@ -146,7 +168,10 @@ def derive_lanes(manifest: dict[str, Any], errors: list[str]) -> dict[str, list[
     oauth = _by_name(manifest.get("oauth_routes"))
     providers = _by_name(manifest.get("providers"))
     derived: dict[str, list[str]] = {}
-    for lane, (kind, source) in LANE_SOURCES.items():
+    plugin_lanes: list[tuple[str, str, list[str], str]] = []
+    for lane, source_spec in LANE_SOURCES.items():
+        kind = source_spec[0]
+        source = source_spec[1]
         if kind == "oauth_route":
             route = oauth.get(source)
             if route is None:
@@ -164,15 +189,30 @@ def derive_lanes(manifest: dict[str, Any], errors: list[str]) -> dict[str, list[
                 continue
             derived[lane] = _aliases(route)
         elif kind == "plugin":
-            models = plugin_lane_models(manifest, source)
-            if not models:
+            if len(source_spec) != 3:
                 errors.append(
-                    f"LANE_SOURCES maps {lane!r} to missing plugin provider {source!r}"
+                    f"LANE_SOURCES maps {lane!r} to a plugin source without "
+                    "exactly one realm"
                 )
                 continue
-            derived[lane] = models
+            models = plugin_lane_models(manifest, source, source_spec[2])
+            if not models:
+                errors.append(
+                    f"LANE_SOURCES maps {lane!r} to missing or duplicate plugin "
+                    f"realm {source!r}/{source_spec[2]!r}"
+                )
+                continue
+            plugin_lanes.append((source, lane, models, source_spec[2]))
         else:  # pragma: no cover - the table literal above is exhaustive
             errors.append(f"LANE_SOURCES has an unknown kind {kind!r} for {lane!r}")
+    for provider, lane, models, realm in plugin_lanes:
+        aliases = plugin_lane_aliases(manifest, provider, models)
+        # The plugin's CN entry keeps the unchanged client name. INTL exposes
+        # the explicitly forked alias while its plugin pin remains untouched.
+        derived[lane] = [
+            alias if realm == "intl" else model
+            for model, alias in zip(models, aliases, strict=True)
+        ]
     return derived
 
 

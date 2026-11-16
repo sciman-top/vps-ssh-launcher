@@ -406,6 +406,10 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
     # admission remains the account-safety bound.
     # Serialising is the only sound bound until a picker can see busy creds.
     "workbuddy-oauth": 1,
+    # The INTL credentials use the same plugin scheduler and credential-busy
+    # behavior. A separate state bucket isolates failures; it does not justify
+    # two concurrent requests against one credential.
+    "workbuddy-intl-oauth": 1,
 }
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
@@ -496,7 +500,10 @@ ADMISSION_RPM_WINDOW_SECONDS = 60.0
 # Upper bound on a configured requests_per_minute so a projection typo cannot
 # silently disable the guard with an enormous value.
 ADMISSION_RPM_MAX_CEILING = 600
-STRICT_OAUTH_LANES = frozenset({"antigravity-oauth", "claude-oauth", "workbuddy-oauth"})
+WORKBUDDY_LANES = frozenset({"workbuddy-oauth", "workbuddy-intl-oauth"})
+STRICT_OAUTH_LANES = frozenset(
+    {"antigravity-oauth", "claude-oauth", "workbuddy-oauth", "workbuddy-intl-oauth"}
+)
 DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth"}
 # One bounded verification window for a stale write-ahead marker found at
 # startup (see the LaneState load path); short enough to be invisible to
@@ -598,6 +605,29 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
     if len(normalized_pooled_aliases) != len(pooled_aliases):
         raise ValueError("shared route manifest pooled_aliases must be unique")
 
+    # Plugin pins remain upstream names in the plugin configuration.  The
+    # WorkBuddy INTL entry point is a separately forked CPA alias, so translate
+    # only the INTL plugin realm while keeping the CN bare name untouched.
+    plugin_aliases: dict[str, dict[str, str]] = {}
+    raw_aliases = manifest.get("oauth_model_aliases", {})
+    if isinstance(raw_aliases, dict):
+        for provider, entries in raw_aliases.items():
+            if not isinstance(provider, str) or not isinstance(entries, list):
+                continue
+            mapping: dict[str, str] = {}
+            for entry in entries:
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("name"), str)
+                    and isinstance(entry.get("alias"), str)
+                    and entry["name"].strip()
+                    and entry["alias"].strip()
+                ):
+                    mapping[entry["name"].strip().lower()] = (
+                        entry["alias"].strip().lower()
+                    )
+            plugin_aliases[provider] = mapping
+
     expected: dict[str, str] = {}
     for key in ("providers", "oauth_routes", "plugin_routes"):
         routes = manifest.get(key)
@@ -626,11 +656,16 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
                     f"shared route manifest {key}[{index}] requires models"
                 )
             for model in models:
-                alias = (
-                    model
-                    if key == "plugin_routes"
-                    else (model.get("alias") if isinstance(model, dict) else None)
-                )
+                if key == "plugin_routes":
+                    alias = model
+                    if route.get("realm") == "intl" and isinstance(
+                        route.get("provider"), str
+                    ):
+                        alias = plugin_aliases.get(route["provider"], {}).get(
+                            str(model).strip().lower(), model
+                        )
+                else:
+                    alias = model.get("alias") if isinstance(model, dict) else None
                 if not isinstance(alias, str) or not alias.strip():
                     raise ValueError(
                         f"shared route manifest {key}[{index}] contains an invalid model alias"
@@ -904,7 +939,7 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
             # is the only place a numeric provider code survives, so surface it
             # under the `message` field every classifier already inspects.
             payload = None
-            if lane_name == "workbuddy-oauth":
+            if lane_name in WORKBUDDY_LANES:
                 match = re.search(r"\{.*\}", candidate, re.DOTALL)
                 if match:
                     try:
@@ -921,7 +956,7 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
             elif (
                 payload.get("code") == 11140
                 or (
-                    lane_name == "workbuddy-oauth"
+                    lane_name in WORKBUDDY_LANES
                     and payload.get("code") in (6003, 6004, 6008)
                 )
             ) and isinstance(payload.get("msg"), str):
@@ -984,7 +1019,7 @@ def workbuddy_6004_retry_after(
     account-shaped 6003/429/403 evidence remains lane-scoped.
     """
 
-    if lane.get("name") != "workbuddy-oauth":
+    if lane.get("name") not in WORKBUDDY_LANES:
         return None
     if capacity_scope(status, body, None, lane) != "model":
         return None
@@ -1109,7 +1144,7 @@ def oauth_risk_signal(
                 for code in codes
             ):
                 return "retry_window_review_required", None
-    if lane_name in {"chatgpt-oauth", "workbuddy-oauth"}:
+    if lane_name in {"chatgpt-oauth", *WORKBUDDY_LANES}:
         if status == 403 and edge_denial_body(body):
             # A blocked edge hop is transient: cool through the normal ladder
             # instead of parking the lane until an operator releases it.
@@ -1123,7 +1158,7 @@ def oauth_risk_signal(
         # that evidence and latches then.
         hold = None
         errors = protocol_errors(body, lane_name)
-        if lane_name == "workbuddy-oauth":
+        if lane_name in WORKBUDDY_LANES:
             try:
                 envelope = json.loads(body)
             except (ValueError, UnicodeDecodeError):
@@ -1144,9 +1179,7 @@ def oauth_risk_signal(
             # 2026-11-14 by a CN-credential single-shot 200 right after the
             # boundary, with zero account actions in between.
             upstream_code = quoted_upstream_code(error.get("message"))
-            if lane_name == "workbuddy-oauth" and (
-                code == 6008 or upstream_code == 6008
-            ):
+            if lane_name in WORKBUDDY_LANES and (code == 6008 or upstream_code == 6008):
                 return None, None
             # The generic WorkBuddy rate-limit family (bare 429/6003 envelopes
             # and `rate_limit_error` wrappers without quoted account codes)
@@ -1175,7 +1208,7 @@ def oauth_risk_signal(
             message = str(error.get("message", "")).lower()
             if any(marker in message for marker in STANDING_RESTRICTION_MARKERS):
                 hold = "account_restricted"
-            if lane_name == "workbuddy-oauth" and code == 11140:
+            if lane_name in WORKBUDDY_LANES and code == 11140:
                 hold = "account_restricted"
         return hold, None
     if lane_name != "claude-oauth":
@@ -1330,7 +1363,7 @@ def capacity_scope(
     """
 
     errors = protocol_errors(body_prefix, config.get("name"))
-    if config.get("name") == "workbuddy-oauth":
+    if config.get("name") in WORKBUDDY_LANES:
         codes = {
             code
             for error in errors
@@ -3609,6 +3642,7 @@ class AdmissionProxy:
         claude_state_path: Path | None = None,
         chatgpt_state_path: Path | None = None,
         workbuddy_state_path: Path | None = None,
+        workbuddy_intl_state_path: Path | None = None,
         traffic_lock_path: Path | None = None,
     ) -> None:
         self.config = config
@@ -3640,6 +3674,7 @@ class AdmissionProxy:
                     "claude-oauth": claude_state_path,
                     "chatgpt-oauth": chatgpt_state_path,
                     "workbuddy-oauth": workbuddy_state_path,
+                    "workbuddy-intl-oauth": workbuddy_intl_state_path,
                 }.get(lane["name"]),
             )
             for lane in config["lanes"]
@@ -4417,7 +4452,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 if retry_after is not None:
                     retry_after_header = str(retry_after)
-            elif lane_name == "workbuddy-oauth" and response.status in (
+            elif lane_name in WORKBUDDY_LANES and response.status in (
                 429,
                 503,
                 529,
@@ -4853,7 +4888,7 @@ class Handler(BaseHTTPRequestHandler):
                 if stream_probe.model_retry_after is not None:
                     retry_after = max(retry_after or 0, stream_probe.model_retry_after)
             elif (
-                lane_name == "workbuddy-oauth"
+                lane_name in WORKBUDDY_LANES
                 and capacity_kind == "model"
                 and retry_after is None
             ):
@@ -5414,6 +5449,7 @@ def main(
     parser.add_argument("--claude-state-file", type=Path)
     parser.add_argument("--chatgpt-state-file", type=Path)
     parser.add_argument("--workbuddy-state-file", type=Path)
+    parser.add_argument("--workbuddy-intl-state-file", type=Path)
     args = parser.parse_args()
     if args.config is None:
         parser.error("config is required")
@@ -5423,6 +5459,7 @@ def main(
         "claude-oauth": args.claude_state_file,
         "chatgpt-oauth": args.chatgpt_state_file,
         "workbuddy-oauth": args.workbuddy_state_file,
+        "workbuddy-intl-oauth": args.workbuddy_intl_state_file,
     }
     for lane, path in state_files.items():
         if lane in config["model_lanes"].values() and path is None:
@@ -5440,6 +5477,7 @@ def main(
         claude_state_path=args.claude_state_file,
         chatgpt_state_path=args.chatgpt_state_file,
         workbuddy_state_path=args.workbuddy_state_file,
+        workbuddy_intl_state_path=args.workbuddy_intl_state_file,
         traffic_lock_path=Path("/run/cpa-admission/requests.lock"),
     )
     # Bind the listening socket before the startup receipt so the bootstrap

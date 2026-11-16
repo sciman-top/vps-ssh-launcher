@@ -332,7 +332,8 @@ delta 的延迟；`upstream_time` 包含 admission 等待与上游响应过程�
 > **为什么是 20（2026-10-02 上调；2026-10-22 复核）。** 连接预算按当时的
 > 三条 lane 持有上限定为 `20`（OAuth `2+4=6`、GLM `3+4=7`、DeepSeek `3+4=7`）。
 > 2026-10-11 DeepSeek lane 退役，随后新增 Antigravity（`2+4=6`）与 WorkBuddy
-> （`1+4=5`），现役四条 lane 的理论单 IP 持有上限为 `6+7+6+5=24`，因此 `20`
+> （CN、INTL 各 `1+4=5`），现役五条 lane 的理论单 IP 持有上限为
+> `6+7+6+5+5=29`，因此 `20`
 > 现在是**低于理论上限的保守 per-IP 连接闸**（当前 access log 中
 > `limit_conn=REJECTED` / `limit_req=REJECTED` 均为 0，无实际误伤样本）。
 > 旧值 `6` 与中间值 `12` 都曾在四会话自然流量中被撞满；被 admission 排队的
@@ -473,11 +474,15 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|---|---|
 | ChatGPT Plus OAuth | [OpenAI ToS](https://openai.com/policies/terms-of-use/) 禁止共享账号凭据、绕过 rate limits/保护措施 | 个人、单用户、低频；官方桌面/CLI 形态 | 多人共享、转售、pool、多账号轮换、对外当 API 卖 | `chatgpt-oauth` lane、inflight 2、`request-retry=0`、session affinity | 无 per-account RPM/TPM 预算；OAuth 条款风险不可技术消除 |
 | Antigravity / Gemini | [Antigravity FAQ](https://antigravity.google/docs/faq) 明确第三方软件访问违反 ToS、可暂停/终止；建议 AI Studio/Enterprise API key；消费级不支持自动化账号切换 | 个人、单账号、低频；迁移官方 API key | 第三方 agent 自动化、账号轮换、headless 批量、用 OAuth 替代 API | `antigravity-oauth` lane、inflight 2、完整 Retry-After、persistent hold | OAuth 本身是条款风险；`sensitive-words` 只是兼容补丁，不是防封控制 |
-| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：3 份凭据；`scheduler_mode=credits` 粘性选择+故障回退、WorkBuddy 每凭据 inflight 1、lane inflight 1/pending 4；裸名 DeepSeek 允许跨 CN/INTL 候选（OpenCode 回退 2026-11-11 随订阅失效退役，2026-11-14 仅以 `deepseek-v4.1-flash-oc` 单宿别名回归，裸名不再双宿）。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
+| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：2026-11-08 清点为 7 CN + 7 INTL；这是历史快照，不代表本次重新清点。`scheduler_mode=credits` 粘性选择+故障回退、每凭据 inflight 1。CPA 将 CN 裸名 `deepseek-v4.1-flash` 与 INTL fork 别名 `deepseek-v4.1-flash-intl` 分别送入两个 admission lane 和状态文件；`deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶，`hy4free` 为 INTL 零成本模型。该 admission 分流不约束插件实际选择的 auth realm，也不保证 per-auth 隔离。OpenCode 仅由 `deepseek-v4.1-flash-oc` 单宿别名触达。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
 | API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
 
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
-  不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于 round-robin。只有
+  不轮换；模型 pin 按各 realm 核准。WorkBuddy 的两个 realm 都 pin 上游
+  `deepseek-v4.1-flash`，CPA 用 CN 裸名与 INTL fork alias 拆分入口、admission
+  lane 和持久状态；WorkBuddy `credits` scheduler 仍可能在 auth pool 中回退，
+  所以这不是 per-auth realm 绑定，也不能保证一次 6008 只来自对应 realm 的账号。
+  `selected`/sticky 优先于 round-robin。只有
   合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑（2026-11-08
   `auth/` 只读清点：7 × `workbuddy-<uuid>*`（CN-first 契约裸名）+ 7 ×
   `workbuddy-intl-*`，CN 侧 `region=cn`/`domain=www.codebuddy.cn`，全部
@@ -552,17 +557,20 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 执行
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
-- 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
+- 现役五条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
   `gpt-6.1-sol` / `gpt-6.1-terra`——后两名 2026-11-13 退役（上游 400
   `model_not_found`）、2026-11-14 上游目录复活实证后恢复，墓碑已摘）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
-  `antigravity-oauth`（`gemini-3.8-flash-high`）与 `workbuddy-oauth`
-  （`deepseek-v4.1-flash` / `deepseek-v4.1-flash-sg`，sg 2026-11-05 采纳；`hy4free` 2026-11-06 采纳，双 realm 共享）。
+  `antigravity-oauth`（`gemini-3.8-flash-high`）、CN `workbuddy-oauth`
+  （`deepseek-v4.1-flash`）与 INTL `workbuddy-intl-oauth`
+  （`deepseek-v4.1-flash-intl`、`deepseek-v4.1-flash-sg`、`hy4free`）。
+  `deepseek-v4.1-flash-intl` 是指向同一上游模型的 fork alias；`sg` 保留为
+  INTL 的第二个独立模型桶，`hy4free` 仅属 INTL。
   `deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
   随账号停用退役（保留惰性墓碑）。
 - `chatgpt-oauth` 与 `antigravity-oauth` 固定 `max_inflight=2`，
-  `zhipu-coding-plan` 固定 `max_inflight=3`，`workbuddy-oauth` 固定
-  `max_inflight=1`；四条 lane 都是 `max_pending=4`、
+  `zhipu-coding-plan` 固定 `max_inflight=3`，两个 WorkBuddy lane 都固定
+  `max_inflight=1`；五条 lane 都是 `max_pending=4`、
   `queue_timeout_seconds=120`。OAuth lane 的值是 2026-09-28
   实测后从 1 提到 2 的：CPA 侧一轮 turn 实测 39 s / 112 s / 216 s，`max_inflight=1`
   下同一轮的第二个请求必然排满整轮，然后在 120 s 预算处收到 429，而客户端在 ~45 s
@@ -570,7 +578,7 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
   + 标题/摘要对不再互锁，同时没有把账号开放成扇出。排队等待由 `waited_ms`
   在 journal 里如实记录；客户端中途离开时，`acquire()` 会在一个 1 s 分片内
   交回 pending 槽位（`reason=downstream_gone`），不会占满整个预算。一条
-  lane 的容量窗口不会拒绝另外三条。
+  lane 的容量窗口不会拒绝另外四条。
 - **120 s 预算对半开探针同样适用，且经 2026-10-01 复核后刻意保持不变。**
   探针是一条真实客户端请求，时长约等于一次正常生成（当日 `route=responses`
   `upstream_time` p50 21 s / p90 77 s / p99 188 s）；这些分位点不能推出
@@ -627,7 +635,7 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 - **per-lane 请求速率护栏（`requests_per_minute`，2026-10-31 引入）。** 每条
   lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
   （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
-  `workbuddy-oauth=18`）；缺省（键不存在）即不限制，保持历史语义。它只统计
+  `workbuddy-oauth=18`、`workbuddy-intl-oauth=18`）；缺省（键不存在）即不限制，保持历史语义。它只统计
   **普通准入**的滚动 60s 请求数，达到上限时新普通请求先进入该 lane 已有的
   有界 FIFO，等到最早槽位过期后再准入；只有队列已满或排队预算耗尽才拒绝
   （`admission_reason=rate_limited`，带指向最早槽位过期的正 `Retry-After`）。
@@ -1552,16 +1560,16 @@ admission 启动时会把残留的 stale 标记自动清为 null 并开一个 90
 10-20/21/31 三次重启 latch 事故（journal 见各 change-evidence 台账）即旧行为，
 双车道释放实录见 `20261031-bwg-two-lane-unverified-latch-release.md`。
 
-`account_credits_exhausted` 是 2026-11-07 新增的独立理由，对应 WorkBuddy 上游
-`6008 "Credits exhausted"`。它此前落进 `retry_window_review_required` 兜底，
-把"额度耗尽需充值"报成"缺可信等待期限"，误导排查方向；分类修正后语义明确。
-该理由的作用域**只到零成本模型**：`hy4free` 以 x0.00 credits 供给，不消耗额度，
-故仍放行；其余付费模型继续由该锁拦住，直到对应凭据充值或额度窗口重置。上游
-`6008` 既出现在裸 `{"code":6008,...}`，也出现在 CPA 的 `upstream 429: {json}`
-散文包装里，两条路径都必须能取出该码（`protocol_errors` 已覆盖）。判定"某账号
-是否耗尽"不需要读面板：`auth/workbuddy-*.json` 的 `account.nickname` 即账号标识
-（邮箱或 CN 用户名），配合 `docker logs cli-proxy-api` 中
-`auth_file=... err=upstream 429: {"code":6008...}` 可直接定位到具体账号。
+**WorkBuddy 6008 的当前分类（2026-11-14 修订）**：`6008 "Credits exhausted"`
+属于可恢复的额度时间窗，进入请求所命中的 WorkBuddy admission lane 冷却阶梯，
+不再新建 `account_credits_exhausted` 持久 hold。CN 与 INTL 分别使用
+`workbuddy-risk.json`、`workbuddy-intl-risk.json`；对 INTL alias 收到的 6008
+不会因 admission lane 状态而直接冷却 CN lane。`hy4free` 的 x0.00 credits
+例外仍可越过 INTL 计费冷却。该隔离只证明 admission 状态分开，不证明 WorkBuddy
+scheduler 选择了同名 realm 的凭据，也不代表账号额度已重置。旧版本遗留的
+`account_credits_exhausted` 状态仍可读；不要手动清理或缩短 `not_before`。
+上游 `6008` 既可能出现在裸 `{"code":6008,...}`，也可能出现在 CPA
+`upstream 429: {json}` 包装里，分类器须同时识别。
 
 只有确认官方已恢复并授权人工恢复后，才在所有 lane 空闲的维护窗口停止 admission，
 备份目标 provider 状态，把 `hold_reason` 改为 null；未到期不得缩短 `not_before`。

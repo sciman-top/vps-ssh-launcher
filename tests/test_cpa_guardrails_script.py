@@ -1794,8 +1794,7 @@ except Exception as exc:
             for model in route["models"]
         }
         # gpt-reserve retired 2026-11-04 (user directive): the OAuth route and
-        # its gpt-5.6-luna rename are gone. An empty alias map is the
-        # deliberate signal that the projection must clear oauth.model-alias.
+        # its gpt-5.6-luna rename are gone.
         # 2026-11-14 (user directive: never use): with the upstream catalog
         # re-advertising the name, both exclusion lists tombstone it so
         # neither the OAuth nor the API-key lane can ever claim it.
@@ -1803,7 +1802,18 @@ except Exception as exc:
         self.assertIn("gpt-reserve", route_manifest["oauth_exclusions"])
         self.assertIn("gpt-reserve", route_manifest["codex_api_key_exclusions"])
         self.assertIn("gpt-5.6", route_manifest["codex_api_key_exclusions"])
-        self.assertEqual(route_manifest["oauth_model_aliases"], {})
+        self.assertEqual(
+            route_manifest["oauth_model_aliases"],
+            {
+                "workbuddy": [
+                    {
+                        "name": "deepseek-v4.1-flash",
+                        "alias": "deepseek-v4.1-flash-intl",
+                        "fork": True,
+                    }
+                ]
+            },
+        )
         slot1_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 1
         )

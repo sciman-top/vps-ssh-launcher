@@ -545,6 +545,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         for lane in (
             "chatgpt-risk.json",
             "workbuddy-risk.json",
+            "workbuddy-intl-risk.json",
             "antigravity-risk.json",
         ):
             self.assertIn(lane, source)
@@ -588,6 +589,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             state = {
                 "chatgpt-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
                 "workbuddy-risk.json": '{"version":1,"not_before":900,"hold_reason":null}',
+                "workbuddy-intl-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
                 "antigravity-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
                 # Inert tombstone: must be invisible to the check.
                 "claude-risk.json": '{"version":1,"not_before":0,"hold_reason":"authentication_required"}',
@@ -719,6 +721,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             for name in (
                 "chatgpt-risk.json",
                 "workbuddy-risk.json",
+                "workbuddy-intl-risk.json",
                 "antigravity-risk.json",
             ):
                 (base / name).write_text(

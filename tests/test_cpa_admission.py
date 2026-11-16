@@ -9,6 +9,7 @@ import hashlib
 import logging
 import queue
 import runpy
+import shutil
 import socket
 import socketserver
 import struct
@@ -21,7 +22,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Iterator, cast
 
-from cpa_catalog_expectations import ADMISSION_MODEL_LANES, WORKBUDDY_PLUGIN_MODELS
+from cpa_catalog_expectations import (
+    ADMISSION_MODEL_LANES,
+    WORKBUDDY_PLUGIN_ADMISSION_MODELS,
+    WORKBUDDY_PLUGIN_MODELS,
+)
 from script_validation_support import server_thread
 
 
@@ -32,12 +37,35 @@ ROUTE_MANIFEST_PATH = (
 
 def test_workbuddy_plugin_routes_match_realm_pins() -> None:
     manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
-    actual = {
+    upstream_pins = {
         route["realm"]: route["models"]
         for route in manifest["plugin_routes"]
         if route.get("provider") == "workbuddy"
     }
-    assert actual == WORKBUDDY_PLUGIN_MODELS
+    assert upstream_pins == WORKBUDDY_PLUGIN_MODELS
+    admission = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    lane_by_realm = {
+        route["realm"]: route["admission_lane"]
+        for route in manifest["plugin_routes"]
+        if route.get("provider") == "workbuddy"
+    }
+    admission_by_realm = {
+        route["realm"]: [
+            next(
+                lane["models"]
+                for lane in admission["lanes"]
+                if lane["name"] == route["admission_lane"]
+            )
+        ]
+        for route in manifest["plugin_routes"]
+        if route.get("provider") == "workbuddy"
+    }
+    assert set(lane_by_realm) == set(WORKBUDDY_PLUGIN_ADMISSION_MODELS)
+    assert {
+        realm: values[0] for realm, values in admission_by_realm.items()
+    } == WORKBUDDY_PLUGIN_ADMISSION_MODELS
 
 
 MODULE = runpy.run_path(
@@ -1033,10 +1061,11 @@ def claude_lane_config() -> dict[str, Any]:
         manifest_path = root / "cpa_provider_routes.json"
         config_path.write_text(json.dumps(synthetic), encoding="utf-8")
         manifest_path.write_text(json.dumps(synthetic_manifest), encoding="utf-8")
-        return cast(
+        loaded_config = cast(
             dict[str, Any],
             load_config(config_path, route_manifest_path=manifest_path),
         )
+        return loaded_config
 
 
 @pytest.mark.parametrize(
@@ -1068,6 +1097,25 @@ def test_config_rejects_admission_model_route_drift(tmp_path: Path, drift: str) 
         load_config(config_path, route_manifest_path=manifest_path)
 
 
+def test_config_rejects_plugin_alias_lane_drift(tmp_path: Path) -> None:
+    raw_config = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    cn = next(item for item in raw_config["lanes"] if item["name"] == "workbuddy-oauth")
+    intl = next(
+        item for item in raw_config["lanes"] if item["name"] == "workbuddy-intl-oauth"
+    )
+    cn["models"].append("deepseek-v4.1-flash-intl")
+    intl["models"].remove("deepseek-v4.1-flash-intl")
+    config_path = tmp_path / "cpa-admission.json"
+    manifest_path = tmp_path / "cpa_provider_routes.json"
+    config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly match shared route manifest"):
+        load_config(config_path, route_manifest_path=manifest_path)
+
+
 def test_shared_route_manifest_allows_a_reviewed_pooled_alias_in_one_lane(
     tmp_path: Path,
 ) -> None:
@@ -1078,6 +1126,28 @@ def test_shared_route_manifest_allows_a_reviewed_pooled_alias_in_one_lane(
     assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash"] == (
         "workbuddy-oauth"
     )
+    assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash-sg"] == (
+        "workbuddy-intl-oauth"
+    )
+
+
+def test_workbuddy_lanes_use_distinct_circuit_state_files(tmp_path: Path) -> None:
+    loaded = config()
+    cn_path = tmp_path / "workbuddy-risk.json"
+    intl_path = tmp_path / "workbuddy-intl-risk.json"
+    initial = json.dumps({"version": 1, "not_before": 0, "hold_reason": None})
+    cn_path.write_text(initial, encoding="utf-8")
+    intl_path.write_text(initial, encoding="utf-8")
+    proxy = AdmissionProxy(
+        loaded,
+        workbuddy_state_path=cn_path,
+        workbuddy_intl_state_path=intl_path,
+    )
+    assert proxy.lanes["workbuddy-oauth"]._state_path == cn_path
+    assert proxy.lanes["workbuddy-intl-oauth"]._state_path == intl_path
+    assert proxy.lanes["workbuddy-oauth"]._state_path != (
+        proxy.lanes["workbuddy-intl-oauth"]._state_path
+    )
 
 
 def test_shared_route_manifest_rejects_unreviewed_or_cross_lane_pooling(
@@ -1086,13 +1156,20 @@ def test_shared_route_manifest_rejects_unreviewed_or_cross_lane_pooling(
     manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
     manifest_path = tmp_path / "cpa_provider_routes.json"
 
-    manifest["pooled_aliases"] = []
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(ValueError, match="assigns a model more than once"):
-        shared_route_model_lanes(manifest_path)
-
-    manifest["pooled_aliases"] = ["deepseek-v4.1-flash"]
     manifest["plugin_routes"][1]["admission_lane"] = "chatgpt-oauth"
+    manifest["oauth_settings"]["workbuddy"] = [
+        entry
+        for entry in manifest["oauth_settings"]["workbuddy"]
+        if "alias" not in entry
+    ]
+    manifest["pooled_aliases"] = []
+    manifest["plugin_routes"][1]["models"].remove("deepseek-v4.1-flash")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash-sg"] == (
+        "chatgpt-oauth"
+    )
+    manifest["pooled_aliases"] = ["deepseek-v4.1-flash-sg"]
+    manifest["plugin_routes"][0]["models"].append("deepseek-v4.1-flash-sg")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="pooled model to different lanes"):
         shared_route_model_lanes(manifest_path)
@@ -1160,7 +1237,7 @@ def test_config_rejects_pooled_models_outside_the_lane(tmp_path: Path) -> None:
         ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
     )
     workbuddy = next(
-        item for item in raw_config["lanes"] if item["name"] == "workbuddy-oauth"
+        item for item in raw_config["lanes"] if item["name"] == "workbuddy-intl-oauth"
     )
     workbuddy["pooled_models"] = ["deepseek-v4.1-flash-typo"]
     config_path = tmp_path / "cpa-admission.json"
@@ -1191,12 +1268,14 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "zhipu-coding-plan",
         "antigravity-oauth",
         "workbuddy-oauth",
+        "workbuddy-intl-oauth",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "antigravity-oauth": 2,
         "workbuddy-oauth": 1,
+        "workbuddy-intl-oauth": 1,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
@@ -4531,35 +4610,55 @@ def _admission_stack(
     family); ``proxy_overrides`` feed extra ``AdmissionProxy`` keyword
     arguments such as the per-lane risk state paths.
     """
-    upstream, upstream_thread = _serve_local(upstream_handler)
-    loaded = (config_loader or config)()
-    loaded["upstream_port"] = upstream.server_address[1]
-    if lane_overrides:
-        lane(loaded, lane_name).update(lane_overrides)
-    if configure is not None:
-        configure(loaded)
-    proxy_kwargs: dict[str, Any] = {}
-    if heartbeat_interval is not None:
-        proxy_kwargs["heartbeat_interval"] = heartbeat_interval
-    if proxy_overrides:
-        proxy_kwargs.update(proxy_overrides)
-    proxy = AdmissionProxy(loaded, **proxy_kwargs)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = server_thread(admission)
-    admission_thread.start()
+    fixture_dir: Path | None = None
+    upstream = upstream_thread = admission = admission_thread = None
     try:
+        upstream, upstream_thread = _serve_local(upstream_handler)
+        loaded = (config_loader or config)()
+        loaded["upstream_port"] = upstream.server_address[1]
+        proxy_kwargs: dict[str, Any] = {}
+        fixture_dir = Path(tempfile.mkdtemp(prefix="dsh-admission-risk-"))
+        for name in ("workbuddy-risk.json", "workbuddy-intl-risk.json"):
+            (fixture_dir / name).write_text(
+                json.dumps({"version": 1, "not_before": 0, "hold_reason": None}),
+                encoding="utf-8",
+            )
+        proxy_kwargs["workbuddy_state_path"] = fixture_dir / "workbuddy-risk.json"
+        proxy_kwargs["workbuddy_intl_state_path"] = (
+            fixture_dir / "workbuddy-intl-risk.json"
+        )
+        if proxy_overrides:
+            proxy_kwargs.update(proxy_overrides)
+        if lane_overrides:
+            lane(loaded, lane_name).update(lane_overrides)
+        if configure is not None:
+            configure(loaded)
+        if heartbeat_interval is not None:
+            proxy_kwargs["heartbeat_interval"] = heartbeat_interval
+        proxy = AdmissionProxy(loaded, **proxy_kwargs)
+        admission = AdmissionServer(("127.0.0.1", 0), proxy)
+        admission_thread = server_thread(admission)
+        admission_thread.start()
         yield {
             "upstream": upstream,
             "proxy": proxy,
             "port": admission.server_address[1],
         }
     finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+        if admission is not None:
+            admission.shutdown()
+        if upstream is not None:
+            upstream.shutdown()
+        if admission is not None:
+            admission.server_close()
+        if upstream is not None:
+            upstream.server_close()
+        if admission_thread is not None:
+            admission_thread.join(timeout=2)
+        if upstream_thread is not None:
+            upstream_thread.join(timeout=2)
+        if fixture_dir is not None:
+            shutil.rmtree(fixture_dir, ignore_errors=True)
 
 
 def _post_admission_request(
@@ -6616,7 +6715,7 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
     with _admission_stack(
         Upstream,
         config_loader=claude_lane_config,
-        proxy_overrides={"workbuddy_state_path": path},
+        proxy_overrides={"workbuddy_intl_state_path": path},
     ) as stack:
         proxy = stack["proxy"]
         client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
@@ -6624,27 +6723,25 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
             client.request(
                 "POST",
                 "/v1/chat/completions",
-                json.dumps({"model": "deepseek-v4.1-flash"}),
+                json.dumps({"model": "deepseek-v4.1-flash-intl"}),
             )
             response = client.getresponse()
             assert response.status == 200
             finish.set()
             assert response.read() == b'{"code":6003,"msg":"frequency limited"} '
             deadline = time.monotonic() + 2
-            while not proxy.lanes["workbuddy-oauth"].snapshot()["model_cooldowns"]:
+            while not proxy.lanes["workbuddy-intl-oauth"].snapshot()["cooldown_active"]:
                 assert time.monotonic() < deadline, (
                     "ladder cooldown not armed after EOF"
                 )
                 time.sleep(0.005)
-            lane_state = proxy.lanes["workbuddy-oauth"].snapshot()
+            lane_state = proxy.lanes["workbuddy-intl-oauth"].snapshot()
             assert lane_state["hold_reason"] is None
-            # 6003 lands on the requested model, not on the whole alias: a
-            # lane-wide park here would also remove the OpenCode backup that
-            # serves the same pooled name (see capacity_scope / the pooled
-            # bound in the request path). The cooldown is still visible and
-            # bounded, and the disk state keeps no operator hold.
-            assert lane_state["cooldown_scope"] == "model"
-            assert 0 < lane_state["model_cooldowns"]["deepseek-v4.1-flash"] <= 300
+            # 6003 is a credential/frequency signal. The CN/INTL split keeps
+            # its lane-wide cooldown out of CN, while the model-specific
+            # 6004 path still leaves the INTL sg bucket available.
+            assert lane_state["cooldown_scope"] == "lane"
+            assert 0 < lane_state["cooldown_remaining"] <= 300
             assert json.loads(path.read_text())["hold_reason"] is None
         finally:
             finish.set()

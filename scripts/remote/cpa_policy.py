@@ -115,10 +115,11 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ],
     # gpt-reserve retired 2026-11-04 (user directive). The OAuth route and the
     # gpt-5.6-luna -> gpt-reserve rename are both gone; the projection clears
-    # oauth.model-alias wholesale instead of preserving a stale rename, so no
-    # alias key is asserted here. The bare name stays in
-    # codex_api_key_exclusions as a tombstone so API-key channels cannot claim
-    # it, and gpt-5.6-luna is served under its own name again.
+    # oauth.model-alias wholesale instead of preserving a stale rename. The
+    # expected map is derived from the manifest below, including the current
+    # WorkBuddy INTL alias. The retired gpt-reserve key stays out of it. The
+    # bare name stays in codex_api_key_exclusions as a tombstone so API-key
+    # channels cannot claim it, and gpt-5.6-luna is served under its own name again.
     # Retain the existing compatibility setting while this OAuth route remains
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This
@@ -260,6 +261,10 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # mid-request; the lane-wide inflight=1 bound is unchanged -- it is the
     # upstream-account safety bound, not a dependent of the retry cap.)
     "workbuddy-oauth": 1,
+    # INTL has its own admission and risk state after the CN/INTL split. It
+    # keeps the same credential-safety bound as CN because the plugin picker
+    # does not observe an in-flight credential before choosing its candidate.
+    "workbuddy-intl-oauth": 1,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.
@@ -685,16 +690,17 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         if not isinstance(settings, list) or not settings:
             issues.append(f"{label} must be a non-empty list")
             continue
-        seen_settings: set[tuple[str, str | None]] = set()
+        seen_settings: set[tuple[str, str | None, bool | None]] = set()
         for setting_index, setting in enumerate(settings):
             setting_label = f"{label}[{setting_index}]"
             if not isinstance(setting, dict):
                 issues.append(f"{setting_label} must be a mapping")
                 continue
-            if not set(setting) <= {"name", "alias", "max-context-length"}:
+            if not set(setting) <= {"name", "alias", "max-context-length", "fork"}:
                 issues.append(f"{setting_label} has unsupported fields")
             setting_name = setting.get("name")
             setting_alias = setting.get("alias")
+            setting_fork = setting.get("fork")
             max_context_length = setting.get("max-context-length")
             if not isinstance(setting_name, str) or not setting_name.strip():
                 issues.append(f"{setting_label}.name must be a non-empty string")
@@ -704,6 +710,12 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 issues.append(
                     f"{setting_label}.alias must be a non-empty string when present"
                 )
+            if setting_fork is not None and type(setting_fork) is not bool:
+                issues.append(f"{setting_label}.fork must be a boolean when present")
+            if setting_fork is not None and (
+                not isinstance(setting_alias, str) or not setting_alias.strip()
+            ):
+                issues.append(f"{setting_label}.fork requires a client alias")
             if type(max_context_length) is not int or max_context_length <= 0:
                 issues.append(
                     f"{setting_label}.max-context-length must be a positive integer"
@@ -711,6 +723,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             key = (
                 setting_name.strip() if isinstance(setting_name, str) else "",
                 setting_alias.strip() if isinstance(setting_alias, str) else None,
+                setting_fork if type(setting_fork) is bool else None,
             )
             if key in seen_settings:
                 issues.append(f"{label} contains duplicate model settings")
@@ -726,7 +739,24 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             for model_name in route.get("models", [])
             if isinstance(model_name, str)
         }
-        declared_models = oauth_route_models.get(route_name, set()) | plugin_models
+        oauth_alias_map = manifest.get("oauth_model_aliases", {})
+        oauth_alias_entries = (
+            oauth_alias_map.get(channel, [])
+            if isinstance(oauth_alias_map, dict)
+            else []
+        )
+        if not isinstance(oauth_alias_entries, list):
+            oauth_alias_entries = []
+        alias_sources = {
+            entry["name"].strip()
+            for entry in oauth_alias_entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and entry["name"].strip()
+        }
+        declared_models = (
+            oauth_route_models.get(route_name, set()) | plugin_models | alias_sources
+        )
         for setting in settings:
             if not isinstance(setting, dict):
                 continue
@@ -735,9 +765,12 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             if (
                 isinstance(name, str)
                 and name.strip()
-                and declared_models
                 and name.strip() not in declared_models
-                and (not isinstance(alias, str) or alias.strip() not in declared_models)
+                and not (
+                    isinstance(alias, str)
+                    and alias.strip()
+                    and alias.strip() in plugin_models
+                )
             ):
                 issues.append(f"{label} names undeclared model {name.strip()!r}")
     retired = manifest.get("retired_hosts")
@@ -748,6 +781,96 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         retired = []
     if hosts.intersection(retired):
         issues.append("route manifest cannot include a retired provider host")
+    raw_aliases = manifest.get("oauth_model_aliases")
+    if not isinstance(raw_aliases, dict):
+        issues.append("route manifest oauth_model_aliases must be a mapping")
+        raw_aliases = {}
+    upstream_names = provider_model_names | {
+        model["name"].lower()
+        for route in manifest.get("oauth_routes", [])
+        if isinstance(route, dict)
+        for model in route.get("models", [])
+        if isinstance(model, dict)
+        and isinstance(model.get("name"), str)
+        and model["name"]
+    }
+    alias_names: set[str] = set()
+    for channel, entries in raw_aliases.items():
+        label = f"route manifest oauth_model_aliases.{channel}"
+        if not isinstance(channel, str) or not channel.strip():
+            issues.append("route manifest oauth_model_aliases channel is empty")
+            continue
+        if not isinstance(entries, list) or not entries:
+            issues.append(f"{label} must be a non-empty list")
+            continue
+        for index, entry in enumerate(entries):
+            entry_label = f"{label}[{index}]"
+            if (
+                not isinstance(entry, dict)
+                or not set(entry) <= {"name", "alias", "fork"}
+                or not isinstance(entry.get("name"), str)
+                or not entry["name"].strip()
+                or not isinstance(entry.get("alias"), str)
+                or not entry["alias"].strip()
+            ):
+                issues.append(f"{entry_label} must declare a name and alias")
+                continue
+            source, alias = entry["name"].strip(), entry["alias"].strip()
+            if source.lower() == alias.lower():
+                issues.append(f"{entry_label} alias must change the visible name")
+            if "fork" in entry and type(entry["fork"]) is not bool:
+                issues.append(f"{entry_label}.fork must be a boolean")
+            if source.lower() not in upstream_names:
+                issues.append(f"{entry_label} source is not an upstream model")
+            plugin_routes = [
+                route
+                for route in manifest.get("plugin_routes", [])
+                if isinstance(route, dict) and route.get("provider") == channel
+            ]
+            intl_models = {
+                model
+                for route in plugin_routes
+                if route.get("realm") == "intl"
+                for model in route.get("models", [])
+                if isinstance(model, str)
+            }
+            has_intl_source = source in intl_models
+            if plugin_routes and not has_intl_source:
+                issues.append(
+                    f"{entry_label} alias is not owned by the plugin provider's "
+                    "intl realm"
+                )
+            if plugin_routes and entry.get("fork") is not True:
+                issues.append(f"{entry_label} must fork the INTL alias")
+            if alias.lower() in alias_names:
+                issues.append(f"OAuth model alias {alias!r} is declared more than once")
+            alias_names.add(alias.lower())
+            exclusions = manifest.get(
+                f"codex_{channel}_excluded_models",
+                manifest.get(f"{channel}_exclusions", []),
+            )
+            for pattern in exclusions if isinstance(exclusions, list) else []:
+                if isinstance(pattern, str) and fnmatchcase(
+                    source.lower(), pattern.strip().lower()
+                ):
+                    issues.append(
+                        f"{entry_label} source is blocked by the {channel} "
+                        f"exclusion {pattern!r}"
+                    )
+    alias_without_fork = {
+        entry["alias"]
+        for entries in raw_aliases.values()
+        if isinstance(entries, list)
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("fork") is not True
+        and isinstance(entry.get("alias"), str)
+    }
+    if alias_without_fork:
+        issues.append(
+            "OAuth aliases must set fork=true for independent admission state: "
+            f"{sorted(alias_without_fork)!r}"
+        )
     static_antigravity_models = manifest.get("antigravity_upstream_static_models")
     if not isinstance(static_antigravity_models, list) or not all(
         isinstance(model, str) and model.strip() for model in static_antigravity_models
@@ -996,13 +1119,32 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
                 for model in models
                 if isinstance(model, dict) and isinstance(model.get("alias"), str)
             )
+    plugin_aliases: dict[str, str] = {}
+    raw_aliases = manifest.get("oauth_model_aliases")
+    if isinstance(raw_aliases, dict):
+        for provider, entries in raw_aliases.items():
+            if not isinstance(provider, str) or not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("name"), str)
+                    and isinstance(entry.get("alias"), str)
+                ):
+                    plugin_aliases[entry["name"].strip()] = entry["alias"].strip()
     for route in manifest.get("plugin_routes", []):
         if isinstance(route, dict) and route.get("shared_consumption") is True:
             lane = route.get("admission_lane")
             models = route.get("models")
             if isinstance(lane, str) and isinstance(models, list):
                 expected.setdefault(lane, set()).update(
-                    model for model in models if isinstance(model, str) and model
+                    (
+                        plugin_aliases.get(model, model)
+                        if route.get("realm") == "intl"
+                        else model
+                    )
+                    for model in models
+                    if isinstance(model, str) and model
                 )
     return expected
 
@@ -1463,6 +1605,24 @@ EXPECTED_OAUTH_SETTINGS = (
     if isinstance(ROUTE_MANIFEST.get("oauth_settings"), dict)
     else {}
 )
+EXPECTED_OAUTH_MODEL_ALIASES = (
+    ROUTE_MANIFEST.get("oauth_model_aliases", {})
+    if isinstance(ROUTE_MANIFEST.get("oauth_model_aliases"), dict)
+    else {}
+)
+_VALID_PLUGIN_ROUTES = [
+    route
+    for route in ROUTE_MANIFEST.get("plugin_routes", [])
+    if isinstance(route, dict)
+    and isinstance(route.get("provider"), str)
+    and isinstance(route.get("models"), list)
+]
+EXPECTED_PLUGIN_MODEL_OWNERS = {
+    model: (route["provider"], route.get("realm"))
+    for route in _VALID_PLUGIN_ROUTES
+    for model in route["models"]
+    if isinstance(model, str)
+}
 EXPECTED_PROVIDER_URLS = {
     provider["host"]: (
         f"{provider.get('scheme', 'https')}://{provider['host']}"
@@ -1742,6 +1902,45 @@ def validate_config(
             ]
             if normalized_actual != normalized_expected:
                 issues.append(f"oauth.settings.{channel} context-window drift")
+    oauth_model_aliases = (
+        oauth_block.get("model-alias") if isinstance(oauth_block, dict) else None
+    )
+    if not isinstance(oauth_model_aliases, dict):
+        issues.append("oauth.model-alias must be a mapping")
+    else:
+        for channel, expected_entries in EXPECTED_OAUTH_MODEL_ALIASES.items():
+            actual_entries = oauth_model_aliases.get(channel, [])
+            normalized_actual = (
+                [
+                    {
+                        key: value
+                        for key, value in entry.items()
+                        if key in {"name", "alias", "fork"} and value not in (None, "")
+                    }
+                    for entry in actual_entries
+                    if isinstance(entry, dict)
+                ]
+                if isinstance(actual_entries, list)
+                else actual_entries
+            )
+            normalized_expected = [
+                {
+                    key: value
+                    for key, value in entry.items()
+                    if key in {"name", "alias", "fork"} and value not in (None, "")
+                }
+                for entry in expected_entries
+                if isinstance(entry, dict)
+            ]
+            if normalized_actual != normalized_expected:
+                issues.append(f"oauth.model-alias.{channel} rename drift")
+        stale_channels = sorted(
+            set(oauth_model_aliases) - set(EXPECTED_OAUTH_MODEL_ALIASES)
+        )
+        if stale_channels:
+            issues.append(
+                f"oauth.model-alias has undeclared channel(s) {stale_channels!r}"
+            )
     if not isinstance(oauth_exclusions, dict):
         issues.append("oauth.excluded-models must be a mapping")
     else:

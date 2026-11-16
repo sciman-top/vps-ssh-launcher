@@ -107,7 +107,9 @@ def test_zero_cost_models_are_declared_in_lane_config(admission: ModuleType) -> 
     loaded = admission.load_config(
         Path(__file__).resolve().parent.parent / "scripts/remote/cpa-admission.json"
     )
-    lane = next(item for item in loaded["lanes"] if item["name"] == "workbuddy-oauth")
+    lane = next(
+        item for item in loaded["lanes"] if item["name"] == "workbuddy-intl-oauth"
+    )
     assert "hy4free" in lane["zero_cost_models"]
 
 

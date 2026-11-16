@@ -337,10 +337,22 @@ class ContractTests(unittest.TestCase):
                         "model_cooldowns": {},
                     },
                 },
+                "workbuddy-intl-oauth": {
+                    "requests_per_minute": 18,
+                    "state": {
+                        "inflight": 0,
+                        "pending": 0,
+                        "rpm_window_used": 0,
+                        "hold_reason": None,
+                        "cooldown_active": False,
+                        "cooldown_remaining": 0,
+                        "model_cooldowns": {},
+                    },
+                },
             },
         }
 
-    def test_live_health_requires_four_reviewed_lanes_and_no_holds(self) -> None:
+    def test_live_health_requires_five_reviewed_lanes_and_no_holds(self) -> None:
         self.assertEqual(audit_live_health(self._health_snapshot()), [])
         held = self._health_snapshot()
         held["lanes"]["workbuddy-oauth"]["state"]["hold_reason"] = "account_restricted"
