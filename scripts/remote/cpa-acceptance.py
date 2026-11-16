@@ -3,6 +3,14 @@
 Run only inside an isolated mount + network namespace with /opt/cliproxyapi
 bound to an empty fixture directory. Never reads production credentials.
 
+The final step also runs ``cpa-update-acceptance.py`` (the updater rehearsal).
+On a host whose compose points at a derived fork image, ``cpa-auto-update.sh``
+refuses the image-only path *by design* (``FORK_IMAGE_REBUILD_REQUIRED``), so that
+rehearsal cannot run there and its absence must be stated rather than silently
+skipped. Set ``CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL=1`` to get the explicit
+``UPDATE_REHEARSAL=DEFERRED_BY_DESIGN reason=...`` verdict; without the variable
+the rehearsal runs and a missing rehearsal file is a hard failure.
+
 Success criterion: the literal line ``ACCEPTANCE_RESULT=PASS`` printed by this
 process as its final step. Wrappers must NOT rely on ``$?`` — a
 ``python3 ... | tee log; echo $?`` pipeline reports tee's exit code and prints
@@ -471,6 +479,40 @@ def _refuse(reason: str) -> None:
     raise SystemExit(1)
 
 
+def run_update_rehearsal(root: Path) -> None:
+    """Run the updater rehearsal, or state why it cannot run here.
+
+    2026-11-17: the previous shape called `runpy.run_path` inline, so a host
+    that legitimately cannot rehearse the updater had no way to say so -- the
+    operator patched a throwaway copy of this file instead, which is exactly
+    the kind of undeclared deviation a receipt must not contain. The deferral
+    is now a first-class, opt-in verdict: it names the reason it read from the
+    compose file, and it is only available behind an explicit variable so a
+    forgotten rehearsal cannot pass silently.
+    """
+
+    if os.environ.get("CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL") != "1":
+        runpy.run_path(str(root / "cpa-update-acceptance.py"))["run_cases"]()
+        return
+    image = ""
+    try:
+        compose = yaml.safe_load((root / "compose.yml").read_text(encoding="utf-8"))
+        service = (compose or {}).get("services", {}).get("cli-proxy-api", {})
+        image = str(service.get("image") or "")
+    except (OSError, ValueError, yaml.YAMLError):
+        image = ""
+    if not image:
+        _refuse("update_rehearsal_deferred_without_compose_evidence")
+    if image.startswith("eceasy/cli-proxy-api"):
+        # An official image is exactly the case the rehearsal exists for;
+        # deferring there would hide a real, runnable check.
+        _refuse("update_rehearsal_deferred_on_official_image")
+    print(
+        "UPDATE_REHEARSAL=DEFERRED_BY_DESIGN reason=fork_image_%s" % image,
+        flush=True,
+    )
+
+
 def main():
     if not __debug__:  # pragma: no cover - depends on interpreter flags
         _refuse("asserts_disabled_run_without_-O")
@@ -616,9 +658,7 @@ def main():
     try:
         ready()
         if os.environ.get("CPA_ACCEPTANCE_UPDATE_ONLY") == "1":
-            import runpy
-
-            runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
+            run_update_rehearsal(ROOT)
         else:
             body = {"model": "gpt-6-luna", "input": "Reply OK", "stream": True}
             STATE["mode"] = "overload"
@@ -667,9 +707,7 @@ def main():
                 result=result.stdout.strip(),
             )
             assert result.returncode == 0
-            import runpy
-
-            runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
+            run_update_rehearsal(ROOT)
         # Machine-readable completion marker: printed only when every scenario
         # above finished without assertion failure. See the module docstring.
         print("ACCEPTANCE_RESULT=PASS", flush=True)

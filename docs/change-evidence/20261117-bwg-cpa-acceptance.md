@@ -49,11 +49,44 @@ ACCEPTANCE_RESULT=PASS
 **两处必须如实记录的偏差**：
 
 1. 脚本里两处 `runpy.run_path(.../'cpa-update-acceptance.py')` 会驱动 **updater**。本机 compose
-   指向派生 fork 镜像，updater 按设计拒绝（`FORK_IMAGE_REBUILD_REQUIRED`），所以这两处在
-   临时副本里替换为 `UPDATE_REHEARSAL=DEFERRED`。**updater 路径本次未验证**。
+   指向派生 fork 镜像，updater 按设计拒绝（`FORK_IMAGE_REBUILD_REQUIRED`）。
+   **这一处已修复（见 §A6）**：不再靠临时副本手改，脚本自己给出显式判据。
 2. `FIXTURE_ONLY` 标记必须落在脚本**硬编码**的 `/opt/cliproxyapi`；生产目录不能写，故用
    `unshare -m` + `mount --bind` 在命名空间内覆盖。宿主机 `/opt/cliproxyapi` 未被写入。
 
+
+## A6 updater 用例的可验证化（本轮修复）
+
+上一版`cpa-acceptance.py`把 updater 演练写成两处内联 `runpy.run_path`，于是在"scompose 指向派生
+镜像"的主机上**没有任何合法方式**说明"这一步跑不了"——操作者只能去改一份临时副本，而这正是
+回执里不该出现的未声明偏差。现已改为一等公民：
+
+```python
+def run_update_rehearsal(root):
+    if os.environ.get("CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL") != "1":
+        runpy.run_path(str(root / "cpa-update-acceptance.py"))["run_cases"]()
+        return
+    ...   # 读 compose 的 image 作为证据
+    if not image:
+        _refuse("update_rehearsal_deferred_without_compose_evidence")
+    if image.startswith("eceasy/cli-proxy-api"):
+        _refuse("update_rehearsal_deferred_on_official_image")
+    print("UPDATE_REHEARSAL=DEFERRED_BY_DESIGN reason=fork_image_%s" % image)
+```
+
+三条纪律：**默认仍然真跑**；豁免必须显式设变量；豁免前必须读到 compose 证据，且**官方镜像
+不许豁免**（那正是该演练存在的场景）。
+
+**线上实测**（fixture compose 取自生产镜像行）：
+
+```
+FIXTURE_COMPOSE_IMAGE=cli-proxy-api-fork:v8.0.75-gemini-raw
+ACCEPTANCE_RESULT=PASS
+UPDATE_REHEARSAL=DEFERRED_BY_DESIGN reason=fork_image_cli-proxy-api-fork:v8.0.75-gemini-raw
+```
+
+单测（`tests/test_remote_acceptance_gate.py`，共 4 条）钉住三种情形：不设变量→真跑；无 compose→
+拒绝；官方镜像→拒绝；派生镜像→给出带镜像名的 DEFERRED 判据。
 ## A3 admission 契约与姿态审计（24h）
 
 `scripts/cpa_admission_risk_audit.py --hours 24` → `-- fail=0 warn=5 --`，判决
@@ -123,7 +156,7 @@ FORK_PATCH_ACCEPTANCE=PASS
 
 | 项 | 原因 | 建议 |
 |---|---|---|
-| updater 路径（`cpa-update-acceptance.py`） | 派生 fork 镜像按设计被 updater 拒绝 | 需独立演练窗口，或重写该用例 |
+| updater **演练本身**（`cpa-update-acceptance.py` 的 8 个场景） | 派生 fork 镜像按设计无法运行它；**判据已可验证化**（§A6），但场景内容仍未在本机跑过 | 需一个"官方镜像时代"的演练窗口 |
 | B7 真实生成探测 | 消耗账号额度与画像 | 等用户单独授权 |
 | 本地 Cockpit 1.4.0 重钉 | 未经验证的版本不进 pin | 用户确认升级方案后再改策略 |
 | CN/INTL 拆 lane | 契约变更 | 用户裁决 |

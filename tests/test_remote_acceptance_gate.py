@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,6 +44,71 @@ def test_the_acceptance_gate_refuses_under_optimised_python() -> None:
     assert completed.returncode != 0
     assert "ACCEPTANCE_RESULT=PASS" not in completed.stdout
     assert "asserts_disabled" in completed.stdout
+
+
+NL = chr(10)
+
+
+def _rehearsal_module():
+    """Load only the updater-rehearsal helper, without running main()."""
+
+    import runpy
+
+    return runpy.run_path(str(REPO_ROOT / "scripts" / "remote" / "cpa-acceptance.py"))
+
+
+def test_update_rehearsal_runs_when_not_deferred(tmp_path: Path) -> None:
+    """The default path still runs the real rehearsal."""
+
+    module = _rehearsal_module()
+    stub = "def run_cases():" + NL + "    print('REHEARSAL_RAN')" + NL
+    (tmp_path / "cpa-update-acceptance.py").write_text(stub, encoding="utf-8")
+    previous = os.environ.pop("CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL", None)
+    try:
+        module["run_update_rehearsal"](tmp_path)
+    finally:
+        if previous is not None:
+            os.environ["CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL"] = previous
+
+
+def test_deferral_requires_an_explicit_fork_image(tmp_path: Path) -> None:
+    """Deferring is opt-in and refuses to hide a runnable check."""
+
+    module = _rehearsal_module()
+    previous = os.environ.get("CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL")
+    os.environ["CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL"] = "1"
+    try:
+        # No compose in the fixture root: there is no evidence to defer on.
+        with pytest.raises(SystemExit):
+            module["run_update_rehearsal"](tmp_path)
+        # An official image is exactly the case the rehearsal exists for.
+        (tmp_path / "compose.yml").write_text(
+            "services:"
+            + NL
+            + "  cli-proxy-api:"
+            + NL
+            + "    image: eceasy/cli-proxy-api:v8.0.75"
+            + NL,
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit):
+            module["run_update_rehearsal"](tmp_path)
+        # A derived fork image legitimately cannot rehearse the updater.
+        (tmp_path / "compose.yml").write_text(
+            "services:"
+            + NL
+            + "  cli-proxy-api:"
+            + NL
+            + "    image: cli-proxy-api-fork:v8.0.75-gemini-raw"
+            + NL,
+            encoding="utf-8",
+        )
+        module["run_update_rehearsal"](tmp_path)
+    finally:
+        if previous is None:
+            os.environ.pop("CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL", None)
+        else:
+            os.environ["CPA_ACCEPTANCE_DEFER_UPDATE_REHEARSAL"] = previous
 
 
 def test_the_gate_never_prints_pass_outside_its_fixture() -> None:
