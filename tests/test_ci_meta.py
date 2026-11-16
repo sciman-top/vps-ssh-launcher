@@ -32,6 +32,33 @@ def load_yaml(text: str) -> dict[str, Any]:
     return loaded
 
 
+# The reviewed gate catalog, one entry per logical leg. Ids are shared across
+# profile tables on purpose (focused/full reuse "test" and the invariant pair),
+# so this set is smaller than the number of `Id = "..."` sites in the runner.
+REVIEWED_GATE_IDS = frozenset(
+    {
+        "contract:catalog",
+        "build",
+        "test",
+        "test-lane",
+        "test:serial-recheck",
+        "test:filesystem-baseline",
+        "invariant:pip-check",
+        "invariant:dependency-audit",
+        "hotspot:bandit",
+        "hotspot:bandit-scripts",
+        "lint:ruff",
+        "lint:format",
+        "type:mypy",
+        "focused:test",
+        "focused:ruff",
+        "focused:format",
+        "focused:mypy",
+        "integration:test",
+    }
+)
+
+
 class CiMetaTests(ScriptValidationMixin, unittest.TestCase):
     def test_powershell_checks_do_not_reject_crlf_checkout(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1045,31 +1072,46 @@ $global:observedCommands = @()
             "ghost entries when deleting a package module",
         )
 
-        for path in sorted((package_dir / "maintenance").glob("*.py")):
-            if path.name == "__init__.py":
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            # 同层 sibling import（level 1）不受限；父包方向不得依赖入口层。
-            names = package_modules_imported(tree, level=2)
-            with self.subTest(module=f"maintenance/{path.name}"):
-                self.assertEqual(names & {"cli", "maintenance_cli"}, set())
-                # Maintenance implementation modules must never import an
-                # entrypoint back. Cover absolute imports too:
-                # the level-2 check above intentionally sees only relative
-                # syntax and would otherwise allow
-                # ``from vps_ssh_launcher.maintenance_cli import main``.
-                absolute_names: set[str] = set()
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        absolute_names.update(alias.name for alias in node.names)
-                    elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                        if node.module:
-                            absolute_names.add(node.module)
-                forbidden = {
-                    "vps_ssh_launcher.cli",
-                    "vps_ssh_launcher.maintenance_cli",
-                }
-                self.assertEqual(absolute_names & forbidden, set())
+        # Subpackage governance, discovered from the tree instead of hardcoded
+        # to maintenance/ so a future second subpackage cannot grow outside the
+        # contract. Same rule as today: sibling imports are free, the parent
+        # direction must not reach an entrypoint, in relative or absolute form.
+        subpackages = sorted(
+            path
+            for path in {p.parent for p in package_dir.rglob("__init__.py")}
+            if path != package_dir
+        )
+        self.assertTrue(
+            subpackages,
+            "no subpackage discovered; the layering contract expects at least "
+            "one, otherwise this loop is silently vacuous",
+        )
+        forbidden_absolute = {f"vps_ssh_launcher.{name[:-3]}" for name in entry_files}
+        for subpackage in subpackages:
+            for path in sorted(subpackage.glob("*.py")):
+                if path.name == "__init__.py":
+                    continue
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                label = "/".join(path.relative_to(package_dir).parts)
+                # 同层 sibling import（level 1）不受限；父包方向不得依赖入口层。
+                names = package_modules_imported(
+                    tree, level=len(path.relative_to(package_dir).parts)
+                )
+                with self.subTest(module=label):
+                    self.assertEqual(names & {"cli", "maintenance_cli"}, set())
+                    # Subpackage implementation modules must never import an
+                    # entrypoint back. Cover absolute imports too: the
+                    # relative check above intentionally sees only relative
+                    # syntax and would otherwise allow
+                    # ``from vps_ssh_launcher.maintenance_cli import main``.
+                    absolute_names: set[str] = set()
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Import):
+                            absolute_names.update(alias.name for alias in node.names)
+                        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                            if node.module:
+                                absolute_names.add(node.module)
+                    self.assertEqual(absolute_names & forbidden_absolute, set())
 
     def test_auto_profile_maps_a_diff_to_full_focused_skip_or_no_changes(
         self,
@@ -1434,6 +1476,21 @@ try {
         runner = (repo_root() / "scripts/run_gates.ps1").read_text(encoding="utf-8")
         self.assertIn("[switch]$ProveParallel", runner)
         self.assertIn("if (-not $ProveParallel)", runner)
+
+    def test_gate_ids_stay_on_the_reviewed_catalog(self) -> None:
+        # d863abf removed the old covers-profiles contract, and the Id set grew
+        # from 14 to 18 while nothing anchored it. This restores only the
+        # set-level review point: command lines stay free (the profiles really
+        # execute them on every Full run), but adding, renaming, or retiring a
+        # leg must update REVIEWED_GATE_IDS on purpose.
+        runner = (repo_root() / "scripts/run_gates.ps1").read_text(encoding="utf-8")
+        found = set(re.findall(r'\bId\s*=\s*"([^"]+)"', runner))
+        self.assertEqual(found, set(REVIEWED_GATE_IDS))
+        for retired in ("unittest", "pyright", "vulture"):
+            self.assertFalse(
+                any(retired in gate_id for gate_id in found),
+                f"retired tool {retired!r} must not come back as a gate Id",
+            )
 
     def test_receipts_are_keyed_on_content_not_on_host_state(self) -> None:
         # A receipt is only evidence for the tree it was produced from, so the
