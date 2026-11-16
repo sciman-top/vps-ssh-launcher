@@ -147,21 +147,22 @@ def _key_path_from_arg(key: str | None) -> Path | None:
         raise ValueError(f"SSH key path is not a regular file: {key_path}")
     if key_stat.st_size <= 0 or key_stat.st_size > _MAX_SSH_KEY_BYTES:
         raise ValueError(f"SSH key file must be between 1 byte and 1 MiB: {key_path}")
+    permission_denied = False
     try:
         if os.name == "nt":
             # Reuse the same DACL parser as target.json, but refuse rather than
             # mutating a user's private key behind their back.
             windows_acl._ensure_windows_private_dacl(key_path, lambda _path: 1)
         elif stat.S_IMODE(key_stat.st_mode) & 0o077:
-            raise ValueError(
-                f"SSH key file is accessible to other users; repair its permissions: {key_path}"
-            )
+            permission_denied = True
     except (OSError, ValueError) as exc:
-        if isinstance(exc, ValueError) and "accessible to other users" in str(exc):
-            raise
         raise ValueError(
             f"SSH key file must be private and inaccessible to other users: {key_path}"
         ) from exc
+    if permission_denied:
+        raise ValueError(
+            f"SSH key file is accessible to other users; repair its permissions: {key_path}"
+        )
     return key_path
 
 

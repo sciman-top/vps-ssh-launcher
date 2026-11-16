@@ -466,12 +466,10 @@ try {
     # Tee instead of a bare pipe: only two legs consume their own output (the
     # summary vector and the proof baseline), and every other leg keeps
     # streaming to the console exactly as before.
-    $output = New-Object System.Collections.Generic.List[string]
     $lines = @()
     try {
       & $Entry.Command[0] @($Entry.Command[1..($Entry.Command.Count - 1)]) | Tee-Object -Variable lines | Out-Null
       foreach ($line in $lines) {
-        $output.Add([string]$line)
         Write-Host $line
       }
     } finally {
@@ -479,7 +477,7 @@ try {
         [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")
       }
     }
-    return $output
+    return @($lines)
   }
 
   function Resolve-IntegrationProfile {

@@ -313,6 +313,20 @@ def resolve_entry_config_path(config_arg: str | None) -> Path | None:
     return resolve_default_config_path(SOURCE_ROOT)
 
 
+def _profile_strict_override(entry: dict[str, Any], profile_name: str) -> bool | None:
+    """Type-checked read of a profile's ``strict_host_key_checking`` field.
+
+    Returns None when the profile leaves the field unset and the bool value
+    otherwise; anything other than a strict bool is a configuration error.
+    """
+    profile_strict = entry.get("strict_host_key_checking")
+    if profile_strict is not None and type(profile_strict) is not bool:
+        raise ValueError(
+            f"Profile '{profile_name}': 'strict_host_key_checking' must be a boolean."
+        )
+    return profile_strict
+
+
 def build_connect_namespace(
     entry: dict[str, Any],
     *,
@@ -332,12 +346,8 @@ def build_connect_namespace(
     # accepted by validate_profile() and never read, so "strict_host_key_checking:
     # false" silently kept strict verification (and true gave a false sense of a
     # pin). Weakening stays an explicit CLI opt-out.
-    profile_strict = entry.get("strict_host_key_checking")
+    profile_strict = _profile_strict_override(entry, profile_name)
     if profile_strict is not None:
-        if type(profile_strict) is not bool:
-            raise ValueError(
-                f"Profile '{profile_name}': 'strict_host_key_checking' must be a boolean."
-            )
         strict_host_key_checking = strict_host_key_checking or profile_strict
     return argparse.Namespace(
         host=cast(str, entry["host"]).strip(),
@@ -565,11 +575,7 @@ def apply_config(args: argparse.Namespace) -> None:
     validate_profile(entry, name, require_auth=not cli_has_auth_override)
 
     args.socks5 = resolve_socks5_proxy(entry, profile_name=name)
-    profile_strict = entry.get("strict_host_key_checking")
-    if profile_strict is not None and type(profile_strict) is not bool:
-        raise ValueError(
-            f"Profile '{name}': 'strict_host_key_checking' must be a boolean."
-        )
+    profile_strict = _profile_strict_override(entry, name)
     # A profile may tighten the caller's host-key policy, but never weaken an
     # explicit CLI setting. Parser-created namespaces default to strict mode;
     # small callers and tests may omit the field, so preserve that same
