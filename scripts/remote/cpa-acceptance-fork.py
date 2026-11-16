@@ -28,7 +28,12 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-BINARY = Path(os.environ.get("CPA_FORK_BINARY", "/tmp/cpa-fork-acceptance/CLIProxyAPI"))
+BINARY = Path(
+    os.environ.get(
+        "CPA_FORK_BINARY",
+        str(Path(tempfile.gettempdir()) / "cpa-fork-acceptance" / "CLIProxyAPI"),
+    )
+)
 PORT = 8399
 
 

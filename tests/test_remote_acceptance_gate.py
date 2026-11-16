@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -49,7 +50,7 @@ def test_the_acceptance_gate_refuses_under_optimised_python() -> None:
 NL = chr(10)
 
 
-def _rehearsal_module():
+def _rehearsal_module() -> dict[str, Any]:
     """Load only the updater-rehearsal helper, without running main()."""
 
     import runpy
