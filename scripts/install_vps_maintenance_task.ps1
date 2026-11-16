@@ -12,7 +12,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $runScript = (Resolve-Path (Join-Path $PSScriptRoot "vps_maintenance.ps1")).Path
 
 function Quote-TaskArgument {

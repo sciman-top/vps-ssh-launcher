@@ -17,8 +17,6 @@ from ..safe_files import atomic_write_json
 from .inventory_protocol import (
     INVENTORY_COMMAND,
     _ALLOWED_FACT_KEYS,
-    _FACT_MAX_CHARS as _FACT_MAX_CHARS,
-    _bound_fact as _bound_fact,
     parse_probe_output,
 )
 

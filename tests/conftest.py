@@ -134,26 +134,6 @@ def _private_mkdir(
         pass
 
 
-def _posix_test_directory(root: Path) -> Path:
-    """Select a native Linux path when tests cross into the Bash lane."""
-    getuid = getattr(os, "getuid", None)
-    if os.name != "posix" or getuid is None or getuid() != 0:
-        return root
-    # Under WSL both drives and /tmp may be 9p. Its find d_type is DT_UNKNOWN;
-    # the source contains a d_type=symlink assertion below.
-    root_name = "".join(
-        char if char.isalnum() or char in "-_" else "-" for char in root.name
-    )
-    marker = Path("/tmp") / f"vps-ssh-launcher-test-{os.getpid()}" / root_name
-    if marker.exists() and (not marker.is_dir() or any(marker.iterdir())):
-        raise RuntimeError(f"Unexpected pre-existing native test directory: {marker}")
-    _original_mkdir(marker.parent, mode=stat.S_IRWXU, parents=True, exist_ok=True)
-    os.chmod(marker.parent, stat.S_IRWXU)
-    _original_mkdir(marker, mode=stat.S_IRWXU, parents=False, exist_ok=True)
-    os.chmod(marker, stat.S_IRWXU)
-    return marker
-
-
 def _apply_private_fixture_bridge() -> None:
     if not _private_temp_root():
         return

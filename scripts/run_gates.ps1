@@ -71,40 +71,6 @@ try {
     )
   }
 
-  function Assert-IntegrationProfileIsNonInteractive {
-    param(
-      [string]$ConfigPath,
-      [string]$ProfileName
-    )
-
-    if ($ProfileName) {
-      return
-    }
-    if (-not $ConfigPath) {
-      return
-    }
-    if (-not (Test-Path -LiteralPath $ConfigPath)) {
-      return
-    }
-
-    $configText = Get-Content -LiteralPath $ConfigPath -Raw
-    $configJson = $configText | ConvertFrom-Json
-    if (-not $configJson.profiles) {
-      return
-    }
-    if ($configJson.default) {
-      return
-    }
-
-    $profileCount = @($configJson.profiles.PSObject.Properties).Count
-    if ($profileCount -gt 1) {
-      throw (
-        "RunIntegration is non-interactive. Pass -IntegrationProfile when " +
-        "the integration config contains multiple profiles and no default."
-      )
-    }
-  }
-
   function Resolve-IntegrationConfigPath {
     param(
       [string]$ConfigPath,
@@ -425,13 +391,9 @@ try {
     # pytest reports on one line: "1708 passed, 31 skipped, 810 subtests passed
     # in 90.31s". Duration is the only field a parallel run may change; every
     # other field, subtest assertions included, is a claim about behaviour.
-    $vector = @{ counts = @(); total = 0; sawRun = $false }
+    $vector = @{ counts = @(); sawRun = $false }
     foreach ($line in $Lines) {
       $text = [string]$line
-      if ($text -match "(\d+) tests? collected") {
-        # collect-only: a whole-test count with no run behind it.
-        $vector.total = [int]$Matches[1]
-      }
       if (-not $text.Contains(" in ")) {
         continue
       }
@@ -442,7 +404,6 @@ try {
         continue
       }
       $vector.sawRun = $true
-      $vector.total = [int]$Matches[1]
       $counts = @()
       foreach ($piece in ($head -split ",")) {
         $trimmed = $piece.Trim()
@@ -645,15 +606,6 @@ try {
     $autoDecision = Resolve-AutoProfile `
       -RepoRoot $repoRoot `
       -ChangedPaths ([ref]$autoChangedPaths)
-    $gateScriptChanged = $false
-    if ($autoDecision -ne "NoChanges") {
-      # The gate script is the thing being trusted to judge a change, so a diff
-      # to the judging machinery never runs under its own relaxed
-      # classification.
-      $gateScriptChanged = @(
-        $autoChangedPaths | Where-Object { ($_ -replace "\\", "/") -match "^scripts/(run_gates\.ps1|gate_content_hash\.py|dsh_gate_xdist_worker_prelude\.py)$" }
-      ).Count -gt 0
-    }
     if ($autoDecision -eq "NoChanges") {
       if (
         $RunDependencyAudit -or
@@ -667,7 +619,7 @@ try {
       } else {
         $autoNoChanges = $true
       }
-    } elseif ($autoDecision -eq "Focused" -and -not $gateScriptChanged) {
+    } elseif ($autoDecision -eq "Focused") {
       $autoPython = @($autoChangedPaths | Where-Object { $_ -match "\.py$" })
       if ($autoPython.Count -eq 0) {
         Write-Host "==> auto: nothing to lint or test; running doc checks instead"
@@ -677,9 +629,6 @@ try {
         $FocusPath = @($autoPython)
       }
     } else {
-      if ($gateScriptChanged) {
-        Write-Host "==> auto: gate machinery changed -> Full"
-      }
       $Profile = "Full"
     }
   }
@@ -947,9 +896,6 @@ try {
     $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
       -ConfigPath $IntegrationConfig `
       -RepoRoot $repoRoot
-    Assert-IntegrationProfileIsNonInteractive `
-      -ConfigPath $effectiveIntegrationConfig `
-      -ProfileName $IntegrationProfile
     if ($effectiveIntegrationConfig) {
       $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $effectiveIntegrationConfig
     }

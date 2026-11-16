@@ -1228,7 +1228,7 @@ $result | ConvertTo-Json -Depth 6 -Compress
             source,
         )
         self.assertIn(
-            '$projectionHeadSha256["scripts/remote/cpa-update-timeout.conf"]',
+            '"$($entry.Value)=$($projectionHeadSha256[$entry.Key])"',
             source,
         )
         self.assertIn("__CPA_UPDATER_TIMEOUT_CONF_B64__", source)

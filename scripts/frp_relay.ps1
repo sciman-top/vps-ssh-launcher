@@ -130,8 +130,6 @@ function Invoke-FrpRemote {
   }
   [IO.File]::WriteAllText(
     $reviewedHosts, $pinnedLine + "`n", [Text.UTF8Encoding]::new($false))
-  $reviewedText = Get-Content -Raw -LiteralPath $passwordConfig
-  $expectedPasswordConfigRoot = Split-Path -Parent $KnownHosts
   try {
     $passwordBytes = [Text.Encoding]::UTF8.GetBytes([string]$Profile.Password)
     [IO.File]::WriteAllBytes($AskpassInput, $passwordBytes)
@@ -736,7 +734,6 @@ function Test-FrpAcceptance {
       [Array]::Clear($tlsHello, 0, $tlsHello.Length)
     }
     Write-Output "FRP_PUBLIC_CONTROL=$($controlState.State)"
-    $acceptanceStart = [DateTime]::UtcNow
     $acceptanceResult = @(& {
       param([string]$InputCode)
       $block = [ScriptBlock]::Create($InputCode)

@@ -21,7 +21,7 @@ from .state_automation import (
     refund_automation_attempt as refund_automation_attempt,
     restore_unattended_busy_plan as restore_unattended_busy_plan,
 )
-from .state_store import SCHEMA as SCHEMA, connect as _connect
+from .state_store import connect as _connect
 from .transitions import is_backward_transition as _is_backward_transition
 
 

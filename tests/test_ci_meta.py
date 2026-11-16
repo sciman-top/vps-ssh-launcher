@@ -1187,7 +1187,6 @@ function Invoke-GateProbe {
                     )
                     report = json.loads(completed.stdout.splitlines()[-1])
                     commands = report["commands"]
-                    ids = [entry[0] if entry else "" for entry in commands]
                     if kind == "no_changes":
                         self.assertEqual(commands, [], commands)
                         self.assertIn("no working-tree change", completed.stdout)
@@ -1209,7 +1208,6 @@ function Invoke-GateProbe {
                             any("bandit" in " ".join(step) for step in commands),
                             commands,
                         )
-                    self.assertIsNotNone(ids)
 
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         # Derive the requirement from the script body instead of a hand-kept

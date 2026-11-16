@@ -181,7 +181,6 @@ function Get-CpaGuardrailTemplate {
 
 $fail2banFilterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banFilterText))
 $workBuddyVersionCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($workBuddyVersionCheckText))
-$workBuddyVersionCheckSha256 = Get-LfNormalizedSha256 -Text $workBuddyVersionCheckText
 $fail2banFilterSha256 = Get-LfNormalizedSha256 -Text $fail2banFilterText
 # Fail closed on the source of truth, not just on the deployed copy: nginx
 # reaches CPA over 127.0.0.1:8317, so a projected jail without the loopback
@@ -475,7 +474,6 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
       )
     }
     $bash = $null
-    $bashVersion = $null
     foreach ($candidate in $bashCandidates) {
       $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
       if ($null -ne $item -and -not $item.PSIsContainer -and
@@ -489,7 +487,6 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
           continue
         }
         $bash = $candidate
-        $bashVersion = $versionText
         break
       }
     }
@@ -704,21 +701,7 @@ foreach ($entry in $projectionDoctorTargets.GetEnumerator()) {
   $projectionHeadSha256[$entry.Key] = Get-HeadBlobSha256 $entry.Key
 }
 $updaterHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-auto-update.sh"]
-$healthHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-health.py"]
-$healthRuntimeHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_health_runtime.py"]
-$policyHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_policy.py"]
-$providerRoutesHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_provider_routes.json"]
 $admissionHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission.py"]
-$admissionLauncherHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-launch.sh"]
-$admissionBootstrapHeadSha256 = $projectionHeadSha256["scripts/remote/cpa_admission_bootstrap.py"]
-$admissionConfigHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission.json"]
-$admissionUnitHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission.service"]
-$admissionIntegrityCheckHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-integrity-check.sh"]
-$admissionIntegrityDropinHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-integrity.conf"]
-$admissionIntegrityPinHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-admission-integrity-pin.txt"]
-$updaterTimeoutConfHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-update-timeout.conf"]
-$fail2banFilterHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-fail2ban-filter.conf"]
-$fail2banJailHeadSha256 = $projectionHeadSha256["scripts/remote/cpa-fail2ban-jail.conf"]
 # The request guard embeds the admission generation at projection time. Its
 # doctor hash must describe those deployed bytes, not the raw source blob.
 $admissionRequestGuardHeadText = (Get-HeadBlobText "scripts/remote/cpa_request_guard.py").

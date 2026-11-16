@@ -36,7 +36,6 @@ param(
 $ErrorActionPreference = "Stop"
 $policyPath = Join-Path $PSScriptRoot "cockpit_sidecar_policy.json"
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
-$repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Resolve-UserPath([string]$Path) {
   [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))

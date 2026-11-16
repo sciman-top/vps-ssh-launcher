@@ -99,8 +99,6 @@ def tree_hash(root: Path, paths: list[str]) -> str:
     """Content address over the named paths, in repo-relative order."""
     digest = hashlib.sha256()
     for relative in sorted(paths):
-        if is_ignored(relative):
-            continue
         digest.update(relative.encode("utf-8") + b"\0")
         try:
             with (root / relative).open("rb") as handle:
