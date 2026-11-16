@@ -454,26 +454,20 @@ def test_malformed_reset_request_is_bounded_400(
     tmp_path: Path,
     body: bytes,
 ) -> None:
-    proxy = AdmissionProxy(config(), chatgpt_state_path=risk_state_path(tmp_path))
-    proxy.lanes["chatgpt-oauth"]._state_write_failed = True
-    server = AdmissionServer(("127.0.0.1", 0), proxy)
-    thread = server_thread(server)
-    thread.start()
-    client = http.client.HTTPConnection(
-        "127.0.0.1",
-        server.server_address[1],
-        timeout=5,
-    )
-    try:
-        client.request("POST", "/admin/recover-after-reset", body=body)
-        response = client.getresponse()
-        assert response.status == 400
-        assert b"unsupported" not in response.read()
-    finally:
-        client.close()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+    with _admission_stack(
+        _UncontactedUpstream,
+        proxy_overrides={"chatgpt_state_path": risk_state_path(tmp_path)},
+    ) as stack:
+        proxy = stack["proxy"]
+        proxy.lanes["chatgpt-oauth"]._state_write_failed = True
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
+        try:
+            client.request("POST", "/admin/recover-after-reset", body=body)
+            response = client.getresponse()
+            assert response.status == 400
+            assert b"unsupported" not in response.read()
+        finally:
+            client.close()
     # This fixture injected a storage error without its owning hold. A
     # malformed request must neither call an upstream nor release such a hold.
     assert proxy.lanes["chatgpt-oauth"].snapshot()["state_write_failed"]
@@ -3367,28 +3361,22 @@ def _read_raw_response(sock: socket.socket) -> bytes:
 
 
 def test_rejects_truncated_fixed_length_request_body() -> None:
-    loaded = config()
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = server_thread(admission)
-    admission_thread.start()
-    sock = socket.create_connection(admission.server_address, timeout=3)
-    sock.settimeout(3)
-    try:
-        sock.sendall(
-            b"POST /v1/responses HTTP/1.1\r\n"
-            b"Host: 127.0.0.1\r\n"
-            b"Content-Length: 5\r\n\r\n"
-            b"abc"
-        )
-        sock.shutdown(socket.SHUT_WR)
-        response = _read_raw_response(sock)
-        assert b"400 Bad Request" in response
-        assert b"request body ended before" in response
-    finally:
-        sock.close()
-        admission.shutdown()
-        admission.server_close()
-        admission_thread.join(timeout=2)
+    with _admission_stack(_UncontactedUpstream) as stack:
+        sock = socket.create_connection(("127.0.0.1", stack["port"]), timeout=3)
+        sock.settimeout(3)
+        try:
+            sock.sendall(
+                b"POST /v1/responses HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Length: 5\r\n\r\n"
+                b"abc"
+            )
+            sock.shutdown(socket.SHUT_WR)
+            response = _read_raw_response(sock)
+            assert b"400 Bad Request" in response
+            assert b"request body ended before" in response
+        finally:
+            sock.close()
 
 
 @pytest.mark.parametrize(
@@ -3449,29 +3437,23 @@ def test_rejects_encoded_request_before_upstream(
 
 
 def test_rejects_truncated_chunked_request_body() -> None:
-    loaded = config()
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = server_thread(admission)
-    admission_thread.start()
-    sock = socket.create_connection(admission.server_address, timeout=3)
-    sock.settimeout(3)
-    try:
-        sock.sendall(
-            b"POST /v1/responses HTTP/1.1\r\n"
-            b"Host: 127.0.0.1\r\n"
-            b"Transfer-Encoding: chunked\r\n\r\n"
-            b"5\r\n"
-            b"abc"
-        )
-        sock.shutdown(socket.SHUT_WR)
-        response = _read_raw_response(sock)
-        assert b"400 Bad Request" in response
-        assert b"request body ended before" in response
-    finally:
-        sock.close()
-        admission.shutdown()
-        admission.server_close()
-        admission_thread.join(timeout=2)
+    with _admission_stack(_UncontactedUpstream) as stack:
+        sock = socket.create_connection(("127.0.0.1", stack["port"]), timeout=3)
+        sock.settimeout(3)
+        try:
+            sock.sendall(
+                b"POST /v1/responses HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"5\r\n"
+                b"abc"
+            )
+            sock.shutdown(socket.SHUT_WR)
+            response = _read_raw_response(sock)
+            assert b"400 Bad Request" in response
+            assert b"request body ended before" in response
+        finally:
+            sock.close()
 
 
 @pytest.mark.parametrize(
@@ -3495,27 +3477,22 @@ def test_malformed_body_closes_connection_before_pipelined_request(
     framing: bytes,
     body: bytes,
 ) -> None:
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
-    thread = server_thread(admission)
-    thread.start()
-    sock = socket.create_connection(admission.server_address, timeout=3)
-    try:
-        sock.sendall(
-            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
-            + framing
-            + b"\r\n"
-            + body
-            + b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n"
-        )
-        response = _read_raw_response(sock)
-        assert b"400 Bad Request" in response
-        assert b"Connection: close" in response
-        assert b"200 OK" not in response
-    finally:
-        sock.close()
-        admission.shutdown()
-        admission.server_close()
-        thread.join(timeout=2)
+    with _admission_stack(_UncontactedUpstream) as stack:
+        sock = socket.create_connection(("127.0.0.1", stack["port"]), timeout=3)
+        try:
+            sock.sendall(
+                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
+                + framing
+                + b"\r\n"
+                + body
+                + b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            )
+            response = _read_raw_response(sock)
+            assert b"400 Bad Request" in response
+            assert b"Connection: close" in response
+            assert b"200 OK" not in response
+        finally:
+            sock.close()
 
 
 @pytest.mark.parametrize(
@@ -3530,11 +3507,10 @@ def test_valid_body_framing_whitespace_remains_compatible(
     framing: bytes,
     body: bytes,
 ) -> None:
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
-    thread = server_thread(admission)
-    thread.start()
-    try:
-        with socket.create_connection(admission.server_address, timeout=3) as sock:
+    with _admission_stack(_UncontactedUpstream) as stack:
+        with socket.create_connection(
+            ("127.0.0.1", stack["port"]), timeout=3
+        ) as sock:
             sock.sendall(
                 b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
                 + framing
@@ -3544,31 +3520,22 @@ def test_valid_body_framing_whitespace_remains_compatible(
             response = _read_raw_response(sock)
             assert b"200 OK" in response
             assert b"400 Bad Request" not in response
-    finally:
-        admission.shutdown()
-        admission.server_close()
-        thread.join(timeout=2)
 
 
 def test_zero_chunk_without_trailer_terminator_is_rejected() -> None:
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
-    thread = server_thread(admission)
-    thread.start()
-    sock = socket.create_connection(admission.server_address, timeout=3)
-    try:
-        sock.sendall(
-            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
-            b"Transfer-Encoding: chunked\r\n\r\n0\r\n"
-        )
-        sock.shutdown(socket.SHUT_WR)
-        response = _read_raw_response(sock)
-        assert b"400 Bad Request" in response
-        assert b"invalid chunked trailer" in response
-    finally:
-        sock.close()
-        admission.shutdown()
-        admission.server_close()
-        thread.join(timeout=2)
+    with _admission_stack(_UncontactedUpstream) as stack:
+        sock = socket.create_connection(("127.0.0.1", stack["port"]), timeout=3)
+        try:
+            sock.sendall(
+                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n0\r\n"
+            )
+            sock.shutdown(socket.SHUT_WR)
+            response = _read_raw_response(sock)
+            assert b"400 Bad Request" in response
+            assert b"invalid chunked trailer" in response
+        finally:
+            sock.close()
 
 
 @pytest.mark.parametrize("fixed_length", [False, True])
@@ -4423,6 +4390,19 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     return server, thread
 
 
+class _UncontactedUpstream(BaseHTTPRequestHandler):
+    """Upstream fixture for stacks whose requests must never reach an upstream."""
+
+    def do_POST(self) -> None:  # noqa: N802
+        raise AssertionError("upstream must not be contacted")
+
+    def do_GET(self) -> None:  # noqa: N802
+        raise AssertionError("upstream must not be contacted")
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        return
+
+
 @contextmanager
 def _admission_stack(
     upstream_handler: Any,
@@ -4565,39 +4545,26 @@ def test_large_lane_body_streams_from_spool_without_rewrite() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(BodyCheckingUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = server_thread(admission)
-    admission_thread.start()
-    payload = (
-        b'{"model":"gpt-6-luna","input":"'
-        + b"x" * (request_body_memory_limit + 1024)
-        + b'","stream":false}'
-    )
-    client = http.client.HTTPConnection(
-        "127.0.0.1", admission.server_address[1], timeout=10
-    )
-    try:
-        client.request(
-            "POST",
-            "/v1/responses",
-            body=payload,
-            headers={"Content-Type": "application/json"},
+    with _admission_stack(BodyCheckingUpstream) as stack:
+        payload = (
+            b'{"model":"gpt-6-luna","input":"'
+            + b"x" * (request_body_memory_limit + 1024)
+            + b'","stream":false}'
         )
-        response = client.getresponse()
-        assert response.status == 200
-        response.read()
-        assert received == [payload]
-    finally:
-        client.close()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=10)
+        try:
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            response.read()
+            assert received == [payload]
+        finally:
+            client.close()
 
 
 @pytest.mark.parametrize("route", ["/v1/responses", "/v1/chat/completions"])
@@ -4617,44 +4584,31 @@ def test_proxy_gates_suffixed_model_without_rewriting_body(route: str) -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(SuffixUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    proxy = AdmissionProxy(loaded)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = server_thread(admission)
-    admission_thread.start()
-    client = http.client.HTTPConnection(
-        "127.0.0.1", admission.server_address[1], timeout=5
-    )
-    payload = b'{"model":"gpt-6-luna(high)","input":"hello","stream":false}'
-    try:
-        client.request("POST", route, body=payload)
-        response = client.getresponse()
-        assert response.status == 200
-        response.read()
-        assert received == [payload]
-        state = proxy.lanes["chatgpt-oauth"]
-        deadline = time.monotonic() + 3
-        while state.snapshot()["inflight"]:
-            assert time.monotonic() < deadline
-            time.sleep(0.005)
-        lease = state.acquire()
-        state.release(lease, capacity_error=True, retry_after=3600)
-        client.request("POST", route, body=payload)
-        response = client.getresponse()
-        assert response.status == 429
-        assert response.getheader("X-CPA-Admission-Reason") == "cooldown"
-        response.read()
-        assert received == [payload]
-    finally:
-        client.close()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+    with _admission_stack(SuffixUpstream) as stack:
+        proxy = stack["proxy"]
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
+        payload = b'{"model":"gpt-6-luna(high)","input":"hello","stream":false}'
+        try:
+            client.request("POST", route, body=payload)
+            response = client.getresponse()
+            assert response.status == 200
+            response.read()
+            assert received == [payload]
+            state = proxy.lanes["chatgpt-oauth"]
+            deadline = time.monotonic() + 3
+            while state.snapshot()["inflight"]:
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+            lease = state.acquire()
+            state.release(lease, capacity_error=True, retry_after=3600)
+            client.request("POST", route, body=payload)
+            response = client.getresponse()
+            assert response.status == 429
+            assert response.getheader("X-CPA-Admission-Reason") == "cooldown"
+            response.read()
+            assert received == [payload]
+        finally:
+            client.close()
 
 
 def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
