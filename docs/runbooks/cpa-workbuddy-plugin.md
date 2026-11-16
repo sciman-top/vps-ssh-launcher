@@ -209,7 +209,10 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
    `deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶；`hy4free` 是 INTL 唯一的
    零成本模型，能越过该 lane 的 6008 计费冷却。`6008` 按请求的 admission lane
-   记录冷却，不新建持久账号 hold。
+   记录冷却，不新建持久账号 hold。`sg` 只在模型级信号（例如 6004）下独立冷却；
+   它与 INTL alias 共用 INTL lane，因此 INTL 的 6008 仍会冷却这两个付费模型，
+   `hy4free` 是零成本例外。CN 裸名免受 INTL lane 冷却，是本次 lane 拆分的作用，
+   不代表按凭据 realm 绑定调度。
 4. **分 lane 不等于分凭据。** WorkBuddy 的 `credits` scheduler 仍能在配置的 auth
    pool 中回退；上面的 alias 与状态文件只隔离客户端入口和 admission breaker，
    不强制 INTL 请求只选 INTL 凭据，也不证明 realm、额度或风控域独立。不得据此
