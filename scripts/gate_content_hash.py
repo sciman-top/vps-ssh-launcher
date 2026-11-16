@@ -146,26 +146,19 @@ def environment_hash() -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Gate content hashes.")
     parser.add_argument("root", type=Path, nargs="?")
-    parser.add_argument("paths", nargs="*", help="Repo-relative paths to hash.")
-    parser.add_argument(
-        "--list",
-        action="store_true",
-        help="Print the input list instead of a hash, one path per line.",
-    )
     args = parser.parse_args(argv)
     # The walk starts at the repository root; an explicit --root only matters
     # when the gate calls this from somewhere else, and it is not sent over
     # the command line because a tree this size overflows a Windows argument
     # list. The root therefore defaults to the checkout that owns this file.
     root = (args.root or Path(__file__).resolve().parents[1]).resolve()
-    if args.list:
-        for relative in iter_inputs(root):
-            print(relative)
-        return 0
-    unknown = args.paths or iter_inputs(root)
-    paths = [path for path in unknown if not is_ignored(path)]
     print(
-        json.dumps({"tree": tree_hash(root, paths), "environment": environment_hash()})
+        json.dumps(
+            {
+                "tree": tree_hash(root, iter_inputs(root)),
+                "environment": environment_hash(),
+            }
+        )
     )
     return 0
 

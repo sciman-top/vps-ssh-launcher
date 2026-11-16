@@ -149,10 +149,9 @@ try {
       ("run-" + [guid]::NewGuid().ToString("N"))
     $script:workerTempRoot = $workerRoot
     New-Item -ItemType Directory -Path $workerRoot -Force | Out-Null
-    for ($index = 0; $index -lt $WorkerCount; $index++) {
-      New-Item -ItemType Directory -Path (Join-Path $workerRoot "gw$index") -Force |
-        Out-Null
-    }
+    # Per-worker leaves are not pre-created here: the xdist prelude mkdirs
+    # gw<N> on first use, after the hardening below, so the leaves inherit the
+    # private ACL directly instead of relying on propagation.
     if ($IsWindows) {
       # POSIX workers inherit a private temp from their own os. A Windows
       # worker tree inside the checkout would otherwise carry the checkout's
@@ -463,9 +462,10 @@ try {
       $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
       [Environment]::SetEnvironmentVariable($name, [string]$overrides[$name], "Process")
     }
-    # Tee instead of a bare pipe: only two legs consume their own output (the
-    # summary vector and the proof baseline), and every other leg keeps
-    # streaming to the console exactly as before.
+    # Tee instead of a bare pipe: a leg's output is buffered and replayed once
+    # it completes, so nothing streams live. Only two legs consume the captured
+    # lines themselves (the summary vector and the proof baseline); every leg
+    # pays the replay so the console transcript stays uniform.
     $lines = @()
     try {
       & $Entry.Command[0] @($Entry.Command[1..($Entry.Command.Count - 1)]) | Tee-Object -Variable lines | Out-Null
