@@ -299,10 +299,11 @@ class AutoInstallPromptTests(unittest.TestCase):
         self,
     ) -> None:
         class MenuChild(FakeSpawnChild):
+            read_calls = 0
+
             def read_nonblocking(self, size: int, timeout: float) -> str:
                 _ = size, timeout
-                # A menu is a prompt, not a blank input line. Clearing the
-                # output keeps the next expect from consuming the wrong answer.
+                type(self).read_calls += 1
                 return "== vasma menu ==\n1. install\n请选择:"
 
         fake_child = MenuChild([], alive=False, exitstatus=0)
@@ -340,6 +341,7 @@ class AutoInstallPromptTests(unittest.TestCase):
         ):
             self.assertEqual(auto_install.main(["--allow-unpinned-script"]), 0)
         self.assertEqual(fake_child.sent_lines, [])
+        self.assertEqual(MenuChild.read_calls, 0)
 
     def test_main_terminates_installer_when_controller_raises(self) -> None:
         fake_child = FakeSpawnChild([], alive=True, exitstatus=None)

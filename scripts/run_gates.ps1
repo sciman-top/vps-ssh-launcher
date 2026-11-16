@@ -361,7 +361,10 @@ try {
     # Proof is evidence about this host and tree, so it follows the receipt
     # exactly the way every other reused answer does.
     $proofPath = Join-Path $script:receiptDirectory "parallel-proof.json"
-    if ($ReuseReceipts -or (Test-GateReceipt -RelativePath $proofPath -Lane Parallel)) {
+    if (
+      -not $RunCoverage -and
+      ($ReuseReceipts -or (Test-GateReceipt -RelativePath $proofPath -Lane Parallel))
+    ) {
       return @($others) + @($testEntry)
     }
 
@@ -559,11 +562,17 @@ try {
 
     $changed = @()
     $diff = & git -C $RepoRoot diff --name-only HEAD 2>$null
-    if ($LASTEXITCODE -eq 0 -and $diff) {
+    if ($LASTEXITCODE -ne 0) {
+      throw "auto profile could not inspect the working tree with git diff."
+    }
+    if ($diff) {
       $changed += @($diff)
     }
     $untracked = & git -C $RepoRoot ls-files --others --exclude-standard 2>$null
-    if ($LASTEXITCODE -eq 0 -and $untracked) {
+    if ($LASTEXITCODE -ne 0) {
+      throw "auto profile could not inspect untracked files with git ls-files."
+    }
+    if ($untracked) {
       $changed += @($untracked)
     }
     $changed = @($changed | Where-Object { $_ } | Sort-Object -Unique)
@@ -937,6 +946,7 @@ try {
     }
     if (
       $entry.Receipt -and
+      -not $RunCoverage -and
       -not $entry.SerialRecheck -and
       (Test-Path -LiteralPath $script:receiptDirectory)
     ) {
@@ -1003,14 +1013,10 @@ try {
     }
     if (
       $entry.Receipt -and
-      -not $entry.SerialRecheck -and
       (Test-Path -LiteralPath $script:receiptDirectory)
     ) {
-      # The serial recheck shares test.json with the parallel lane, so it
-      # must not write it: a serial PASS recorded under the parallel lane
-      # guard would let a later parallel run reuse an unproven answer.
       $receiptWorkers = 0
-      if ($entry.Id -eq "test-lane") {
+      if ($entry.Id -eq "test-lane" -or $entry.SerialRecheck) {
         $receiptWorkers = $MaxWorkers
       }
       Write-GateReceipt `

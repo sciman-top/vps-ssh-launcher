@@ -147,6 +147,13 @@ class MultiActionApplySimulationTests(unittest.TestCase):
         stored = load_plan(self.root / "state.db")
         self.assertEqual(stored.status, "verified")
         self.assertEqual({a.status for a in stored.actions}, {"verified"})
+        self.assertEqual(
+            {action["status"] for action in result["actions"]},
+            {"verified"},
+        )
+        receipt = json.loads(Path(result["receipt"]).read_text(encoding="utf-8"))
+        self.assertEqual(receipt["plan_status"], "verified")
+        self.assertEqual(receipt["status_counts"], {"verified": 2})
         entries = list_plans(self.root / "state.db")
         self.assertTrue(entries[0]["receipt_path"], entries)
         self.assertEqual(len(list(policy_receipt_dir(self.policy).glob("*.json"))), 1)

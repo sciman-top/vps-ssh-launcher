@@ -368,7 +368,7 @@ After both runs pass, the result is recorded in `outputs/gates/receipts/parallel
 
 ### Reusing gate evidence
 
-Full records the static legs whose answer cannot be reproduced by a test receipt under `outputs/gates/receipts/*.json` (machine-local working state, never committed). A receipt is reused only when both the repository content hash and the gate interpreter's runtime fingerprint plus installed distributions are identical, so editing any file, changing Python/platform, or upgrading any tool invalidates it; an old receipt can never vouch for a new tree.
+Full records receipts for the test leg and the Linux filesystem-baseline leg under `outputs/gates/receipts/*.json` (machine-local working state, never committed); the other static legs run against the current tree each time. A receipt is reused only when both the repository content hash and the gate interpreter's runtime fingerprint plus installed distributions are identical, so editing any file, changing Python/platform, or upgrading any tool invalidates it; an old receipt can never vouch for a new tree.
 
 
 ---

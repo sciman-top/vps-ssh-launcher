@@ -565,6 +565,18 @@ def apply_config(args: argparse.Namespace) -> None:
     validate_profile(entry, name, require_auth=not cli_has_auth_override)
 
     args.socks5 = resolve_socks5_proxy(entry, profile_name=name)
+    profile_strict = entry.get("strict_host_key_checking")
+    if profile_strict is not None and type(profile_strict) is not bool:
+        raise ValueError(
+            f"Profile '{name}': 'strict_host_key_checking' must be a boolean."
+        )
+    # A profile may tighten the caller's host-key policy, but never weaken an
+    # explicit CLI setting. Parser-created namespaces default to strict mode;
+    # small callers and tests may omit the field, so preserve that same
+    # default when merging a config file.
+    args.strict_host_key_checking = bool(
+        getattr(args, "strict_host_key_checking", True)
+    ) or bool(profile_strict)
 
     cli_host = args.host
     if args.host is None:

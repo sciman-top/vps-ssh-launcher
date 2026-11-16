@@ -155,7 +155,7 @@ function Invoke-GateProbe {
         command = r"""
 $failed = $false
 try {
-  & $env:VPS_GATE_RUNNER -Profile Full -FullScope Runtime -RunParallel -MaxWorkers 2
+  & $env:VPS_GATE_RUNNER -Profile Full -FullScope Runtime -RunParallel -RunCoverage -MaxWorkers 2
 } catch {
   $failed = $true
   Write-Error $_
@@ -192,6 +192,18 @@ try {
                 ),
                 encoding="utf-8",
             )
+            (receipts / "parallel-proof.json").write_text(
+                json.dumps(
+                    {
+                        "status": "PASS",
+                        "profile": "Full",
+                        "tree": "fixture-tree",
+                        "environment": "fixture-environment",
+                        "workers": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
             env = os.environ.copy()
             env.update(
                 {
@@ -219,6 +231,72 @@ try {
             for item in test_runs:
                 self.assertTrue(item["workerRoot"], result.stdout)
                 self.assertIn("scripts", item["pythonPath"], result.stdout)
+            self.assertTrue(
+                any("--cov=vps_ssh_launcher" in item["command"] for item in test_runs),
+                result.stdout,
+            )
+
+    def test_auto_profile_fails_closed_when_git_is_unavailable(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        helper = r"""
+function Initialize-WindowsProcessEnvironment {}
+function Resolve-ProjectPython {
+  return @{ Exe = "Invoke-GateProbe"; IsIsolated = $true; Source = "fixture" }
+}
+"""
+        command = r"""
+$failed = $false
+$message = ""
+try {
+  & $env:VPS_GATE_RUNNER -Profile Auto
+} catch {
+  $failed = $true
+  $message = $_.Exception.Message
+}
+@{
+  failed = $failed
+  message = $message
+} | ConvertTo-Json -Compress
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            (root / "tests").mkdir()
+            runner = scripts / "run_gates.ps1"
+            runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
+            (scripts / "lib/project_environment.ps1").write_text(
+                helper, encoding="utf-8"
+            )
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "git.cmd").write_text(
+                "@echo off\r\nexit /b 17\r\n", encoding="ascii"
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "VPS_GATE_RUNNER": str(runner),
+                    "PATH": str(fake_bin) + os.pathsep + env["PATH"],
+                }
+            )
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout.splitlines()[-1])
+            self.assertTrue(report["failed"], result.stdout)
+            self.assertIn("could not inspect", report["message"])
 
     def test_powershell_scripts_parse(self) -> None:
         powershell = shutil.which("pwsh")
@@ -1327,6 +1405,22 @@ try {
         # a later tree can keep re-running the parallel lane against a stale
         # test receipt forever.
         self.assertIn("Receipt = $testEntry.Receipt", runner)
+        self.assertIn(
+            '$entry.Id -eq "test-lane" -or $entry.SerialRecheck',
+            runner,
+        )
+        self.assertIn("-not $RunCoverage", runner)
+
+    def test_auto_profile_fails_closed_when_git_inspection_fails(self) -> None:
+        runner = (repo_root() / "scripts/run_gates.ps1").read_text(encoding="utf-8")
+        self.assertIn(
+            'throw "auto profile could not inspect the working tree with git diff."',
+            runner,
+        )
+        self.assertIn(
+            'throw "auto profile could not inspect untracked files with git ls-files."',
+            runner,
+        )
 
     def test_receipts_are_keyed_on_content_not_on_host_state(self) -> None:
         # A receipt is only evidence for the tree it was produced from, so the

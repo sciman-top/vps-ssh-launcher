@@ -102,9 +102,10 @@ def run_apply_locked(
     outcome, reason, code = _apply_outcome(
         args, policy, plan, profile, state_path, receipt_dir
     )
+    final_plan = load_plan(state_path, plan.plan_id)
     receipt = write_receipt(
         receipt_dir,
-        plan,
+        final_plan,
         outcome=outcome,
         reason=redact_evidence(reason),
     )
@@ -114,7 +115,7 @@ def run_apply_locked(
     # save_plan() would be treated as a no-op re-report and drop the pointer.
     record_plan_receipt(state_path, plan_id=plan.plan_id, receipt_path=receipt)
     result = {
-        "plan_id": plan.plan_id,
+        "plan_id": final_plan.plan_id,
         "outcome": outcome,
         "reason": reason,
         "receipt": str(receipt),
@@ -125,7 +126,7 @@ def run_apply_locked(
                 "status": action.status,
                 "reason": action.reason,
             }
-            for action in plan.actions
+            for action in final_plan.actions
         ],
     }
     return result, code
