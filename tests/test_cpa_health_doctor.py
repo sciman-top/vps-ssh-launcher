@@ -123,6 +123,49 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         request = mock.Mock(return_value={"error": "invalid response"})
         self.assertEqual(check({}, "readiness", request, mock.Mock()), 20)
 
+    def test_cpa_health_readiness_allows_forked_plugin_alias(self) -> None:
+        """A forked plugin alias must be catalog-allowed, not an unknown ID.
+
+        The 2026-11-17 CN/INTL split projected the alias into CPA's catalog
+        while readiness derived its allowed set from plugin_routes raw names
+        only, so the apply battery failed closed twelve times and rolled the
+        projection back. Expectations derive from the real manifest instead
+        of a copied fixture, so the next alias cannot repeat the gap.
+        """
+        import runpy
+
+        repo_root = Path(__file__).parents[1]
+        module = runpy.run_path(str(repo_root / "scripts/remote/cpa-health.py"))
+        check = module["check"]
+        manifest = json.loads(
+            (repo_root / "scripts/remote/cpa_provider_routes.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        forked = [
+            entry["alias"]
+            for entries in manifest.get("oauth_model_aliases", {}).values()
+            if isinstance(entries, list)
+            for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("alias"), str)
+        ]
+        self.assertTrue(forked, "manifest fixture must carry a forked alias")
+        for alias in forked:
+            self.assertIn(alias.strip().lower(), module["_PLUGIN_MODEL_NAMES"])
+        forked_catalog = {
+            "data": [{"id": item} for item in HEALTH_FIXTURE_CATALOG_IDS]
+            + [{"id": alias} for alias in forked]
+        }
+        request = mock.Mock(return_value=forked_catalog)
+        self.assertEqual(check({}, "readiness", request, mock.Mock()), 0)
+        # A lookalike the manifest does not map stays fail-closed.
+        request = mock.Mock(
+            return_value={
+                "data": forked_catalog["data"] + [{"id": "deepseek-v4.1-flash-eu"}]
+            }
+        )
+        self.assertEqual(check({}, "readiness", request, mock.Mock()), 20)
+
     def test_cpa_health_loopback_request_bypasses_ambient_proxy(self) -> None:
         import io
         import json

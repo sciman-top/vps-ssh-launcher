@@ -508,13 +508,25 @@ _CLAUDE_MODEL_ALIASES = frozenset(
 # Plugin credentials (e.g. the workbuddy plugin) advertise the models pinned
 # in their plugin config; the manifest carries that list so readiness allows
 # their contribution without matrix-probing them (shared-subscription lanes
-# stay out of scheduled generation).
+# stay out of scheduled generation). A forked plugin alias
+# (oauth_model_aliases, e.g. deepseek-v4.1-flash-intl since 2026-11-17) is the
+# client-facing entry point: CPA advertises the alias while the upstream keeps
+# the raw name, so the alias belongs in this same allowed-optional union or
+# readiness fails closed on the projected catalog (2026-11-17 rollback lesson).
 _PLUGIN_MODEL_NAMES = frozenset(
     model_name
     for route in _ROUTE_MANIFEST.get("plugin_routes", [])
     if isinstance(route, dict)
     for model_name in route.get("models", [])
     if isinstance(model_name, str)
+) | frozenset(
+    entry["alias"].strip().lower()
+    for entries in (_ROUTE_MANIFEST.get("oauth_model_aliases") or {}).values()
+    if isinstance(entries, list)
+    for entry in entries
+    if isinstance(entry, dict)
+    and isinstance(entry.get("alias"), str)
+    and entry["alias"].strip()
 )
 # The managed codex-family upstream rejects the raw Codex desktop tool
 # declarations (2026-10-11): tool_search with `required` omitting the
