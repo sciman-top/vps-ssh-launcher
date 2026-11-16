@@ -3508,9 +3508,7 @@ def test_valid_body_framing_whitespace_remains_compatible(
     body: bytes,
 ) -> None:
     with _admission_stack(_UncontactedUpstream) as stack:
-        with socket.create_connection(
-            ("127.0.0.1", stack["port"]), timeout=3
-        ) as sock:
+        with socket.create_connection(("127.0.0.1", stack["port"]), timeout=3) as sock:
             sock.sendall(
                 b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
                 + framing
