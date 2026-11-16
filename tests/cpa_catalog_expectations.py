@@ -31,15 +31,19 @@ OAUTH_ROUTE_ALIASES = [
 ]
 
 # Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,
-# declared 2026-10-14, restricted to the single 3.8-flash tier the same day
-# (user decision: the personal AI Pro credential serves gemini-3.8-flash-high
-# only; every other model the antigravity catalog exposes is pinned into the
-# provider-level antigravity_oauth_exclusions list). Gated by the
+# declared 2026-10-14, restricted to the single 3.8-flash tier the same day,
+# widened 2026-11-16 by user decision to three models: gemini-3.8-flash-high
+# is served pool-wide by the 4-credential pool, while gemini-4-hydrogen-xhigh
+# (upstream registers the xhigh tier; 1M unified window) and
+# claude-sonnet-5-5-high (1M window) are available on only one pro
+# credential each — single-source, no failover. Gated by the
 # antigravity-oauth admission lane from day one: cpa_policy.py rejects a
 # shared subscription OAuth route that is missing its reviewed lane (ungated
 # shared credential = ban-shaped).
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     "gemini-3.8-flash-high",
+    "gemini-4-hydrogen-xhigh",
+    "claude-sonnet-5-5-high",
 ]
 
 # Antigravity-exposed models retired from the lane on 2026-10-14, plus
@@ -53,6 +57,9 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 # lanes can re-register them. Three more tombstones added 2026-10-17
 # (claude-opus-5-5-high, claude-sonnet-5-5-high, gemini-4-argon-high) —
 # kept in manifest order; the manifest remains the enforced source of truth.
+# claude-sonnet-5-5-high left the exclusion list 2026-11-16 (user decision):
+# it is now a declared antigravity route model, still tombstoned in
+# codex_api_key_exclusions so the API-key lane can never claim it.
 ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
@@ -67,7 +74,6 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "claude-opus-4-6-thinking",
     "claude-opus-5-5-high",
     "claude-sonnet-4-6",
-    "claude-sonnet-5-5-high",
     "gemini-4-argon-high",
     "gpt-oss-120b-medium",
 ]

@@ -128,6 +128,14 @@
         {
           "name": "gemini-3.8-flash-high",
           "alias": "gemini-3.8-flash-high"
+        },
+        {
+          "name": "gemini-4-hydrogen-xhigh",
+          "alias": "gemini-4-hydrogen-xhigh"
+        },
+        {
+          "name": "claude-sonnet-5-5-high",
+          "alias": "claude-sonnet-5-5-high"
         }
       ]
     }
@@ -155,6 +163,14 @@
       {
         "name": "gemini-3.8-flash-high",
         "max-context-length": 1048576
+      },
+      {
+        "name": "gemini-4-hydrogen-xhigh",
+        "max-context-length": 1048576
+      },
+      {
+        "name": "claude-sonnet-5-5-high",
+        "max-context-length": 1000000
       }
     ],
     "workbuddy": [
@@ -190,7 +206,6 @@
     "claude-opus-4-6-thinking",
     "claude-opus-5-5-high",
     "claude-sonnet-4-6",
-    "claude-sonnet-5-5-high",
     "gemini-4-argon-high",
     "gpt-oss-120b-medium"
   ],
@@ -205,6 +220,7 @@
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash-high",
     "gemini-4-argon-high",
+    "gemini-4-hydrogen-xhigh",
     "gpt-oss-120b-medium"
   ],
   "oauth_exclusions": [
@@ -260,11 +276,13 @@
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash-high",
+    "gemini-4-hydrogen-xhigh",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
+    "claude-sonnet-5-5-high",
     "claude-haiku-5-5"
   ],
   "claude_oauth_exclusions": [

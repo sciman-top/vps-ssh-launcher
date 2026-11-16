@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 from cpa_catalog_expectations import (
     ADMISSION_LANE_MODELS,
+    ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
 )
 
@@ -612,11 +613,18 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             self.assertTrue(
                 validate(config), "blocking an active model requires a marker"
             )
+            # The marker must name every configured lane alias, and a
+            # quarantined apply projects all of them into the exclusions.
+            aliases = list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES)
+            config["oauth"]["excluded-models"]["antigravity"] = [
+                *previous,
+                *aliases,
+            ]
             marker = {
                 "version": 1,
                 "state": "quarantined",
                 "provider": "antigravity",
-                "aliases": ["gemini-3.8-flash-high"],
+                "aliases": aliases,
                 "previous_provider_exclusions": previous,
                 "applied_provider_exclusions": config["oauth"]["excluded-models"][
                     "antigravity"

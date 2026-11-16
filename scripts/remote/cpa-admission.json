@@ -82,7 +82,9 @@
     {
       "name": "antigravity-oauth",
       "models": [
-        "gemini-3.8-flash-high"
+        "gemini-3.8-flash-high",
+        "gemini-4-hydrogen-xhigh",
+        "claude-sonnet-5-5-high"
       ],
       "max_inflight": 2,
       "max_pending": 4,

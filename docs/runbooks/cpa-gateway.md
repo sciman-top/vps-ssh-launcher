@@ -841,7 +841,12 @@ antigravity 目录未实测）通过 config
 manifest `antigravity_oauth_exclusions` 派生，doctor
 `==antigravity-lane==` 门禁核对漂移），并在 `codex_api_key_exclusions`
 留墓碑防 API-key lane 抢注；上游目录若新增未声明模型，doctor
-`MODEL_IDS_UNKNOWN` fail-closed 拦截。共享订阅 OAuth 通道按仓库不变量挂
+`MODEL_IDS_UNKNOWN` fail-closed 拦截。2026-11-16 池扩至 4 份凭据（3 pro +
+1 free），按用户决定开放 `gemini-4-hydrogen-xhigh`（上游以 xhigh 档注册，
+1M 统一窗口）与 `claude-sonnet-5-5-high`（1M 窗口）：两模型仅其中一份 pro
+凭据可供（IDE 实证），单点无 failover；`claude-sonnet-5-5-high` 同日移出
+`antigravity_oauth_exclusions` 并入 `codex_api_key_exclusions` 防抢注。
+共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 只作用于 ChatGPT Plus 路由，不影响该通道）；当前

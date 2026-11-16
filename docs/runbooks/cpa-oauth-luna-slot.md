@@ -130,7 +130,11 @@ Antigravity Terms explicitly prohibit access via third-party
 software/tools/services (including an Antigravity OAuth example) and warn of
 suspension or termination; that risk is accepted and on record, is not
 engineered around, and no UA/device/IP rotation is ever used to evade it.
-The manifest declares only `gemini-3.8-flash-high`; the provider-level
+The manifest declares three models since 2026-11-16 (user decision):
+`gemini-3.8-flash-high` served pool-wide, plus `gemini-4-hydrogen-xhigh`
+(upstream registers the xhigh tier) and `claude-sonnet-5-5-high`, each
+available on only a single pro credential of the 4-credential pool —
+single-source, no failover. The provider-level
 exclusion snapshot covers every other upstream static model, verified by the
 doctor `==antigravity-lane==` gate. The doctor gate verifies configuration and
 catalog state, not account safety or eligibility. `claude-haiku-5-5` remains

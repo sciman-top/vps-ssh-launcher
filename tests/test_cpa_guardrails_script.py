@@ -3710,11 +3710,18 @@ foreach ($case in @(
                 "gemini-3.8-flash-high"
             )
             self.assertNotEqual(run().returncode, 0)
+            # The quarantine marker must name every configured lane alias
+            # (cpa_policy.load_quarantine_aliases), and a quarantined apply
+            # projects all of them into the provider exclusions.
+            aliases = list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES)
+            candidate["oauth"]["excluded-models"]["antigravity"].extend(
+                alias for alias in aliases if alias != "gemini-3.8-flash-high"
+            )
             marker = {
                 "version": 1,
                 "provider": "antigravity",
                 "state": "quarantined",
-                "aliases": ["gemini-3.8-flash-high"],
+                "aliases": aliases,
                 "previous_provider_exclusions": before,
                 "applied_provider_exclusions": candidate["oauth"]["excluded-models"][
                     "antigravity"
