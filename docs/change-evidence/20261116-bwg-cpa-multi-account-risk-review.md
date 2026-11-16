@@ -224,9 +224,9 @@ documents)`；`cpa_catalog_check.py` = `CATALOG_CHECK=PASS`；全量 `pytest -q`
 
 | 优先级 | 项 | 收益 | 需要的动作 |
 |---|---|---|---|
-| **P0** | 升级 `v8.0.61 → v8.0.75` | 首字延迟（`2c5b01f4`）、凭据级 TOS 停用（`5a351d95`）、Gemini 配额尊重、插件凭据级 429 | 换芯事务：pin digest → soak 判据 → 备份 → 投影 → `DOCTOR_CONTRACT_OK` → 复跑 `cpa_policy` 键表 |
-| **P1** | 把本轮 admission 改动带上机 | `pooled_models` 收窄 + Gemini 配额缺口 + 长期限制统一 | 该文件受**完整性 pin** 约束：必须走"等 drain + 源与 pin 同事务投影"，不能用普通 `-Apply` |
-| **P2** | `gpt-6-luna` 的长上下文冷重启 | p90 30.8 s → 缩到 10 s 级 | 客户端侧：新任务开新会话；压缩时带 `X-Session-ID`（`84534584`），并先跑 `cpa_cache_reset_probe.py` 归因 |
+| ~~P0~~ **已完成** | 升级 `v8.0.61 → v8.0.75`（fork 重建 + 换芯） | 首字延迟（`2c5b01f4`）、凭据级 TOS 停用（`5a351d95`）、Gemini 配额尊重、插件凭据级 429 | 2026-11-16 17:21Z `SWAP_OK`；回执见 [v8.0.75 换芯](20261116-bwg-cpa-v8075-fork-swap.md) |
+| ~~P1~~ **已完成** | 把本轮 admission 改动带上机 | `pooled_models` 收窄 + Gemini 配额缺口 + 长期限制统一 | 2026-11-16 17:34Z 经 `-Apply` 投影，`DOCTOR_CONTRACT_OK`，四 lane `hold=null` |
+| **P2** | `gpt-6-luna` 的长上下文冷重启 | p90 30.8 s → 缩到 10 s 级 | **结论收窄**：源码复核证明显式 id → `prompt_cache_key` → 首轮消息哈希三级兜底，压缩**不会**丢锚；只剩"新开会话"与"换模型"两种客户端行为。换芯后 1h 实测 `gpt-6-luna` 命中 **98.7%**、`deepseek-v4.1-flash` **99.85%**，网关侧与压缩侧均无剩余杠杆 |
 | P3 | CN/INTL 拆两条 lane（11-15 §3.3 A） | 彻底消除跨 realm 兜底 | 契约变更 + 全套测试 + 桌面目录同步 |
 | — | 账号面动作 | — | 本轮零信号，**不做** |
 

@@ -2,7 +2,8 @@
 
 **状态**：已实施（2026-11-09，用户授权后落地；回执
 [20261109-bwg-cpa-fork-image-convergence.md](../change-evidence/20261109-bwg-cpa-fork-image-convergence.md)）。
-当前生产 = 派生镜像 `cli-proxy-api-fork:v8.0.61-gemini-raw`，bind-mount 已移除，
+当前生产 = 派生镜像 `cli-proxy-api-fork:v8.0.75-gemini-raw`（2026-11-16 换芯，回执
+[20261116-bwg-cpa-v8075-fork-swap.md](../change-evidence/20261116-bwg-cpa-v8075-fork-swap.md)），bind-mount 已移除，
 `CLIProxyAPI-patched` 保留为只读留档。实施偏差（source 门禁降为报告项、tag+hash
 门禁替代 digest 钉定、canary 扩展为 fork 时代全拒）见回执 §4。
 
@@ -14,6 +15,39 @@
 无常驻服务、无凭据、不占监听端口），而不是新建 registry。
 启用 registry 的三个前置条件见
 [registry 决策台账](../change-evidence/20261109-bwg-registry-decision-and-rollback-identity.md) §5。
+
+## 2026-11-16 更新：二进制重建已参数化
+
+不再需要一次性脚本。一次上游换芯现在是三步，每步都可重放：
+
+```powershell
+# 1) 用目标 tag 重建二进制（脚本自带 tag→commit 核对、tarball 哈希、移植产物校验、
+#    go vet + translator 测试、清理构建目录）
+ pwsh -NoProfile -File .\scripts\cpa_fork_rebuild.ps1 `
+   -UpstreamTag v8.0.75 -UpstreamCommit c19787b25262b5e6e46a9e8da62f4333e7e478bc `
+   -PortSha256 <sha of outputs/cpa-gemini-raw-<tag>.tar.gz> `
+   -StageDir /root/cpa-v8075-gemini-raw-build -Apply
+
+# 2) 派生镜像（base 按 index digest 钉定，构建后读回标签）
+ pwsh -NoProfile -File .\outputs\build-fork-image-20261109.ps1 -UpstreamTag v8.0.75 `
+   -BaseDigest <digest> -BinarySha256 <binary sha> `
+   -ForkBinaryPath /root/cpa-v8075-gemini-raw-build/CLIProxyAPI-8.0.75-gemini-raw -Apply
+
+# 3) 换芯事务（drain + 备份 + 回滚 + 后置断言），脚本形如
+#    outputs/cpa-v8075-swap-20261116.sh
+```
+
+**移植（patch → port）**：原补丁写于 v8.0.61，对新 tag 往往不再逐字可应用。不要用模糊匹配
+让它自己决定落点：把补丁对目标 tag 做一次 **3 路合并**，把结果收成
+`outputs/cpa-gemini-raw-<tag>.tar.gz`（**只许包含 translator 包**，脚本会拒绝越界条目），
+并在回执里记下移植后文件哈希。原始补丁继续作为移植的源保留。
+
+**两条硬边界**：
+
+1. `scripts/remote/fork-binary.sha256` 必须与二进制在**同一提交**更新——doctor 用它判断
+   "容器里跑的到底是不是台账说的那个"，漏更新会以 `runtime_binary_hash=MISMATCH` 阻断。
+2. 构建目录**不要**放 `/root`：2026-11-16 实测该机 overlayfs 上，连续两步编译会对尚未出现的
+   文件报 `no such file or directory`；构建脚本改用 `/var/tmp/cpa-fork-build-<tag>` 并在成功后删除。
 
 ## 问题
 
