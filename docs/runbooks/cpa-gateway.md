@@ -891,6 +891,10 @@ antigravity 两 gemini 模型、responses 线、user 轮全量），映射沿用
 desktop 原样 165KB 请求体 200/completed。残余暴露面：model 历史轮次文本
 （payload.replace 引擎只处理 role=user，2026-11-17 前从未触发，列为观察项）。
 `flash-high→flash-n` 替换与本修复无关，继续按 substitution warn 观察。
+同日 -Apply 期间 readiness fail-closed 拦截上游新增未声明模型
+`gemini-4-carbon-high`（池内凭据目录扩张，`ids-allowed` 非空两次拒跑
+`cpa_model_catalog_contract`）：按墓碑三登记（static 宇宙 + antigravity 排除
++ codex API-key 墓碑）收编，未开放；是否开放属用户决定的目录变更。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
