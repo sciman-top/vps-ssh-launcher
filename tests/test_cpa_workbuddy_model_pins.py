@@ -26,7 +26,6 @@ BRIDGE_ENTRIES = [
         "alias": "deepseek-v4.1-flash-intl",
         "fork": True,
     },
-    {"name": "hy4flash-free", "alias": "hy4free"},
 ]
 
 
@@ -120,7 +119,7 @@ def test_apply_swaps_channel_drops_legacy_and_leaves_backup(tmp_path: Path) -> N
     result, config_path, backup_root = _run(tmp_path, _config(), apply=True)
     assert result.returncode == 0, result.stderr
     assert "WORKBUDDY_ALIAS_BRIDGE=APPLIED" in result.stdout
-    assert "aliases=deepseek-v4.1-flash-intl+hy4free" in result.stdout
+    assert "aliases=deepseek-v4.1-flash-intl-only" in result.stdout
 
     loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert "workbuddy" not in loaded["oauth-model-alias"]

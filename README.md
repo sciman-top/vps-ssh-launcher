@@ -670,16 +670,17 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode WaitCapSimulation
 ```
 
-### 3. 四大物理隔离 Admission Lane 与模型级熔断
+### 3. 五大物理隔离 Admission Lane 与模型级熔断
 
-为避免单一模型或单账号异常导致网关全局雪崩，CPA 划分为四条互不干扰的准入泳道：
+为避免单一模型或单账号异常导致网关全局雪崩，CPA 划分为五条互不干扰的准入泳道：
 
 | 准入泳道 (Lane) | 承载模型标识 | 并发控制 (Inflight / Queue) | 熔断机制与冷却策略 |
 |---|---|:---:|---|
 | **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra` | `max_inflight=2`<br>`max_pending=4` (120s) | 区分**模型级容量**与**账号级容量**：单个模型超载仅熔断该模型，同账号其他模型仍可服务；支持 `60-900s` 指数退避 |
 | **`zhipu-coding-plan`** | `glm-5.3`, `glm-5.3-flash` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
 | **`antigravity-oauth`** | `gemini-3.8-flash-high` | `max_inflight=2`<br>`max_pending=4` (120s) | 首创严格冷却机制：无提前探测，精确对齐 `RetryInfo.retryDelay` 最长窗口；`401/403` 自动触发停流保护 |
-| **`workbuddy-oauth`** | `deepseek-v4.1-flash`, `deepseek-v4.1-flash-sg`, `hy4free` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
+| **`workbuddy-oauth`**（CN） | `deepseek-v4.1-flash` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
+| **`workbuddy-intl-oauth`**（INTL） | `deepseek-v4.1-flash-intl`, `deepseek-v4.1-flash-sg`, `hy4flash-free` | `max_inflight=1`<br>`max_pending=4` (120s) | 与 CN lane 独立状态文件与冷却窗口；`hy4flash-free`（x0.00）零成本例外 |
 
 > [!NOTE]
 > 泳道与模型清单的真源是 `scripts/remote/cpa-admission.json` 的 `lanes` 段；本表为判读速查，变更泳道时随 JSON 一并更新。

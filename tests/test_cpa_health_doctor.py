@@ -1346,7 +1346,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     "deepseek-v4.1-flash",
                     "deepseek-v4.1-flash-intl",
                     "deepseek-v4.1-flash-sg",
-                    "hy4free",
+                    "hy4flash-free",
                 ],
                 0,
                 "none",

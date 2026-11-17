@@ -98,7 +98,7 @@ ADMISSION_LANE_MODELS = {
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4free",
+        "hy4flash-free",
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
@@ -110,17 +110,21 @@ ADMISSION_LANE_MODELS = {
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
     # 2026-11-17 luode0320 cutover: pins are the upstream ids each realm's
-    # dynamic catalog actually serves. hy4free stays a zero-cost intl-only
-    # client alias; its upstream id hy4flash-free is pinned on intl and
-    # replaced outright by the alias (no fork), so the bare id never leaks
-    # into the client surface. The CN pool still carries only the paid
-    # primary.
+    # dynamic catalog actually serves. hy4flash-free (x0.00 credits) is the
+    # INTL zero-cost fallback and, since the 2026-11-17 user-directed rename,
+    # surfaces under its bare upstream id: the interim client alias hy4free
+    # named the retired upstream id and was retired with it. The CN pool
+    # still carries only the paid primary.
     "cn": ["deepseek-v4.1-flash"],
     "intl": ["deepseek-v4.1-flash-sg", "hy4flash-free"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
     "cn": ["deepseek-v4.1-flash"],
-    "intl": ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg", "hy4free"],
+    "intl": [
+        "deepseek-v4.1-flash-intl",
+        "deepseek-v4.1-flash-sg",
+        "hy4flash-free",
+    ],
 }
 
 # Every model cpa-admission must register across the shared-account lanes.

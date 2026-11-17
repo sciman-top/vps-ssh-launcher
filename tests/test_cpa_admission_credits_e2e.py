@@ -8,7 +8,8 @@ latch, persistence, and the per-model refusal are exercised in the order
 production sees them.
 
 Regression target: one drained credential used to gate every model, including
-the zero-cost ``hy4free``, and reported the cause as a missing deadline.
+the zero-cost ``hy4flash-free`` (the 2026-11-17 rename retired the interim
+``hy4free`` client alias), and reported the cause as a missing deadline.
 
 ``traffic_lock_path`` is deliberately left unset: that guard needs ``fcntl``,
 which does not exist on the Windows development host. With no lock path the
@@ -174,8 +175,8 @@ def test_6008_arms_the_capacity_ladder_without_a_hold(tmp_path: Path) -> None:
 
 
 def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
-    """`hy4free` costs x0.00 credits, so a burned-through allowance must not
-    gate it.
+    """`hy4flash-free` costs x0.00 credits, so a burned-through allowance must
+    not gate it.
 
     The fake upstream refuses everything, so the free request also ends in an
     upstream error -- what matters is that it was *admitted* (it reached the
@@ -189,7 +190,7 @@ def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
             "deepseek-v4.1-flash-sg",
             "deepseek-v4.1-flash-intl",
             "deepseek-v4.1-flash",
-            "hy4free",
+            "hy4flash-free",
         ],
     )
     assert info["states"]["intl"]["hold_reason"] is None
@@ -199,7 +200,7 @@ def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
     # independent and the zero-cost INTL model still passed its cooldown...
     assert "deepseek-v4.1-flash-intl" not in info["calls"], info["calls"]
     assert "deepseek-v4.1-flash" in info["calls"], info["calls"]
-    assert "hy4free" in info["calls"], info["calls"]
+    assert "hy4flash-free" in info["calls"], info["calls"]
     refused = responses[-1].decode("utf-8", errors="replace")
     assert "operator_review_required" not in refused
 

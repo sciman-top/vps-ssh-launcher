@@ -74,6 +74,10 @@ def test_provider_variant_is_not_a_model_switch() -> None:
     """flash-n is the provider echo of flash-high; both normalise to one name."""
 
     assert probe.normalise_model("gemini-3.8-flash-n") == "gemini-3.8-flash-high"
+    # 2026-11-17: the luode cutover serves hy4flash-free upstream (echoed
+    # bare); the retired hy4free upstream echoed hy4-free and keeps its
+    # historical label so old journal windows stay stable.
+    assert probe.normalise_model("hy4-flash-free") == "hy4flash-free"
     assert probe.normalise_model("hy4-free") == "hy4free"
     assert probe.normalise_model("gpt-6-luna") == "gpt-6-luna"
 

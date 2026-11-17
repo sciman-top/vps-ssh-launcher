@@ -855,7 +855,8 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 )
             # fork=true keeps the upstream id alongside the client alias;
             # fork omitted REPLACES the id with the alias in the client
-            # surface (2026-11-17: hy4free rides on hy4flash-free that way).
+            # surface (2026-11-17: the interim hy4free alias rode on
+            # hy4flash-free that way until the same-day rename retired it).
             # Both shapes are valid; a non-boolean fork is already reported
             # above.
             if alias.lower() in alias_names:
@@ -875,8 +876,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                     )
     # 2026-11-17 luode0320 cutover: on a plugin channel, an alias whose
     # source is that channel's own upstream pin may omit fork — the alias
-    # then REPLACES the upstream id in the client surface (hy4free riding on
-    # hy4flash-free), and there is no dual-name coexistence to preserve.
+    # then REPLACES the upstream id in the client surface (the interim
+    # hy4free alias rode on hy4flash-free that way until the same-day
+    # rename retired it), and there is no dual-name coexistence to preserve.
     plugin_pin_sources: set[str] = set()
     for route in manifest.get("plugin_routes", []):
         if not isinstance(route, dict):

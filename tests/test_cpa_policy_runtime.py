@@ -533,9 +533,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        # 2026-11-17: a plugin-pin source may omit fork (replacement alias,
-        # hy4free rides on hy4flash-free); only non-plugin channels still
-        # require fork=true for independent admission state.
+        # 2026-11-17: a plugin-pin source may omit fork (replacement alias —
+        # the interim hy4free rode on hy4flash-free until the same-day rename
+        # retired it); only non-plugin channels still require fork=true for
+        # independent admission state.
         manifest["oauth_model_aliases"]["zhipu-plan"] = [
             {"name": "glm-5.3", "alias": "glm-5.3-work"}
         ]

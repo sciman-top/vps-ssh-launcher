@@ -155,7 +155,7 @@
       "models": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4free"
+        "hy4flash-free"
       ],
       "max_inflight": 1,
       "max_pending": 4,
@@ -187,7 +187,7 @@
         "usage_limit_reached"
       ],
       "zero_cost_models": [
-        "hy4free"
+        "hy4flash-free"
       ]
     }
   ]

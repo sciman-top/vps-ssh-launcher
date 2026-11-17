@@ -28,16 +28,20 @@ $manifestPath = Join-Path $PSScriptRoot "remote\cpa_provider_routes.json"
 $manifestJson = Get-Content -Raw -Encoding utf8 $manifestPath
 $manifestB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifestJson))
 
-# Validate the manifest shape before anything is projected: the bridge is
-# exactly the two legacy client names on the workbuddy-ai-provider channel,
-# and the legacy workbuddy channel must stay gone.
+# Validate the manifest shape before anything is projected: since the
+# 2026-11-17 user-directed rename the bridge is exactly the one intl fork
+# alias (hy4flash-free surfaces bare, so no alias entry covers it), and the
+# legacy workbuddy channel must stay gone. Note the deployed bridge lives
+# inside config.yaml's oauth: block (oauth.model-alias); this tool's surgery
+# still targets the legacy top-level spelling and therefore refuses against
+# the cutover config — the transaction scripts own that surface now.
 $manifest = $manifestJson | ConvertFrom-Json
 $aliasEntries = $manifest."oauth_model_aliases"."workbuddy-ai-provider"
-if (-not $aliasEntries -or $aliasEntries.Count -ne 2) {
-  throw "Manifest must carry exactly two workbuddy-ai-provider alias entries; got $($aliasEntries.Count)."
+if (-not $aliasEntries -or $aliasEntries.Count -ne 1) {
+  throw "Manifest must carry exactly one workbuddy-ai-provider alias entry; got $($aliasEntries.Count)."
 }
 $aliases = @($aliasEntries | ForEach-Object { $_.alias })
-$expected = @("deepseek-v4.1-flash-intl", "hy4free")
+$expected = @("deepseek-v4.1-flash-intl")
 if (($aliases | Sort-Object) -join "," -ne ($expected | Sort-Object) -join ",") {
   throw "Unexpected alias set: $($aliases -join ',')."
 }
@@ -90,8 +94,8 @@ backup_root = Path(sys.argv[3])
 manifest = yaml.safe_load(base64.b64decode(sys.argv[4]).decode("utf-8"))
 
 entries = manifest["oauth_model_aliases"]["workbuddy-ai-provider"]
-if len(entries) != 2:
-    raise SystemExit("REFUSE manifest bridge must carry exactly two entries")
+if len(entries) != 1:
+    raise SystemExit("REFUSE manifest bridge must carry exactly one entry")
 
 with config_path.open("r", encoding="utf-8", newline="") as handle:
     before_text = handle.read()
@@ -135,7 +139,7 @@ already = (
     and not legacy_present
 )
 if already:
-    print("WORKBUDDY_ALIAS_BRIDGE=ALREADY_APPLIED aliases=deepseek-v4.1-flash-intl+hy4free")
+    print("WORKBUDDY_ALIAS_BRIDGE=ALREADY_APPLIED aliases=deepseek-v4.1-flash-intl-only")
     raise SystemExit(0)
 
 # Section-level text surgery: locate the oauth-model-alias top-level key and
@@ -245,7 +249,7 @@ with config_path.open("rb") as handle:
     written = handle.read()
 if hashlib.sha256(written).hexdigest() != hashlib.sha256(updated_text.encode("utf-8")).hexdigest():
     raise SystemExit("REFUSE post-write digest mismatch")
-print(f"WORKBUDDY_ALIAS_BRIDGE=APPLIED backup={backup_path} aliases=deepseek-v4.1-flash-intl+hy4free")
+print(f"WORKBUDDY_ALIAS_BRIDGE=APPLIED backup={backup_path} aliases=deepseek-v4.1-flash-intl-only")
 PY
 '@
 $remoteCommand = $remoteCommand.Replace("__APPLY__", $applyLiteral).Replace("__MANIFEST_B64__", $manifestB64)

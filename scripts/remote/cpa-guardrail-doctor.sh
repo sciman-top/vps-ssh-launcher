@@ -434,7 +434,7 @@ expected = {
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4free",
+        "hy4flash-free",
     ],
 }
 
@@ -3120,14 +3120,17 @@ if isinstance(raw_entries, list):
             bridge[entry["alias"]] = entry.get("name")
 expect_bridge = {
     "deepseek-v4.1-flash-intl": "deepseek-v4.1-flash-sg",
-    "hy4free": "hy4flash-free",
 }
 missing = sorted(a for a, name in expect_bridge.items() if bridge.get(a) != name)
-if missing:
-    drift.append("oauth_model_alias:" + ",".join(missing))
-    print("workbuddy-alias-bridge=MISSING expected=intl+hy4free")
+# 2026-11-17 user-directed rename: the interim hy4free alias retired with the
+# upstream id it named; hy4flash-free surfaces bare, so the only bridge entry
+# left is the intl fork alias. Any other alias on this channel is drift.
+extra = sorted(a for a in bridge if a not in expect_bridge)
+if missing or extra:
+    drift.append("oauth_model_alias:" + ",".join(missing + extra))
+    print("workbuddy-alias-bridge=MISSING expected=intl-only")
 else:
-    print("workbuddy-alias-bridge=OK intl+hy4free")
+    print("workbuddy-alias-bridge=OK intl-only")
 if isinstance(alias_map, dict) and "workbuddy" in alias_map:
     drift.append("oauth_model_alias:legacy_workbuddy_channel_present")
     print("workbuddy-alias-legacy-channel=PRESENT note=remove")
@@ -3153,7 +3156,7 @@ print(
     "workbuddy-config-coverage=legacy_section_absent; "
     "luode_switches_checkin_on_growth_lifecycle_keepalive_rotation_off; "
     "scheduler_mode_credits; intl_plugin_enabled_keepalive_off; "
-    "alias_bridge_deepseek_intl_and_hy4free; "
+    "alias_bridge_deepseek_intl_only_hy4flash_free_bare; "
     "legacy_alias_channel_absent; "
     "excluded_surface_present_both_providers; "
     "surface_value_enforced_by_client_model_catalog_gate_not_here"

@@ -1639,8 +1639,9 @@ for channel, entries in oauth_aliases_manifest.items():
             f"REFUSE oauth_model_aliases.{channel} alias is not an OAuth route alias"
         )
     # 2026-11-17 luode0320 cutover: on a plugin channel an alias may omit
-    # fork — it then REPLACES the upstream id in the client surface
-    # (hy4free riding on hy4flash-free) and there is no dual-name
+    # fork — it then REPLACES the upstream id in the client surface (the
+    # interim hy4free alias rode on hy4flash-free that way until the
+    # 2026-11-17 rename retired it) and there is no dual-name
     # coexistence to pin. Every other channel still must fork every alias.
     plugin_channels = {
         route.get("provider")
@@ -2292,7 +2293,7 @@ expected = {
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4free",
+        "hy4flash-free",
     ],
 }
 expected_max_inflight = {

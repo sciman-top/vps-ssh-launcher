@@ -38,8 +38,8 @@ unattributed
 
 A lane_switch turn is the case the gateway can actually fix: the provider
 answers the base model name while the route asks for a variant (flash-n for
-flash-high, hy4-free for hy4free). Without normalisation those count as extra
-model switches and inflate the eviction bucket.
+flash-high, hy4-flash-free for hy4flash-free). Without normalisation those
+count as extra model switches and inflate the eviction bucket.
 
 Examples:
 
@@ -70,6 +70,10 @@ _MIN_PREFIX_TOKENS_DEFAULT = 20000
 
 _PROVIDER_MODEL_ALIASES = (
     (re.compile(r"^(gemini-3\.8-flash)-n$"), r"\1-high"),
+    # 2026-11-17: the luode cutover put hy4flash-free upstream (echoed bare);
+    # the hy4-free line stays for journal rows from the retired hy4free
+    # upstream so historical windows keep a stable label.
+    (re.compile(r"^hy4-flash-free$"), "hy4flash-free"),
     (re.compile(r"^hy4-free$"), "hy4free"),
 )
 

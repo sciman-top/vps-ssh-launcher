@@ -99,7 +99,7 @@ def test_neighbouring_codes_keep_their_existing_meaning(
 
 
 def test_zero_cost_models_are_declared_in_lane_config(admission: ModuleType) -> None:
-    """hy4free is served at x0.00 credits, so billing cannot gate it.
+    """hy4flash-free is served at x0.00 credits, so billing cannot gate it.
 
     The list is lane configuration, not a code constant: which models are free
     is provider catalog data that moves without a code change.
@@ -110,7 +110,7 @@ def test_zero_cost_models_are_declared_in_lane_config(admission: ModuleType) -> 
     lane = next(
         item for item in loaded["lanes"] if item["name"] == "workbuddy-intl-oauth"
     )
-    assert "hy4free" in lane["zero_cost_models"]
+    assert "hy4flash-free" in lane["zero_cost_models"]
 
 
 def test_zero_cost_models_default_to_empty_when_absent(admission: ModuleType) -> None:

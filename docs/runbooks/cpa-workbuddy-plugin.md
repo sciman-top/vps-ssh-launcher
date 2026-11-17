@@ -195,23 +195,26 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 加入 CN 凭据属真实远端写入（config.yaml 变更 + 新凭据落盘），按 change-evidence 流程执行；仅限用户本人完成浏览器 OAuth（腾讯实名体系），agent 不代登录、不代注册。CN 出口为 bwg 美国 IP 访问 copilot.tencent.com，与国内版典型用户地理画像差异明显；CN 侧是否按 IP 地理聚合风控（对照 `14003`）零实测证据，加入前由用户自决。流程：
 
 1. 管理页把 `login_region` 切到 `cn` **之后**再发起 CN 登录——这是 token 血统正确性要求，不只操作卫生：上游 issue #36 实证 intl 态下登录的凭据带 IDE 平台血统、走错头族（0.9.58 起登录平台持久化到 auth 文件已修，但血统在登录时铸定，事后不可迁移）。完成后立即把 `login_region` 翻回 `intl`。该值粘性且只影响新登录（存量凭据的请求路由恒按各自 auth 文件的域分派），残留 `cn` 会让后续新登录意外进 CN realm。
-2. `models_cn`/`models_intl` 是插件候选 pin，保持原始上游模型名：CN 为
-   `deepseek-v4.1-flash`；INTL 为 `deepseek-v4.1-flash`、
-   `deepseek-v4.1-flash-sg`、`hy4free`。它们用于收窄候选目录，不能把相同的
+2. 插件候选目录收窄（luode 割接后为 oauth-excluded-models 双通道；此前的
+   `models_cn`/`models_intl` pin 已随 mmqz 单插件退役）：CN 收窄到
+   `deepseek-v4.1-flash`；INTL 收窄到 `deepseek-v4.1-flash-sg` 与
+   `hy4flash-free`。它们用于收窄候选目录，不能把相同的
    `deepseek-v4.1-flash` 变成 realm-aware 账号选择器。
 3. CPA admission 的客户端/状态分流如下：
 
    | 请求名 | Admission lane | 持久状态 |
    | --- | --- | --- |
    | CN 裸名 `deepseek-v4.1-flash` | `workbuddy-oauth` | `workbuddy-risk.json` |
-   | INTL `deepseek-v4.1-flash-intl`（`fork=true`，上游仍为 `deepseek-v4.1-flash`） | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` |
-   | INTL `deepseek-v4.1-flash-sg`、`hy4free` | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` |
+   | INTL `deepseek-v4.1-flash-intl`（`fork=true`，上游为 `deepseek-v4.1-flash-sg`） | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` |
+   | INTL `deepseek-v4.1-flash-sg`、`hy4flash-free` | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` |
 
-   `deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶；`hy4free` 是 INTL 唯一的
-   零成本模型，能越过该 lane 的 6008 计费冷却。`6008` 按请求的 admission lane
+   `deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶；`hy4flash-free` 是 INTL
+   唯一的零成本模型，能越过该 lane 的 6008 计费冷却（2026-11-17 用户指令
+   更名：过渡别名 `hy4free` 随已退役上游 id 一并退役，现以真实上游 id 裸名
+   对外）。`6008` 按请求的 admission lane
    记录冷却，不新建持久账号 hold。`sg` 只在模型级信号（例如 6004）下独立冷却；
    它与 INTL alias 共用 INTL lane，因此 INTL 的 6008 仍会冷却这两个付费模型，
-   `hy4free` 是零成本例外。CN 裸名免受 INTL lane 冷却，是本次 lane 拆分的作用，
+   `hy4flash-free` 是零成本例外。CN 裸名免受 INTL lane 冷却，是本次 lane 拆分的作用，
    不代表按凭据 realm 绑定调度。
 4. **分 lane 不等于分凭据。** WorkBuddy 的 `credits` scheduler 仍能在配置的 auth
    pool 中回退；上面的 alias 与状态文件只隔离客户端入口和 admission breaker，
@@ -219,7 +222,7 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
    自动换账号、跨 realm 续打、清 cooldown 或推断账号健康。若将来需要严格
    per-auth realm 绑定，必须单独实现并通过 scheduler 行为验收。
 5. 当日按独立受控变更验收：配置前后快照、`/v1/models` 读回、两条 lane 的
-   `/healthz` 与状态文件归属、CN 裸名和 INTL alias/`sg`/`hy4free` 的单发受控
+   `/healthz` 与状态文件归属、CN 裸名和 INTL alias/`sg`/`hy4flash-free` 的单发受控
    验收分别留痕。单发通过只证明当次路由与响应，不证明长期 QoS、账号资格或
    provider 的全局限流隔离。
 
@@ -326,7 +329,7 @@ Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；
 | --- | --- |
 | `403 request illegal`、`11140`、官方客户端也提示账号受限 | 暂停当前调用任务并关闭调用端重试；保持凭据，不换账号、IP、设备或 token，不刷新 OAuth、不清冷却、不再用探针确认。保存时间、客户端/插件版本、模型、request ID 与脱敏错误，按官方支持渠道反馈。没有官方恢复信号前不要自动续打。 |
 | `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止调用端自动重试并保留 `Retry-After` / reset 信息；同一请求只允许 CPA 当前配置的最多 3 个凭据做有界回退，不调用 cooldown-clear。CN/INTL admission lane 分离不约束 WorkBuddy scheduler 的 auth 候选，不能把 lane 名当作“不得跨 realm 续打”的凭据保证。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。2026-10-21 晚实测（CPA v8.0.35）：6004 生产 wrapper 形状=HTTP 500+`server_error`/`internal_server_error` 信封（message 尾段内嵌转义的上游 JSON，raw 正文自带 reset 时间戳），admission 归冷却阶梯自恢复、无 hold，与官方频率限制自恢复语义一致，勿当缺陷或回归。 |
-| `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。`hy4free` 零成本例外仍可通过 INTL lane 的计费冷却。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
+| `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。`hy4flash-free` 零成本例外仍可通过 INTL lane 的计费冷却（2026-11-17 更名前写作 `hy4free`）。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
 | `14003` "模型繁忙"（官方归模型侧；2026-10-20 增补，同日策略更新） | 先分流：双账号同现且面板额度未耗尽支持模型/通道侧故障的判断，但不能单独排除共享出口或账号风控；单账号独现也不足以确认账号受限，须结合完整错误及官方账号状态。停止调用端连点重试（实测 Codex 客户端 5 连发会加深突发画像）。自 2026-10-20 起 admission 对模型侧 14003 **不再置 operator-review hold**：无 `Retry-After` 的 429 只落冷却阶梯首档（当前首档 60 秒，阶梯 60/120/240/480/900 秒；可信上游期限可延长窗口），窗后允许后续请求但不保证上游恢复；账号型信号（`rate_limit_error`/6003/6004/11140/认证类）仍照旧持锁。人工干预仅在整个阶梯走完仍失败时按 [cpa-gateway 人工恢复](cpa-gateway.md#oauth-持久化风险状态的人工恢复) 评估。实测窗口 2026-10-20 为 ~31 分钟自愈（[台账 §6](../change-evidence/20261020-bwg-cpa-v8035-canary.md)）；社区"按出口 IP 聚合"属非官方观测，不将换网络试探作为常规恢复动作。**2026-10-21 缺陷收口**：部署后首波 14003 经 CPA 包装信封（wrapper `type=rate_limit_error`）误置 durable hold——wrapper 标签击败 header 层阶梯改动（生产形状未被原钉住测试覆盖）；已修复并部署（[台账](../change-evidence/20261021-bwg-workbuddy-14003-wrapper-fix.md)，pin `19d64361`）：分类按 wrapper message 内嵌上游 code，wrapper-14003 归阶梯自恢复，裸 rate_limit_error/内嵌 6003/6004 仍持锁。 |
 | `11115 INPUT TOO LONG` | 按官方错误码说明缩短输入或压缩上下文，在本地检查请求大小；该码本身不是账号受限证据，不换号重发超长请求。 |
 | `11128`、超时或普通 5xx | 不循环重发原请求。保留一次脱敏错误上下文并停止自动化；若是请求格式错误，在本地修正后再按官方支持路径评估，不通过反复探测来确认账号状态。 |

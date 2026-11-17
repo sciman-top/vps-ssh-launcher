@@ -563,9 +563,11 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
   `model_not_found`）、2026-11-14 上游目录复活实证后恢复，墓碑已摘）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
   `antigravity-oauth`（`gemini-3.8-flash-high`）、CN `workbuddy-oauth`
   （`deepseek-v4.1-flash`）与 INTL `workbuddy-intl-oauth`
-  （`deepseek-v4.1-flash-intl`、`deepseek-v4.1-flash-sg`、`hy4free`）。
+  （`deepseek-v4.1-flash-intl`、`deepseek-v4.1-flash-sg`、`hy4flash-free`）。
   `deepseek-v4.1-flash-intl` 是指向同一上游模型的 fork alias；`sg` 保留为
-  INTL 的第二个独立模型桶，`hy4free` 仅属 INTL。
+  INTL 的第二个独立模型桶，`hy4flash-free` 仅属 INTL（2026-11-17 用户指令
+  更名：过渡别名 `hy4free` 随其所命名的已退役上游 id 一并退役，免费模型现以
+  真实上游 id 裸名对外）。
   `deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
   随账号停用退役（保留惰性墓碑）。
@@ -1565,7 +1567,7 @@ admission 启动时会把残留的 stale 标记自动清为 null 并开一个 90
 属于可恢复的额度时间窗，进入请求所命中的 WorkBuddy admission lane 冷却阶梯，
 不再新建 `account_credits_exhausted` 持久 hold。CN 与 INTL 分别使用
 `workbuddy-risk.json`、`workbuddy-intl-risk.json`；对 INTL alias 收到的 6008
-不会因 admission lane 状态而直接冷却 CN lane。`hy4free` 的 x0.00 credits
+不会因 admission lane 状态而直接冷却 CN lane。`hy4flash-free` 的 x0.00 credits
 例外仍可越过 INTL 计费冷却。该隔离只证明 admission 状态分开，不证明 WorkBuddy
 scheduler 选择了同名 realm 的凭据，也不代表账号额度已重置。旧版本遗留的
 `account_credits_exhausted` 状态仍可读；不要手动清理或缩短 `not_before`。

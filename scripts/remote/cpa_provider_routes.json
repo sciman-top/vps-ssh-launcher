@@ -185,7 +185,6 @@
       },
       {
         "name": "hy4flash-free",
-        "alias": "hy4free",
         "max-context-length": 1000000
       }
     ]
@@ -196,10 +195,6 @@
         "name": "deepseek-v4.1-flash-sg",
         "alias": "deepseek-v4.1-flash-intl",
         "fork": true
-      },
-      {
-        "name": "hy4flash-free",
-        "alias": "hy4free"
       }
     ]
   },
@@ -335,7 +330,7 @@
         "deepseek-v4.1-flash-sg",
         "hy4flash-free"
       ],
-      "note": "2026-11-17 luode0320 cutover: the INTL plugin registers as workbuddy-ai-provider. Its upstream pins are the two ids its dynamic catalog actually serves: deepseek-v4.1-flash-sg keeps the bare client name (fork alias deepseek-v4.1-flash-intl rides on it), hy4flash-free is replaced outright by the client alias hy4free (fork omitted), so no upstream id leaks into the client surface.",
+      "note": "2026-11-17 luode0320 cutover: the INTL plugin registers as workbuddy-ai-provider. Its upstream pins are the two ids its dynamic catalog actually serves: deepseek-v4.1-flash-sg keeps the bare client name (fork alias deepseek-v4.1-flash-intl rides on it), and hy4flash-free also surfaces bare. The cutover initially replaced hy4flash-free with the interim client alias hy4free (fork omitted) to keep the client surface byte-identical; on 2026-11-17 (user directive) that alias was retired with the old upstream id it named, so the free model is reached under its real upstream id.",
       "shared_consumption": true,
       "admission_lane": "workbuddy-intl-oauth"
     }

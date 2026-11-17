@@ -40,12 +40,13 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
         manifest, "workbuddy-ai-provider", "intl"
     )
     assert intl_models == ["deepseek-v4.1-flash-sg", "hy4flash-free"]
-    # The fork bridge unfolds to the legacy client names: sg keeps its bare
-    # name (fork=true adds the alias alongside it) and hy4flash-free is
-    # replaced outright by hy4free (no fork), so no upstream id leaks.
+    # The fork bridge unfolds to the client names: sg keeps its bare name
+    # (fork=true adds the alias alongside it) and hy4flash-free surfaces
+    # bare too — the 2026-11-17 rename retired the interim hy4free alias
+    # that used to replace it (no fork), so no dead id lingers.
     assert cpa_catalog_check.plugin_lane_aliases(
         manifest, "workbuddy-ai-provider", intl_models
-    ) == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg", "hy4free"]
+    ) == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg", "hy4flash-free"]
     assert (
         cpa_catalog_check.plugin_lane_models(
             manifest, "workbuddy-ai-provider", "missing"
@@ -59,7 +60,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     assert derived["workbuddy-intl-oauth"] == [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4free",
+        "hy4flash-free",
     ]
 
 

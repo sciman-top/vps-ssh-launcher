@@ -956,7 +956,6 @@ docker() {{
                     "alias": "deepseek-v4.1-flash-intl",
                     "fork": True,
                 },
-                {"name": "hy4flash-free", "alias": "hy4free"},
             ]
 
         def healthy_config(**overrides: Any) -> dict[str, Any]:
@@ -995,7 +994,7 @@ docker() {{
         self.assertIn("workbuddy-rotation_enabled=false", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
         self.assertIn("workbuddy-intl-plugin=enabled keepalive=off", healthy.stdout)
-        self.assertIn("workbuddy-alias-bridge=OK intl+hy4free", healthy.stdout)
+        self.assertIn("workbuddy-alias-bridge=OK intl-only", healthy.stdout)
         self.assertIn(
             "workbuddy-excluded-workbuddy-provider=PRESENT n=1", healthy.stdout
         )
@@ -1025,9 +1024,7 @@ docker() {{
         self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
         self.assertIn("scheduler_mode:absent", wiped.stdout)
         self.assertIn("intl_plugin:disabled_or_absent", wiped.stdout)
-        self.assertIn(
-            "oauth_model_alias:deepseek-v4.1-flash-intl,hy4free", wiped.stdout
-        )
+        self.assertIn("oauth_model_alias:deepseek-v4.1-flash-intl", wiped.stdout)
         self.assertIn("oauth_excluded_models:workbuddy-provider", wiped.stdout)
 
         for mode in (None, "off", "selected", True, ["credits"]):
@@ -1074,14 +1071,17 @@ docker() {{
             result.stdout,
         )
 
-        partial_bridge = healthy_config()
-        partial_bridge["oauth-model-alias"]["workbuddy-ai-provider"] = [
-            bridge_entries()[0]
-        ]
-        result = run_case(partial_bridge)
+        # The retired interim alias resurfacing on the bridge is drift under
+        # the post-rename contract: expected bridge is intl-only, and any
+        # extra alias on the channel fails alongside missing ones.
+        extra_alias_bridge = healthy_config()
+        extra_alias_bridge["oauth-model-alias"]["workbuddy-ai-provider"] = (
+            bridge_entries() + [{"name": "hy4flash-free", "alias": "hy4free"}]
+        )
+        result = run_case(extra_alias_bridge)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(
-            "workbuddy-alias-bridge=MISSING expected=intl+hy4free", result.stdout
+            "workbuddy-alias-bridge=MISSING expected=intl-only", result.stdout
         )
         self.assertIn("oauth_model_alias:hy4free", result.stdout)
 
@@ -1811,7 +1811,6 @@ except Exception as exc:
                         "alias": "deepseek-v4.1-flash-intl",
                         "fork": True,
                     },
-                    {"name": "hy4flash-free", "alias": "hy4free"},
                 ]
             },
         )
