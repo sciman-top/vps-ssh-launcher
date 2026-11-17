@@ -680,7 +680,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 | **`zhipu-coding-plan`** | `glm-5.3`, `glm-5.3-flash` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
 | **`antigravity-oauth`** | `gemini-3.8-flash-high` | `max_inflight=2`<br>`max_pending=4` (120s) | 首创严格冷却机制：无提前探测，精确对齐 `RetryInfo.retryDelay` 最长窗口；`401/403` 自动触发停流保护 |
 | **`workbuddy-oauth`**（CN） | `deepseek-v4.1-flash` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
-| **`workbuddy-intl-oauth`**（INTL，**关闭暗置**） | `deepseek-v4.1-flash-intl`, `deepseek-v4.1-flash-sg`（声明保留，上游经 `oauth-excluded-models` 关闭，不可见不可用；重启用=摘除排除条目） | `max_inflight=1`<br>`max_pending=4` (120s) | 与 CN lane 独立状态文件与冷却窗口；`hy4flash-free` 已于 2026-11-17 退役删除（doctor 目录门 fail-closed 墓碑） |
+| **`workbuddy-intl-oauth`**（INTL，**关闭暗置**） | `deepseek-v4.1-flash-intl`, `deepseek-v4.1-flash-sg`（声明保留；INTL 插件已禁用，不可见不可用；重启用=翻回 `enabled: true`） | `max_inflight=1`<br>`max_pending=4` (120s) | 与 CN lane 独立状态文件与冷却窗口；`hy4flash-free` 已于 2026-11-17 退役删除（doctor 目录门 fail-closed 墓碑） |
 
 > [!NOTE]
 > 泳道与模型清单的真源是 `scripts/remote/cpa-admission.json` 的 `lanes` 段；本表为判读速查，变更泳道时随 JSON 一并更新。

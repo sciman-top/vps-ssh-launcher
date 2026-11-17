@@ -209,10 +209,11 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
    | INTL `deepseek-v4.1-flash-sg` | `workbuddy-intl-oauth` | `workbuddy-intl-risk.json` | **关闭暗置** |
 
    **关闭暗置（2026-11-17 用户指令）**：sg/intl 两名的声明与 admission lane
-   原样保留（lane、状态文件、预言机全部不动），仅上游经
-   `oauth-excluded-models.workbuddy-ai-provider` 排除 `deepseek-v4.1-flash-sg`
-   （intl 别名骑其上）——不可见不可用；**重启用 = 从该排除表摘除这一条**，
-   两名即回归。`hy4flash-free`（x0.00 免费档，曾以过渡别名 `hy4free` 服役）
+   原样保留（lane、状态文件、预言机全部不动），`workbuddy-ai-provider` 插件
+   在 config.yaml 禁用（doctor `workbuddy-intl-plugin` 门钉 disabled）——
+   不可见不可用；**重启用 = 翻回
+   `plugins.configs.workbuddy-ai-provider.enabled: true`**（config reload 即
+   回归）。`hy4flash-free`（x0.00 免费档，曾以过渡别名 `hy4free` 服役）
    则为**退役删除**：pin/settings/zero_cost/目录全撤 + 排除表墓碑，doctor
    目录门 fail-closed 拦截复现。`6008` 按请求的 admission lane
    记录冷却，不新建持久账号 hold。`sg` 只在模型级信号（例如 6004）下独立冷却；

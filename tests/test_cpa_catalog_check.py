@@ -43,7 +43,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     # The fork bridge unfolds to the client names: sg keeps its bare name
     # (fork=true adds the alias alongside it). hy4flash-free retired
     # 2026-11-17 (user directive); deepseek-v4.1-flash-sg stays declared but
-    # is closed dark upstream via oauth-excluded-models.
+    # is closed dark with the INTL plugin disabled in config.yaml.
     assert cpa_catalog_check.plugin_lane_aliases(
         manifest, "workbuddy-ai-provider", intl_models
     ) == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg"]

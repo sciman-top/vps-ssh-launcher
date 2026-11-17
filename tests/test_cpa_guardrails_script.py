@@ -973,8 +973,11 @@ docker() {{
                 "plugins": {
                     "configs": {
                         "workbuddy-provider": cn_section,
+                        # 2026-11-17: the INTL lane is closed dark — the
+                        # plugin stays disabled while every declaration
+                        # (pin, bridge, admission lane) keeps its shape.
                         "workbuddy-ai-provider": {
-                            "enabled": True,
+                            "enabled": False,
                             "token_keepalive": False,
                         },
                     }
@@ -993,7 +996,10 @@ docker() {{
         self.assertIn("workbuddy-growth_auto=false", healthy.stdout)
         self.assertIn("workbuddy-rotation_enabled=false", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
-        self.assertIn("workbuddy-intl-plugin=enabled keepalive=off", healthy.stdout)
+        self.assertIn(
+            "workbuddy-intl-plugin=disabled keepalive=off note=closed_dark_20261117",
+            healthy.stdout,
+        )
         self.assertIn("workbuddy-alias-bridge=OK intl-only", healthy.stdout)
         self.assertIn(
             "workbuddy-excluded-workbuddy-provider=PRESENT n=1", healthy.stdout
@@ -1023,7 +1029,7 @@ docker() {{
         self.assertIn("workbuddy-growth_auto=ABSENT expected=false", wiped.stdout)
         self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
         self.assertIn("scheduler_mode:absent", wiped.stdout)
-        self.assertIn("intl_plugin:disabled_or_absent", wiped.stdout)
+        self.assertIn("intl_plugin:not_disabled", wiped.stdout)
         self.assertIn("oauth_model_alias:deepseek-v4.1-flash-intl", wiped.stdout)
         self.assertIn("oauth_excluded_models:workbuddy-provider", wiped.stdout)
 
@@ -1051,14 +1057,20 @@ docker() {{
             "workbuddy-config=DRIFT rotation_enabled:true", rotation_flip.stdout
         )
 
-        intl_dead = healthy_config()
-        intl_dead["plugins"]["configs"]["workbuddy-ai-provider"] = {
-            "enabled": False,
+        # Closed-dark contract: the INTL plugin must stay disabled. Enabled
+        # while closed = drift (an accidental re-open would silently resurface
+        # the sg/intl client names).
+        intl_enabled = healthy_config()
+        intl_enabled["plugins"]["configs"]["workbuddy-ai-provider"] = {
+            "enabled": True,
             "token_keepalive": False,
         }
-        result = run_case(intl_dead)
+        result = run_case(intl_enabled)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("workbuddy-intl-plugin=DISABLED expected=enabled", result.stdout)
+        self.assertIn(
+            "workbuddy-intl-plugin=ENABLED expected=disabled note=closed_dark_20261117",
+            result.stdout,
+        )
 
         intl_keepalive = healthy_config()
         intl_keepalive["plugins"]["configs"]["workbuddy-ai-provider"][
@@ -1067,7 +1079,7 @@ docker() {{
         result = run_case(intl_keepalive)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(
-            "workbuddy-intl-plugin=enabled keepalive=NOT_OFF expected=off",
+            "workbuddy-intl-plugin=disabled keepalive=NOT_OFF expected=off",
             result.stdout,
         )
 

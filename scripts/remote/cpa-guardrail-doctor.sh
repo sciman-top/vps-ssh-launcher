@@ -3094,14 +3094,19 @@ for key, expected in SWITCHES:
     if value != expected:
         drift.append(f"{key}:{str(value).lower()}")
 
-if not isinstance(intl_section, dict) or not intl_section.get("enabled"):
-    drift.append("intl_plugin:disabled_or_absent")
-    print("workbuddy-intl-plugin=DISABLED expected=enabled")
+# 2026-11-17 (user directive): the INTL lane is CLOSED DARK — the plugin is
+# disabled so deepseek-v4.1-flash-sg / -intl are invisible and unusable while
+# every declaration (pin, bridge, admission lane, settings) stays in place.
+# Re-enabling = flip plugins.configs.workbuddy-ai-provider.enabled back to
+# true (config reload brings the names back). Enabled while closed = drift.
+if not isinstance(intl_section, dict) or intl_section.get("enabled") is not False:
+    drift.append("intl_plugin:not_disabled")
+    print("workbuddy-intl-plugin=ENABLED expected=disabled note=closed_dark_20261117")
 elif intl_section.get("token_keepalive") is False:
-    print("workbuddy-intl-plugin=enabled keepalive=off")
+    print("workbuddy-intl-plugin=disabled keepalive=off note=closed_dark_20261117")
 else:
     drift.append("intl_plugin:token_keepalive_not_false")
-    print("workbuddy-intl-plugin=enabled keepalive=NOT_OFF expected=off")
+    print("workbuddy-intl-plugin=disabled keepalive=NOT_OFF expected=off")
 
 # The deployed config carries the bridge inside the oauth: block
 # (oauth.model-alias); the top-level spelling is a legacy fallback.
@@ -3155,7 +3160,7 @@ print("workbuddy-config=OK")
 print(
     "workbuddy-config-coverage=legacy_section_absent; "
     "luode_switches_checkin_on_growth_lifecycle_keepalive_rotation_off; "
-    "scheduler_mode_credits; intl_plugin_enabled_keepalive_off; "
+    "scheduler_mode_credits; intl_plugin_disabled_closed_dark_20261117; "
     "alias_bridge_deepseek_intl_only_hy4flash_free_bare; "
     "legacy_alias_channel_absent; "
     "excluded_surface_present_both_providers; "

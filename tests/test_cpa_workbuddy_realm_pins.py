@@ -6,9 +6,9 @@ here: (1) the route manifest's plugin_routes declare the upstream ids each
 realm's dynamic catalog must keep narrowed to via oauth-excluded-models,
 (2) the oauth_model_aliases fork bridge maps them to their client names,
 and (3) hy4flash-free is RETIRED (2026-11-17, user directive) while
-deepseek-v4.1-flash-sg stays declared but closed dark via oauth-excluded-
-models — re-enabling is a one-line exclusion removal. The CN pool still
-carries only the paid primary.
+deepseek-v4.1-flash-sg stays declared but closed dark — the INTL plugin is
+disabled in config.yaml, so re-enabling is one enabled-flag flip. The CN
+pool still carries only the paid primary.
 """
 
 from __future__ import annotations
@@ -54,8 +54,8 @@ def test_manifest_intl_pin_is_the_single_declared_upstream_id() -> None:
     assert len(intl) == 1
     assert intl[0]["provider"] == "workbuddy-ai-provider"
     # deepseek-v4.1-flash-sg keeps the bare client name (fork alias rides on
-    # it). It is currently closed dark upstream via oauth-excluded-models but
-    # stays DECLARED for one-line re-enabling; hy4flash-free retired
+    # it). It is currently closed dark with the INTL plugin disabled but
+    # stays DECLARED for one-flag re-enabling; hy4flash-free retired
     # 2026-11-17 (user directive) and must not return to the pin.
     assert intl[0]["models"] == ["deepseek-v4.1-flash-sg"]
     assert intl[0]["admission_lane"] == "workbuddy-intl-oauth"

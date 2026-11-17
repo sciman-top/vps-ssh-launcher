@@ -114,10 +114,11 @@ WORKBUDDY_PLUGIN_MODELS = {
     # hy4free alias rename) is RETIRED — removed from the pin and tombstoned
     # in the deployed oauth-excluded-models; the doctor client-model-catalog
     # gate fails closed if it ever reappears. deepseek-v4.1-flash-sg stays
-    # DECLARED but closed dark (excluded upstream only): re-enabling is a
-    # one-line removal from oauth-excluded-models, which brings back both the
-    # sg bare name and the deepseek-v4.1-flash-intl fork alias. The CN pool
-    # still carries only the paid primary.
+    # DECLARED but closed dark: the workbuddy-ai-provider plugin is disabled
+    # in config.yaml (doctor intl-plugin gate pins disabled), so re-enabling
+    # is one flag flip that brings back both the sg bare name and the
+    # deepseek-v4.1-flash-intl fork alias. The CN pool still carries only the
+    # paid primary.
     "cn": ["deepseek-v4.1-flash"],
     "intl": ["deepseek-v4.1-flash-sg"],
 }

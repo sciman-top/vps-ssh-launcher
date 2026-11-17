@@ -566,11 +566,11 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
   （`deepseek-v4.1-flash-intl`、`deepseek-v4.1-flash-sg`）。
   `deepseek-v4.1-flash-intl` 是指向同一上游模型的 fork alias；`sg` 保留为
   INTL 的第二个独立模型桶。**2026-11-17（用户指令）INTL 双名关闭暗置**：
-  声明与 admission lane 原样保留，仅上游经 `oauth-excluded-models` 排除
-  `deepseek-v4.1-flash-sg`（intl 别名骑其上）——不可见不可用，重启用=从排除
-  表摘除该条目。同日 `hy4flash-free`（x0.00 免费档，曾以过渡别名 `hy4free`
-  服役）**退役删除**：pin 摘除 + 排除表墓碑，doctor 目录门 fail-closed 拦截
-  复现。
+  声明与 admission lane 原样保留，`workbuddy-ai-provider` 插件在 config.yaml
+  禁用（doctor `workbuddy-intl-plugin` 门钉 disabled）——两名不可见不可用，
+  **重启用 = 翻回 `enabled: true`**（config reload 即回归）。同日
+  `hy4flash-free`（x0.00 免费档，曾以过渡别名 `hy4free` 服役）**退役删除**：
+  pin 摘除 + 排除表墓碑，doctor 目录门 fail-closed 拦截复现。
   `deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
   随账号停用退役（保留惰性墓碑）。
