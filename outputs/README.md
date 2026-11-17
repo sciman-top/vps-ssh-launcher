@@ -24,8 +24,13 @@
   `type`/`provider` 改写（`workbuddy`→`workbuddy-provider`，intl→`workbuddy-ai-provider`）
   + intl 文件名 `workbuddy-intl-`→`workbuddyai-`；插件配置键=文件 stem。采纳素材暂存
   bwg `/root/wb-luode-rehearsal-20261117/`（`workbuddy-provider.so` SHA `a726f672…`
-  0.21.27、`workbuddy-ai-provider.so` SHA `8fa992e8…` 0.1.40），fixture 凭据副本已删，
-  切换另行裁决。
+  0.21.27、`workbuddy-ai-provider.so` SHA `8fa992e8…` 0.1.40），fixture 凭据副本已删。
+- **2026-11-17 生产切换已执行**（`run-wb-luode-cutover-20261117.ps1 -Apply` +
+  `deploy-admission-wbluode-20261117.ps1` 四件同换 + bulk -Apply）：
+  CUTOVER_APPLY_OK/DOCTOR_CONTRACT_OK/CN 单发 LIVE_ACCEPTED，台账见
+  `docs/change-evidence/20261117-bwg-wb-luode-cutover.md`。两个演练/切换/换代脚本
+  为本代回滚素材保留；`deploy-admission-cpintl-split-20261117.ps1` 仍为 admission
+  代际回滚的事务模板。
 - 其余旧代一次性件已退役到 git 历史：需要时用
   `git log --diff-filter=D -- outputs/` 找回；新增件默认不入库
   （`.gitignore` 整目录忽略），被 tests/ 或 tracked 收据点名的事务脚本
