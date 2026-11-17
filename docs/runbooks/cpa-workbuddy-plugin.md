@@ -229,17 +229,16 @@ Strict doctor 不把登录窗口中的 `cn` 当作立即失败，但会显式输
 先确认没有正在进行的 CN 登录，再在 Cockpit 管理面切回 `intl`；不要在代理层或
 凭据文件中伪造 realm，也不要通过重登来“清理”这个字段。
 
-也可使用受控 CLI，默认只读，`-Apply` 才写入：
+2026-11-17 luode0320 插件切换后 `login_region` 键随 mmqz 插件一并退役
+（realm 由双插件天然分离），原受控 CLI `cpa_workbuddy_login_region.ps1`
+已删除。若 doctor 报 `login_region` 相关键漂移，说明 config 停留在切换前
+形状，按切换事务的备份恢复或重放迁移，而不是手工补键。
 
-```powershell
-pwsh -NoProfile -File .\scripts\cpa_workbuddy_login_region.ps1 -Profile bwg -Region intl
-pwsh -NoProfile -File .\scripts\cpa_workbuddy_login_region.ps1 -Profile bwg -Region intl -Apply
-```
-
-`-Apply` 先取得维护锁与 admission `requests.lock`，等待最多 45 秒完成排空；
-随后备份 `config.yaml`、保持同一 inode 只替换 `plugins.configs.workbuddy.login_region`
-一个字段，并验证 YAML 差异只有该路径。脚本不重启 CPA；配置 watcher 热加载后
-strict doctor 应显示 `workbuddy-login_region=intl state=ok`。回滚时恢复输出中的
+（历史）原受控 CLI 默认只读、`-Apply` 才写入：取得维护锁与 admission
+`requests.lock` 45 秒排空后备份 `config.yaml`，同一 inode 只替换
+`plugins.configs.workbuddy.login_region` 一个字段并验证 YAML 差异仅该路径；
+脚本不重启 CPA，watcher 热加载后 strict doctor 显示
+`workbuddy-login_region=intl state=ok`。回滚时恢复输出中的
 备份文件并按现有 guarded restart 契约处理。
 
 风控边界（2026-10-20 已核实，勿重复评估；**下列 failover 行为属补丁构建，

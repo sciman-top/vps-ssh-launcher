@@ -33,20 +33,25 @@ def test_derived_lanes_match_the_deployable_admission_config() -> None:
 
 def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
-    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "cn") == [
-        "deepseek-v4.1-flash"
-    ]
-    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "intl") == [
-        "deepseek-v4.1-flash",
-        "deepseek-v4.1-flash-sg",
-        "hy4free",
-    ]
+    assert cpa_catalog_check.plugin_lane_models(
+        manifest, "workbuddy-provider", "cn"
+    ) == ["deepseek-v4.1-flash"]
+    intl_models = cpa_catalog_check.plugin_lane_models(
+        manifest, "workbuddy-ai-provider", "intl"
+    )
+    assert intl_models == ["deepseek-v4.1-flash-sg", "hy4flash-free"]
+    # The fork bridge unfolds to the legacy client names: sg keeps its bare
+    # name (fork=true adds the alias alongside it) and hy4flash-free is
+    # replaced outright by hy4free (no fork), so no upstream id leaks.
     assert cpa_catalog_check.plugin_lane_aliases(
-        manifest,
-        "workbuddy",
-        cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "intl"),
-    )[:2] == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg"]
-    assert cpa_catalog_check.plugin_lane_models(manifest, "workbuddy", "missing") == []
+        manifest, "workbuddy-ai-provider", intl_models
+    ) == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg", "hy4free"]
+    assert (
+        cpa_catalog_check.plugin_lane_models(
+            manifest, "workbuddy-ai-provider", "missing"
+        )
+        == []
+    )
     errors: list[str] = []
     derived = cpa_catalog_check.derive_lanes(manifest, errors)
     assert errors == []

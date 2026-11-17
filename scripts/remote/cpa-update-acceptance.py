@@ -18,13 +18,13 @@ ROOT = Path("/opt/cliproxyapi")
 PENDING_PATH = Path("/var/lib/vps-ssh-launcher/maintenance-status/cpa-update.pending")
 
 
-def _refuse(reason):
+def _refuse(reason: str) -> None:
     """Refuse under -O: an assert-based verdict would silently disappear."""
     print("UPDATE_ACCEPTANCE=FAIL reason=" + reason, flush=True)
     raise SystemExit(1)
 
 
-def run_cases():
+def run_cases() -> list[dict[str, object]]:
     if not __debug__:  # pragma: no cover - depends on interpreter flags
         _refuse("asserts_disabled_run_without_-O")
     if not (ROOT / "FIXTURE_ONLY").exists():

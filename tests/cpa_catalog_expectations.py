@@ -109,13 +109,14 @@ ADMISSION_LANE_MODELS = {
 # route manifest so a CN/INTL swap is caught instead of silently accepted by
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
-    # 2026-11-15: hy4free is a zero-cost (x0.00 credits) fallback and is now
-    # exclusive to intl, so the CN pool carries only the paid primary. Both
-    # realms answer the same upstream id hy4-free, so this narrows the
-    # candidate pool; it does not declare a new model. The plugin pin remains
-    # the upstream id; CPA's forked client alias is declared separately.
+    # 2026-11-17 luode0320 cutover: pins are the upstream ids each realm's
+    # dynamic catalog actually serves. hy4free stays a zero-cost intl-only
+    # client alias; its upstream id hy4flash-free is pinned on intl and
+    # replaced outright by the alias (no fork), so the bare id never leaks
+    # into the client surface. The CN pool still carries only the paid
+    # primary.
     "cn": ["deepseek-v4.1-flash"],
-    "intl": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "hy4free"],
+    "intl": ["deepseek-v4.1-flash-sg", "hy4flash-free"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
     "cn": ["deepseek-v4.1-flash"],

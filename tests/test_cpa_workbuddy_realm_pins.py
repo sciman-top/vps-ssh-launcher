@@ -1,10 +1,12 @@
-"""Realm pin defaults and the hy4free exclusivity decision.
+"""WorkBuddy client-surface contract after the 2026-11-17 luode0320 cutover.
 
-2026-11-15: hy4free moved out of models_cn. It is a zero-cost (x0.00 credits)
-fallback on both realms, so pinning it on both made the CN credentials eligible
-for it too. The decision keeps it exclusive to intl so the CN pool carries only
-the paid primary. Both realms answer the same upstream id hy4-free, so this is a
-candidate-pool narrowing, not a new model.
+The legacy models_cn/models_intl plugin pins died with the mmqz single
+plugin. The client surface now has three cooperating layers, each pinned
+here: (1) the route manifest's plugin_routes declare the upstream ids each
+realm's dynamic catalog must keep narrowed to via oauth-excluded-models,
+(2) the oauth_model_aliases fork bridge maps them to the legacy client
+names, and (3) hy4free stays an INTL-only zero-cost fallback - the CN pool
+still carries only the paid primary.
 """
 
 from __future__ import annotations
@@ -18,69 +20,81 @@ PINS = ROOT / "scripts" / "cpa_workbuddy_model_pins.ps1"
 MANIFEST = ROOT / "scripts" / "remote" / "cpa_provider_routes.json"
 
 
-def _default(flag: str) -> str:
+def _manifest() -> dict:
+    loaded = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def test_pin_scripts_reference_the_bridge_not_dead_plugin_keys() -> None:
     source = PINS.read_text(encoding="utf-8")
-    match = re.search(r"\[string\]" + re.escape(flag) + r' = "([^"]*)"', source)
-    assert match, f"{flag} default not found"
-    return match.group(1)
+    assert "oauth_model_aliases" in source
+    assert "workbuddy-ai-provider" in source
+    # The dead mmqz plugin keys must not reappear in the tool that used to
+    # write them.
+    assert "models_cn" not in source
+    assert "models_intl" not in source
 
 
-def test_cn_default_excludes_the_free_fallback() -> None:
-    assert _default("$ModelsCn") == "deepseek-v4.1-flash"
+def test_manifest_cn_plugin_pin_is_the_paid_primary_only() -> None:
+    routes = _manifest()["plugin_routes"]
+    cn = [r for r in routes if r["realm"] == "cn"]
+    assert len(cn) == 1
+    assert cn[0]["provider"] == "workbuddy-provider"
+    assert cn[0]["models"] == ["deepseek-v4.1-flash"]
+    assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
 
-def test_intl_default_keeps_the_free_fallback() -> None:
-    assert _default("$ModelsIntl") == (
-        "deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free"
-    )
+def test_manifest_intl_pins_are_the_two_served_upstream_ids() -> None:
+    routes = _manifest()["plugin_routes"]
+    intl = [r for r in routes if r["realm"] == "intl"]
+    assert len(intl) == 1
+    assert intl[0]["provider"] == "workbuddy-ai-provider"
+    # deepseek-v4.1-flash-sg keeps the bare client name; hy4flash-free is
+    # hy4free's upstream implementation id and must never surface bare.
+    assert intl[0]["models"] == ["deepseek-v4.1-flash-sg", "hy4flash-free"]
+    assert intl[0]["admission_lane"] == "workbuddy-intl-oauth"
 
 
-def test_realms_share_the_upstream_primary_on_separate_lanes() -> None:
-    cn = set(_default("$ModelsCn").split(","))
-    intl = set(_default("$ModelsIntl").split(","))
-    assert cn == {"deepseek-v4.1-flash"}
-    assert "deepseek-v4.1-flash" in intl
-    assert "hy4free" in intl and "hy4free" not in cn
-    assert cn & intl == {"deepseek-v4.1-flash"}
-
-
-def test_manifest_matches_the_pin_defaults() -> None:
-    routes = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    realms = {r["realm"]: set(r["models"]) for r in routes["plugin_routes"]}
-    assert realms["cn"] == set(_default("$ModelsCn").split(","))
-    assert realms["intl"] == set(_default("$ModelsIntl").split(","))
-    roles = {
-        route["realm"]: route["admission_lane"] for route in routes["plugin_routes"]
+def test_fork_bridge_maps_both_legacy_client_names() -> None:
+    aliases = _manifest()["oauth_model_aliases"]
+    # The legacy single-plugin channel must stay gone.
+    assert "workbuddy" not in aliases
+    entries = aliases["workbuddy-ai-provider"]
+    by_alias = {e["alias"]: e for e in entries}
+    assert set(by_alias) == {"deepseek-v4.1-flash-intl", "hy4free"}
+    # sg keeps its bare client name, so the intl alias is a fork alongside it.
+    assert by_alias["deepseek-v4.1-flash-intl"] == {
+        "name": "deepseek-v4.1-flash-sg",
+        "alias": "deepseek-v4.1-flash-intl",
+        "fork": True,
     }
-    assert roles == {
-        "cn": "workbuddy-oauth",
-        "intl": "workbuddy-intl-oauth",
-    }
+    # hy4flash-free must never surface bare: no fork means the alias
+    # replaces the upstream id in the client surface.
+    assert by_alias["hy4free"] == {"name": "hy4flash-free", "alias": "hy4free"}
 
 
 def test_hy4free_is_not_a_pooled_alias() -> None:
     """hy4free is exclusive to the independent INTL lane."""
 
-    routes = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    routes = _manifest()
     assert "hy4free" not in routes["pooled_aliases"]
-    holders = [r["realm"] for r in routes["plugin_routes"] if "hy4free" in r["models"]]
-    assert holders == ["intl"]
-
-
-def test_shared_upstream_pin_maps_to_the_intl_workbuddy_alias() -> None:
-    routes = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    # CN and INTL are separate client/admission identities. The shared
-    # upstream name is translated only in the INTL plugin realm; it is not a
-    # cross-provider pooled alias.
-    assert routes["pooled_aliases"] == []
-    alias_entries = routes["oauth_model_aliases"]["workbuddy"]
-    assert alias_entries == [
-        {
-            "name": "deepseek-v4.1-flash",
-            "alias": "deepseek-v4.1-flash-intl",
-            "fork": True,
-        }
+    holders = [
+        r["realm"] for r in routes["plugin_routes"] if "hy4flash-free" in r["models"]
     ]
-    intl = next(r for r in routes["plugin_routes"] if r["realm"] == "intl")
-    assert "deepseek-v4.1-flash" in intl["models"]
-    assert "deepseek-v4.1-flash-intl" not in intl["models"]
+    assert holders == ["intl"]
+    bare_holders = [
+        r["realm"] for r in routes["plugin_routes"] if "hy4free" in r["models"]
+    ]
+    assert bare_holders == []
+
+
+def test_legacy_workbuddy_provider_route_is_gone() -> None:
+    routes = _manifest()["plugin_routes"]
+    assert [r["provider"] for r in routes] == [
+        "workbuddy-provider",
+        "workbuddy-ai-provider",
+    ]
+    assert not re.search(
+        r'"provider":\s*"workbuddy"', MANIFEST.read_text(encoding="utf-8")
+    )

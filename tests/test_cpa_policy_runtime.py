@@ -439,19 +439,13 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             json.dumps(route_manifest["oauth_settings"]["codex"])
         )
         self.assertEqual(
-            config["oauth"]["model-alias"]["workbuddy"],
-            [
-                {
-                    "name": "deepseek-v4.1-flash",
-                    "alias": "deepseek-v4.1-flash-intl",
-                    "fork": True,
-                }
-            ],
+            config["oauth"]["model-alias"]["workbuddy-ai-provider"],
+            route_manifest["oauth_model_aliases"]["workbuddy-ai-provider"],
         )
-        config["oauth"]["model-alias"]["workbuddy"][0]["fork"] = False
+        config["oauth"]["model-alias"]["workbuddy-ai-provider"][0]["fork"] = False
         self.assertTrue(
             any(
-                "oauth.model-alias.workbuddy rename drift" in issue
+                "oauth.model-alias.workbuddy-ai-provider rename drift" in issue
                 for issue in policy["validate_config"](config)
             )
         )
@@ -521,7 +515,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["oauth_settings"]["workbuddy"].append(
+        manifest["oauth_settings"]["workbuddy-ai-provider"].append(
             {"name": "undeclared-model", "max-context-length": 1000}
         )
         issues = policy["_route_manifest_issues"](manifest)
@@ -530,7 +524,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["oauth_model_aliases"]["workbuddy"][0]["name"] = (
+        manifest["oauth_model_aliases"]["workbuddy-ai-provider"][0]["name"] = (
             "deepseek-v4.1-flash-unknown"
         )
         issues = policy["_route_manifest_issues"](manifest)
@@ -539,7 +533,12 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["oauth_model_aliases"]["workbuddy"][0]["fork"] = False
+        # 2026-11-17: a plugin-pin source may omit fork (replacement alias,
+        # hy4free rides on hy4flash-free); only non-plugin channels still
+        # require fork=true for independent admission state.
+        manifest["oauth_model_aliases"]["zhipu-plan"] = [
+            {"name": "glm-5.3", "alias": "glm-5.3-work"}
+        ]
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(
             any("fork=true" in issue for issue in issues),

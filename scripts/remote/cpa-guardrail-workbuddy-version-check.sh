@@ -1,42 +1,69 @@
 #!/bin/sh
-# Read-only WorkBuddy plugin-version gate. The dynamically loaded .so reports
-# its version only through the registration line, so container recreation
-# resets the bounded container-log evidence like the adjacent runtime checks.
+# Read-only WorkBuddy plugin-version gate. The dynamically loaded .so files
+# report their versions only through the registration lines, so container
+# recreation resets the bounded container-log evidence like the adjacent
+# runtime checks. 2026-11-17 luode0320 cutover: two plugins, two pins —
+# workbuddy-provider (CN) and workbuddy-ai-provider (INTL) — and the legacy
+# single-plugin workbuddy.so must be gone, or a stale mmqz artifact would
+# register alongside the pair and serve an unpinned surface.
 set -eu
 
 DIR="${CPA_DIR:-/opt/cliproxyapi}"
-EXPECTED=0.9.89
+EXPECTED_CN=0.21.27
+EXPECTED_INTL=0.1.40
 
-if [ ! -f "$DIR/plugins/workbuddy.so" ]; then
-  echo "workbuddy-version=LIVE_MISSING expected=$EXPECTED"
+if [ -f "$DIR/plugins/workbuddy.so" ]; then
+  echo "workbuddy-version=LEGACY_SO_PRESENT expected=removed"
+  exit 1
+fi
+if [ ! -f "$DIR/plugins/workbuddy-provider.so" ]; then
+  echo "workbuddy-version=LIVE_MISSING plugin=workbuddy-provider expected=$EXPECTED_CN"
+  exit 1
+fi
+if [ ! -f "$DIR/plugins/workbuddy-ai-provider.so" ]; then
+  echo "workbuddy-version=LIVE_MISSING plugin=workbuddy-ai-provider expected=$EXPECTED_INTL"
   exit 1
 fi
 
 started=$(docker inspect --format '{{.State.StartedAt}}' cli-proxy-api 2>/dev/null || true)
 if [ -z "$started" ]; then
-  echo "workbuddy-version=UNVERIFIED expected=$EXPECTED current_process_log=none"
+  echo "workbuddy-version=UNVERIFIED expected=$EXPECTED_CN+$EXPECTED_INTL current_process_log=none"
   exit 1
 fi
 since=$(date -u -d "$started" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
 if [ -z "$since" ]; then
-  echo "workbuddy-version=UNVERIFIED expected=$EXPECTED current_process_start_unreadable=true"
+  echo "workbuddy-version=UNVERIFIED expected=$EXPECTED_CN+$EXPECTED_INTL current_process_start_unreadable=true"
   exit 1
 fi
-registered=$(
+registered_cn=$(
   docker logs --since "$since" cli-proxy-api 2>&1 |
-    sed -n 's/.*plugin registered plugin_id=workbuddy .*version=\([^ ]*\).*/\1/p' |
+    sed -n 's/.*plugin registered plugin_id=workbuddy-provider .*version=\([^ ]*\).*/\1/p' |
+    tail -n 1
+)
+registered_intl=$(
+  docker logs --since "$since" cli-proxy-api 2>&1 |
+    sed -n 's/.*plugin registered plugin_id=workbuddy-ai-provider .*version=\([^ ]*\).*/\1/p' |
     tail -n 1
 )
 
-if [ -z "$registered" ]; then
-  echo "workbuddy-version=UNVERIFIED expected=$EXPECTED current_process_log=none"
+if [ -z "$registered_cn" ]; then
+  echo "workbuddy-version=UNVERIFIED plugin=workbuddy-provider expected=$EXPECTED_CN current_process_log=none"
+  exit 1
+fi
+# Report an observed wrong version before a missing sibling: the wrong pin is
+# the actionable signal when only one plugin registered.
+if [ "$registered_cn" != "$EXPECTED_CN" ]; then
+  echo "workbuddy-version=MISMATCH plugin=workbuddy-provider expected=$EXPECTED_CN got=$registered_cn"
+  exit 1
+fi
+if [ -z "$registered_intl" ]; then
+  echo "workbuddy-version=UNVERIFIED plugin=workbuddy-ai-provider expected=$EXPECTED_INTL current_process_log=none"
+  exit 1
+fi
+if [ "$registered_intl" != "$EXPECTED_INTL" ]; then
+  echo "workbuddy-version=MISMATCH plugin=workbuddy-ai-provider expected=$EXPECTED_INTL got=$registered_intl"
   exit 1
 fi
 
-if [ "$registered" != "$EXPECTED" ]; then
-  echo "workbuddy-version=MISMATCH expected=$EXPECTED got=$registered"
-  exit 1
-fi
-
-echo "workbuddy-version=$registered"
+echo "workbuddy-version=cn:$registered_cn intl:$registered_intl"
 echo "workbuddy-version-coverage=current_container_process_only; recreation resets the window; loading does not prove request behavior"

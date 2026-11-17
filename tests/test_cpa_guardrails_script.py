@@ -936,7 +936,10 @@ docker() {{
                     path.write_text(yaml.safe_dump(config), encoding="utf-8")
                 harness = (
                     "import sys\n"
-                    f"sys.argv = ['workbuddy-config', {str(path)!r}]\n" + script
+                    "sys.argv = ['workbuddy-config', "
+                    + repr(str(path))
+                    + "]\n"
+                    + script
                 )
                 return subprocess.run(
                     [sys.executable, "-c", harness],
@@ -946,175 +949,172 @@ docker() {{
                     check=False,
                 )
 
-        def plugin_section(**overrides: Any) -> dict[str, Any]:
-            deployed: dict[str, Any] = {
+        def bridge_entries() -> list[dict[str, Any]]:
+            return [
+                {
+                    "name": "deepseek-v4.1-flash-sg",
+                    "alias": "deepseek-v4.1-flash-intl",
+                    "fork": True,
+                },
+                {"name": "hy4flash-free", "alias": "hy4free"},
+            ]
+
+        def healthy_config(**overrides: Any) -> dict[str, Any]:
+            cn_section = {
                 "enabled": True,
                 "checkin_auto": True,
-                "tasks_auto": False,
+                "growth_auto": False,
                 "lifecycle_auto": False,
                 "token_keepalive": False,
-                "identity_switch_on_429": False,
-                "models_cn": "deepseek-v4.1-flash,hy4free",
-                "models_intl": "deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free",
+                "rotation_enabled": False,
                 "scheduler_mode": "credits",
-                "scheduler_priority_reclaim": True,
-                "login_region": "intl",
-                "account_max_concurrent": 1,
             }
-            deployed.update(overrides)
-            return deployed
+            cn_section.update(overrides)
+            return {
+                "plugins": {
+                    "configs": {
+                        "workbuddy-provider": cn_section,
+                        "workbuddy-ai-provider": {
+                            "enabled": True,
+                            "token_keepalive": False,
+                        },
+                    }
+                },
+                "oauth-model-alias": {"workbuddy-ai-provider": bridge_entries()},
+                "oauth-excluded-models": {
+                    "workbuddy-provider": ["glm-5.3"],
+                    "workbuddy-ai-provider": ["grok-4.7"],
+                },
+            }
 
-        healthy = run_case({"plugins": {"configs": {"workbuddy": plugin_section()}}})
+        healthy = run_case(healthy_config())
         self.assertEqual(healthy.returncode, 0, healthy.stderr)
         self.assertIn("workbuddy-config=OK", healthy.stdout)
         self.assertIn("workbuddy-checkin_auto=true", healthy.stdout)
-        self.assertIn("workbuddy-tasks_auto=false", healthy.stdout)
-        self.assertIn("workbuddy-models_cn=PINNED", healthy.stdout)
-        self.assertIn("workbuddy-models_intl=PINNED", healthy.stdout)
-        self.assertIn("workbuddy-login_region=intl state=ok", healthy.stdout)
-        self.assertIn("workbuddy-account_max_concurrent=1", healthy.stdout)
+        self.assertIn("workbuddy-growth_auto=false", healthy.stdout)
+        self.assertIn("workbuddy-rotation_enabled=false", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
-        self.assertIn("workbuddy-scheduler_priority_reclaim=true", healthy.stdout)
-        self.assertIn("workbuddy-identity_switch_on_429=false", healthy.stdout)
-        sticky_cn = run_case(
-            {"plugins": {"configs": {"workbuddy": plugin_section(login_region="cn")}}}
-        )
-        self.assertEqual(sticky_cn.returncode, 0, sticky_cn.stdout)
+        self.assertIn("workbuddy-intl-plugin=enabled keepalive=off", healthy.stdout)
+        self.assertIn("workbuddy-alias-bridge=OK intl+hy4free", healthy.stdout)
         self.assertIn(
-            "workbuddy-login_region=cn expected=intl warning=sticky_cn_new_logins_only",
-            sticky_cn.stdout,
-        )
-        unknown_region = run_case(
-            {
-                "plugins": {
-                    "configs": {
-                        "workbuddy": plugin_section(login_region="secret-region")
-                    }
-                }
-            }
-        )
-        self.assertEqual(unknown_region.returncode, 0, unknown_region.stdout)
-        self.assertIn(
-            "workbuddy-login_region=unknown expected=intl warning=unrecognized",
-            unknown_region.stdout,
-        )
-        self.assertNotIn("secret-region", unknown_region.stdout)
-        identity_switch = run_case(
-            {
-                "plugins": {
-                    "configs": {
-                        "workbuddy": plugin_section(identity_switch_on_429=True)
-                    }
-                }
-            }
-        )
-        self.assertNotEqual(identity_switch.returncode, 0)
-        self.assertIn(
-            "workbuddy-config=DRIFT identity_switch_on_429:true", identity_switch.stdout
+            "workbuddy-excluded-workbuddy-provider=PRESENT n=1", healthy.stdout
         )
 
-        # Panel PUT can drop this key independently of the concurrent-call
-        # cap. Upstream then defaults to off and bypasses the plugin picker.
-        for mode in (None, "off", "selected", "round-robin", True, ["credits"]):
+        legacy = run_case(
+            {
+                "plugins": {
+                    "configs": {
+                        "workbuddy": {"enabled": True},
+                        "workbuddy-provider": {"enabled": True},
+                    }
+                }
+            }
+        )
+        self.assertEqual(legacy.returncode, 1, legacy.stdout)
+        self.assertIn(
+            "workbuddy-config=DRIFT note=legacy_workbuddy_section_present",
+            legacy.stdout,
+        )
+
+        wiped = run_case(
+            {"plugins": {"configs": {"workbuddy-provider": {"enabled": True}}}}
+        )
+        self.assertEqual(wiped.returncode, 1, wiped.stdout)
+        self.assertIn("workbuddy-checkin_auto=ABSENT expected=true", wiped.stdout)
+        self.assertIn("workbuddy-growth_auto=ABSENT expected=false", wiped.stdout)
+        self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
+        self.assertIn("scheduler_mode:absent", wiped.stdout)
+        self.assertIn("intl_plugin:disabled_or_absent", wiped.stdout)
+        self.assertIn(
+            "oauth_model_alias:deepseek-v4.1-flash-intl,hy4free", wiped.stdout
+        )
+        self.assertIn("oauth_excluded_models:workbuddy-provider", wiped.stdout)
+
+        for mode in (None, "off", "selected", True, ["credits"]):
             with self.subTest(scheduler_mode=mode):
-                section_config = plugin_section(scheduler_mode=mode)
+                config = healthy_config()
+                section_config = config["plugins"]["configs"]["workbuddy-provider"]
                 if mode is None:
                     section_config.pop("scheduler_mode")
-                result = run_case(
-                    {"plugins": {"configs": {"workbuddy": section_config}}}
-                )
+                else:
+                    section_config["scheduler_mode"] = mode
+                result = run_case(config)
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn("scheduler_mode:", result.stdout)
                 self.assertIn("workbuddy-config=DRIFT", result.stdout)
 
-        # The 2026-10-24 panel incident shape: PUT replaced the section with
-        # whatever the partial form rendered. Absence must fail, not fall back
-        # to "off", because the upstream default for every switch is true.
-        wiped = run_case({"plugins": {"configs": {"workbuddy": {"enabled": True}}}})
-        self.assertEqual(wiped.returncode, 1, wiped.stdout)
-        self.assertIn("workbuddy-checkin_auto=ABSENT expected=true", wiped.stdout)
-        self.assertIn("workbuddy-tasks_auto=ABSENT expected=false", wiped.stdout)
-        self.assertIn("workbuddy-models_cn=UNPINNED", wiped.stdout)
-        self.assertIn("workbuddy-models_intl=UNPINNED", wiped.stdout)
-        self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
-        self.assertIn(
-            "workbuddy-scheduler_priority_reclaim=ABSENT expected=true",
-            wiped.stdout,
-        )
-        self.assertIn("scheduler_mode:absent", wiped.stdout)
-        self.assertIn("scheduler_priority_reclaim:absent", wiped.stdout)
-        self.assertIn("checkin_auto:absent", wiped.stdout)
-        self.assertIn(
-            "workbuddy-account_max_concurrent=ABSENT expected=1", wiped.stdout
-        )
-        self.assertIn("account_max_concurrent:absent", wiped.stdout)
+        growth_flip = run_case(healthy_config(growth_auto=True))
+        self.assertEqual(growth_flip.returncode, 1, growth_flip.stdout)
+        self.assertIn("workbuddy-growth_auto=true", growth_flip.stdout)
+        self.assertIn("workbuddy-config=DRIFT growth_auto:true", growth_flip.stdout)
 
-        uncapped = run_case(
+        rotation_flip = run_case(healthy_config(rotation_enabled=True))
+        self.assertEqual(rotation_flip.returncode, 1, rotation_flip.stdout)
+        self.assertIn(
+            "workbuddy-config=DRIFT rotation_enabled:true", rotation_flip.stdout
+        )
+
+        intl_dead = healthy_config()
+        intl_dead["plugins"]["configs"]["workbuddy-ai-provider"] = {
+            "enabled": False,
+            "token_keepalive": False,
+        }
+        result = run_case(intl_dead)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("workbuddy-intl-plugin=DISABLED expected=enabled", result.stdout)
+
+        intl_keepalive = healthy_config()
+        intl_keepalive["plugins"]["configs"]["workbuddy-ai-provider"][
+            "token_keepalive"
+        ] = True
+        result = run_case(intl_keepalive)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "workbuddy-intl-plugin=enabled keepalive=NOT_OFF expected=off",
+            result.stdout,
+        )
+
+        partial_bridge = healthy_config()
+        partial_bridge["oauth-model-alias"]["workbuddy-ai-provider"] = [
+            bridge_entries()[0]
+        ]
+        result = run_case(partial_bridge)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "workbuddy-alias-bridge=MISSING expected=intl+hy4free", result.stdout
+        )
+        self.assertIn("oauth_model_alias:hy4free", result.stdout)
+
+        legacy_channel = healthy_config()
+        legacy_channel["oauth-model-alias"]["workbuddy"] = [
+            {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash-intl"}
+        ]
+        result = run_case(legacy_channel)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "workbuddy-alias-legacy-channel=PRESENT note=remove", result.stdout
+        )
+        self.assertIn(
+            "oauth_model_alias:legacy_workbuddy_channel_present", result.stdout
+        )
+
+        no_exclusions = healthy_config()
+        del no_exclusions["oauth-excluded-models"]
+        result = run_case(no_exclusions)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "workbuddy-excluded-workbuddy-provider=ABSENT note=realm_discovery_reopened",
+            result.stdout,
+        )
+        self.assertIn("oauth_excluded_models:workbuddy-ai-provider", result.stdout)
+
+        disabled = run_case(
             {
                 "plugins": {
-                    "configs": {"workbuddy": plugin_section(account_max_concurrent=0)}
+                    "configs": {"workbuddy-provider": {"enabled": False}},
                 }
             }
         )
-        self.assertEqual(uncapped.returncode, 1, uncapped.stdout)
-        self.assertIn("workbuddy-account_max_concurrent=0", uncapped.stdout)
-        self.assertIn(
-            "workbuddy-config=DRIFT account_max_concurrent:0", uncapped.stdout
-        )
-
-        non_int_cap = run_case(
-            {
-                "plugins": {
-                    "configs": {"workbuddy": plugin_section(account_max_concurrent="1")}
-                }
-            }
-        )
-        self.assertEqual(non_int_cap.returncode, 1, non_int_cap.stdout)
-        self.assertIn(
-            "workbuddy-account_max_concurrent=NON_INT expected=1", non_int_cap.stdout
-        )
-
-        sticky_picker = run_case(
-            {
-                "plugins": {
-                    "configs": {
-                        "workbuddy": plugin_section(scheduler_priority_reclaim=False)
-                    }
-                }
-            }
-        )
-        self.assertEqual(sticky_picker.returncode, 1, sticky_picker.stdout)
-        self.assertIn(
-            "workbuddy-scheduler_priority_reclaim=false",
-            sticky_picker.stdout,
-        )
-        self.assertIn(
-            "workbuddy-config=DRIFT scheduler_priority_reclaim:false",
-            sticky_picker.stdout,
-        )
-
-        flipped = run_case(
-            {"plugins": {"configs": {"workbuddy": plugin_section(tasks_auto=True)}}}
-        )
-        self.assertEqual(flipped.returncode, 1, flipped.stdout)
-        self.assertIn("workbuddy-tasks_auto=true", flipped.stdout)
-        self.assertIn("workbuddy-config=DRIFT tasks_auto:true", flipped.stdout)
-
-        unpinned = run_case(
-            {
-                "plugins": {
-                    "configs": {
-                        "workbuddy": plugin_section(models_cn="", models_intl=None)
-                    }
-                }
-            }
-        )
-        self.assertEqual(unpinned.returncode, 1, unpinned.stdout)
-        self.assertIn("workbuddy-config=DRIFT", unpinned.stdout)
-        self.assertIn("models_cn:unpinned", unpinned.stdout)
-        self.assertIn("models_intl:unpinned", unpinned.stdout)
-
-        disabled = run_case({"plugins": {"configs": {"workbuddy": {"enabled": False}}}})
         self.assertEqual(disabled.returncode, 0, disabled.stderr)
         self.assertIn("workbuddy-config=DISABLED", disabled.stdout)
 
@@ -1805,12 +1805,13 @@ except Exception as exc:
         self.assertEqual(
             route_manifest["oauth_model_aliases"],
             {
-                "workbuddy": [
+                "workbuddy-ai-provider": [
                     {
-                        "name": "deepseek-v4.1-flash",
+                        "name": "deepseek-v4.1-flash-sg",
                         "alias": "deepseek-v4.1-flash-intl",
                         "fork": True,
-                    }
+                    },
+                    {"name": "hy4flash-free", "alias": "hy4free"},
                 ]
             },
         )
@@ -2668,7 +2669,9 @@ except Exception as exc:
         version_check = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("EXPECTED=0.9.89", version_check)
+        self.assertIn("EXPECTED_CN=0.21.27", version_check)
+        self.assertIn("EXPECTED_INTL=0.1.40", version_check)
+        self.assertIn("LEGACY_SO_PRESENT", version_check)
         self.assertIn("current_container_process_only", version_check)
         self.assertIn("loading does not prove request behavior", version_check)
         self.assertIn('"connect.ps1"', source)
@@ -2692,7 +2695,8 @@ except Exception as exc:
             fixture = Path(tmp) / "opt"
             plugins = fixture / "cliproxyapi" / "plugins"
             plugins.mkdir(parents=True)
-            (plugins / "workbuddy.so").write_bytes(b"fixture")
+            (plugins / "workbuddy-provider.so").write_bytes(b"fixture")
+            (plugins / "workbuddy-ai-provider.so").write_bytes(b"fixture")
             payload = (
                 "docker() {\n"
                 '  case "$1" in\n'
@@ -2705,14 +2709,15 @@ except Exception as exc:
             for mock_log, expected_code, marker in (
                 ("", 1, "current_process_log=none"),
                 (
-                    "plugin registered plugin_id=workbuddy version=0.9.84",
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.26",
                     1,
-                    "got=0.9.84",
+                    "got=0.21.26",
                 ),
                 (
-                    "plugin registered plugin_id=workbuddy version=0.9.89",
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.27\n"
+                    "plugin registered plugin_id=workbuddy-ai-provider version=0.1.40",
                     0,
-                    "workbuddy-version=0.9.89",
+                    "workbuddy-version=cn:0.21.27 intl:0.1.40",
                 ),
             ):
                 with self.subTest(mock_log=mock_log):

@@ -1,11 +1,21 @@
 #requires -Version 7
+# WorkBuddy client-surface bridge tool (2026-11-17 luode0320 cutover).
+# The legacy realm-pin plugin pins died with the mmqz single
+# plugin: the luode pair exposes dynamic catalogs narrowed by
+# oauth-excluded-models, and the legacy client names ride on the host-level
+# oauth-model-alias fork bridge. This tool keeps that bridge honest: it
+# reads the checked-in route manifest (scripts/remote/cpa_provider_routes.json)
+# as the single source of truth, audits the deployed config against it, and
+# under -Apply projects the manifest's workbuddy-ai-provider alias entries
+# into config.yaml (removing a leftover legacy "workbuddy" channel key).
+# The excluded-models surface itself is computed from the live dynamic
+# catalog at cutover time and only audited here — the
+# ==client-model-catalog== doctor gate stays the fail-closed enforcer.
 [CmdletBinding()]
 param(
   [ValidateSet("bwg")]
   [string]$Profile = "bwg",
   [string]$Config = "",
-  [string]$ModelsCn = "deepseek-v4.1-flash",
-  [string]$ModelsIntl = "deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free",
   [switch]$Apply
 )
 
@@ -14,28 +24,37 @@ $ErrorActionPreference = "Stop"
 
 Initialize-LaneScript -ScriptRoot $PSScriptRoot -Config $Config -AllowPyLauncher
 
-$applyLiteral = if ($Apply) { "1" } else { "0" }
-# Pin shape is validated whenever a value is provided, not only under -Apply:
-# these strings are interpolated into the remote bash payload in read mode
-# too, so an unvalidated value must never reach the projection. The payload's
-# python token check runs only after bash has already parsed the assignment,
-# so a value carrying quotes or substitutions would break out of
-# MODELS_CN="..." before any REFUSE could fire (vasma_kernel_update_cron.ps1
-# carries the same host-side rule).
-if ($ModelsCn -notmatch '^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$' -or
-    $ModelsIntl -notmatch '^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$') {
-  throw "-ModelsCn/-ModelsIntl must be comma-separated model tokens matching ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$; got cn='$ModelsCn' intl='$ModelsIntl'."
+$manifestPath = Join-Path $PSScriptRoot "remote\cpa_provider_routes.json"
+$manifestJson = Get-Content -Raw -Encoding utf8 $manifestPath
+$manifestB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifestJson))
+
+# Validate the manifest shape before anything is projected: the bridge is
+# exactly the two legacy client names on the workbuddy-ai-provider channel,
+# and the legacy workbuddy channel must stay gone.
+$manifest = $manifestJson | ConvertFrom-Json
+$aliasEntries = $manifest."oauth_model_aliases"."workbuddy-ai-provider"
+if (-not $aliasEntries -or $aliasEntries.Count -ne 2) {
+  throw "Manifest must carry exactly two workbuddy-ai-provider alias entries; got $($aliasEntries.Count)."
 }
+$aliases = @($aliasEntries | ForEach-Object { $_.alias })
+$expected = @("deepseek-v4.1-flash-intl", "hy4free")
+if (($aliases | Sort-Object) -join "," -ne ($expected | Sort-Object) -join ",") {
+  throw "Unexpected alias set: $($aliases -join ',')."
+}
+if ($manifest."oauth_model_aliases".PSObject.Properties.Name -contains "workbuddy") {
+  throw "Legacy workbuddy alias channel is still declared in the manifest."
+}
+
+$applyLiteral = if ($Apply) { "1" } else { "0" }
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 APPLY="__APPLY__"
-MODELS_CN="__MODELS_CN__"
-MODELS_INTL="__MODELS_INTL__"
-CONFIG="${WORKBUDDY_MODEL_PINS_CONFIG:-/opt/cliproxyapi/config.yaml}"
-LOCK_FILE="${WORKBUDDY_MODEL_PINS_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
-TRAFFIC_LOCK="${WORKBUDDY_MODEL_PINS_TRAFFIC_LOCK:-/run/cpa-admission/requests.lock}"
-BACKUP_ROOT="${WORKBUDDY_MODEL_PINS_BACKUP_ROOT:-/root}"
+MANIFEST_B64="__MANIFEST_B64__"
+CONFIG="${WORKBUDDY_ALIAS_BRIDGE_CONFIG:-/opt/cliproxyapi/config.yaml}"
+LOCK_FILE="${WORKBUDDY_ALIAS_BRIDGE_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
+TRAFFIC_LOCK="${WORKBUDDY_ALIAS_BRIDGE_TRAFFIC_LOCK:-/run/cpa-admission/requests.lock}"
+BACKUP_ROOT="${WORKBUDDY_ALIAS_BRIDGE_BACKUP_ROOT:-/root}"
 
 exec 9>"$LOCK_FILE"
 flock -n 9 || { echo "REFUSE cpa_busy maintenance lock held"; exit 1; }
@@ -53,7 +72,8 @@ if [ "$APPLY" = "1" ]; then
   echo "TRAFFIC_DRAIN=ACQUIRED"
 fi
 
-python3 - "$CONFIG" "$MODELS_CN" "$MODELS_INTL" "$APPLY" "$BACKUP_ROOT" <<'PY'
+python3 - "$CONFIG" "$APPLY" "$BACKUP_ROOT" "$MANIFEST_B64" <<'PY'
+import base64
 import hashlib
 import os
 import re
@@ -65,42 +85,25 @@ from pathlib import Path
 import yaml
 
 config_path = Path(sys.argv[1])
-desired_cn = sys.argv[2].strip()
-desired_intl = sys.argv[3].strip()
-apply = sys.argv[4] == "1"
-backup_root = Path(sys.argv[5])
+apply = sys.argv[2] == "1"
+backup_root = Path(sys.argv[3])
+manifest = yaml.safe_load(base64.b64decode(sys.argv[4]).decode("utf-8"))
 
-if not desired_cn or not desired_intl:
-    raise SystemExit("REFUSE models_cn and models_intl must be non-empty strings")
+entries = manifest["oauth_model_aliases"]["workbuddy-ai-provider"]
+if len(entries) != 2:
+    raise SystemExit("REFUSE manifest bridge must carry exactly two entries")
 
-for label, val in [("models_cn", desired_cn), ("models_intl", desired_intl)]:
-    parts = [p.strip() for p in val.split(",") if p.strip()]
-    if not parts:
-        raise SystemExit(f"REFUSE {label} has no valid model tokens")
-    for part in parts:
-        if not re.match(r"^[A-Za-z0-9._-]+$", part):
-            raise SystemExit(f"REFUSE {label} contains invalid model token: {part!r}")
+with config_path.open("r", encoding="utf-8", newline="") as handle:
+    before_text = handle.read()
+before_data = yaml.safe_load(before_text)
+if not isinstance(before_data, dict):
+    raise SystemExit("REFUSE config.yaml root must be a mapping")
 
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def parse(text):
-    value = yaml.safe_load(text)
-    if not isinstance(value, dict):
-        raise SystemExit("REFUSE config.yaml root must be a mapping")
-    return value
-
-
-def section(config):
-    plugins = config.get("plugins")
-    configs = plugins.get("configs") if isinstance(plugins, dict) else None
-    value = configs.get("workbuddy") if isinstance(configs, dict) else None
-    if not isinstance(value, dict) or value.get("enabled") is not True:
-        raise SystemExit("REFUSE WorkBuddy plugin is not enabled")
-    return value
-
+alias_section = before_data.get("oauth-model-alias")
+if not isinstance(alias_section, dict) or not alias_section:
+    raise SystemExit(
+        "REFUSE oauth-model-alias section missing; the cutover transaction owns its creation"
+    )
 
 def diff_paths(before, after, prefix=()):
     if type(before) is not type(after):
@@ -122,125 +125,133 @@ def diff_paths(before, after, prefix=()):
         return paths
     return [] if before == after else [prefix]
 
-
-with config_path.open("r", encoding="utf-8", newline="") as handle:
-    before_text = handle.read()
-before_data = parse(before_text)
-before_section = section(before_data)
-current_cn = str(before_section.get("models_cn", "")).strip()
-current_intl = str(before_section.get("models_intl", "")).strip()
-
-if current_cn == desired_cn and current_intl == desired_intl:
-    print(f"WORKBUDDY_MODEL_PINS=ALREADY_APPLIED cn={desired_cn} intl={desired_intl}")
+current = alias_section.get("workbuddy-ai-provider")
+legacy_present = "workbuddy" in alias_section
+already = (
+    isinstance(current, list)
+    and len(current) == len(entries)
+    and sorted(map(lambda e: (e.get("name"), e.get("alias"), e.get("fork", False)), current))
+    == sorted(map(lambda e: (e.get("name"), e.get("alias"), bool(e.get("fork"))), entries))
+    and not legacy_present
+)
+if already:
+    print("WORKBUDDY_ALIAS_BRIDGE=ALREADY_APPLIED aliases=deepseek-v4.1-flash-intl+hy4free")
     raise SystemExit(0)
 
-updated_text = before_text
+# Section-level text surgery: locate the oauth-model-alias top-level key and
+# the workbuddy-ai-provider channel inside it, replace that channel's item
+# block with the manifest shape, and drop a legacy workbuddy channel if one
+# lingers. Everything else must stay byte-identical.
+header = re.search(r"(?m)^oauth-model-alias:[ \t]*(?:#.*)?\r?$", before_text)
+if not header:
+    raise SystemExit("REFUSE oauth-model-alias header line not found")
+lines = before_text.splitlines(keepends=True)
+section_start = None
+for index, line in enumerate(lines):
+    if re.match(r"^oauth-model-alias:", line):
+        section_start = index
+        break
+section_end = len(lines)
+for index in range(section_start + 1, len(lines)):
+    if re.match(r"^[A-Za-z0-9_-]+:", lines[index]):
+        section_end = index
+        break
+section_lines = lines[section_start:section_end]
 
-if current_cn != desired_cn:
-    pattern_cn = re.compile(
-        r"(?m)^(?P<prefix>[ \t]+models_cn:[ \t]*)"
-        r"(?P<value>[^\r\n#]+?)"
-        r"(?P<suffix>[ \t]*(?:#.*)?)\r?$"
-    )
-    matches_cn = list(pattern_cn.finditer(updated_text))
-    if len(matches_cn) != 1:
-        raise SystemExit(
-            f"REFUSE expected exactly one models_cn line, found {len(matches_cn)}"
-        )
-    updated_text = (
-        updated_text[: matches_cn[0].start("value")]
-        + desired_cn
-        + updated_text[matches_cn[0].end("value") :]
-    )
+def channel_span(name):
+    begin = None
+    for offset, line in enumerate(section_lines):
+        if re.match(r"^  " + re.escape(name) + r":", line):
+            begin = offset
+            break
+    if begin is None:
+        return None
+    finish = len(section_lines)
+    for offset in range(begin + 1, len(section_lines)):
+        if re.match(r"^  [A-Za-z0-9_-]+:", section_lines[offset]):
+            finish = offset
+            break
+    return begin, finish
 
-if current_intl != desired_intl:
-    pattern_intl = re.compile(
-        r"(?m)^(?P<prefix>[ \t]+models_intl:[ \t]*)"
-        r"(?P<value>[^\r\n#]+?)"
-        r"(?P<suffix>[ \t]*(?:#.*)?)\r?$"
-    )
-    matches_intl = list(pattern_intl.finditer(updated_text))
-    if len(matches_intl) != 1:
-        raise SystemExit(
-            f"REFUSE expected exactly one models_intl line, found {len(matches_intl)}"
-        )
-    updated_text = (
-        updated_text[: matches_intl[0].start("value")]
-        + desired_intl
-        + updated_text[matches_intl[0].end("value") :]
-    )
+rendered = (
+    yaml.safe_dump(entries, default_flow_style=False, sort_keys=True, allow_unicode=True)
+    .strip("\n")
+    .splitlines()
+)
+if section_lines and not section_lines[-1].endswith("\n"):
+    section_lines[-1] = section_lines[-1] + "\n"
+new_channel = ["  workbuddy-ai-provider:\n"] + [
+    "    " + line + "\n" for line in rendered
+]
+spans = []
+ai_span = channel_span("workbuddy-ai-provider")
+if ai_span:
+    spans.append((ai_span[0], ai_span[1], new_channel))
+else:
+    # Channel missing entirely: append it at the end of the section.
+    spans.append((len(section_lines), len(section_lines), new_channel))
+legacy_span = channel_span("workbuddy")
+if legacy_span:
+    spans.append((legacy_span[0], legacy_span[1], []))
+spans.sort()
+rebuilt: list[str] = []
+cursor = 0
+for begin, finish, replacement in spans:
+    if begin < cursor:
+        raise SystemExit("REFUSE overlapping channel spans during surgery")
+    rebuilt.extend(section_lines[cursor:begin])
+    rebuilt.extend(replacement)
+    cursor = finish
+rebuilt.extend(section_lines[cursor:])
+updated_lines = lines[:section_start] + rebuilt + lines[section_end:]
+updated_text = "".join(updated_lines)
 
-after_data = parse(updated_text)
-after_section = section(after_data)
-expected_paths = set()
-if current_cn != desired_cn:
-    expected_paths.add(("plugins", "configs", "workbuddy", "models_cn"))
-if current_intl != desired_intl:
-    expected_paths.add(("plugins", "configs", "workbuddy", "models_intl"))
-
+after_data = yaml.safe_load(updated_text)
+expected_paths = {("oauth-model-alias", "workbuddy-ai-provider")}
+if legacy_present:
+    expected_paths.add(("oauth-model-alias", "workbuddy"))
 actual_diff = set(diff_paths(before_data, after_data))
 if actual_diff != expected_paths:
-    raise SystemExit(f"REFUSE unexpected YAML mutation paths={actual_diff!r}")
-if after_section.get("models_cn") != desired_cn or after_section.get("models_intl") != desired_intl:
-    raise SystemExit("REFUSE post-parse model pin values mismatch desired")
+    raise SystemExit(f"REFUSE unexpected YAML mutation paths={sorted(actual_diff)!r}")
+bridged = after_data["oauth-model-alias"]["workbuddy-ai-provider"]
+if sorted(e["alias"] for e in bridged) != sorted(e["alias"] for e in entries):
+    raise SystemExit("REFUSE post-parse alias values mismatch the manifest")
+if "workbuddy" in after_data["oauth-model-alias"]:
+    raise SystemExit("REFUSE legacy workbuddy channel survived the surgery")
 
 if not apply:
     print(
-        "WORKBUDDY_MODEL_PINS_DRY_RUN "
-        f"current_cn={current_cn} target_cn={desired_cn} "
-        f"current_intl={current_intl} target_intl={desired_intl}"
+        "WORKBUDDY_ALIAS_BRIDGE_DRY_RUN "
+        f"current_aliases={sorted(e['alias'] for e in (current or []))} "
+        f"target_aliases={sorted(e['alias'] for e in entries)} "
+        f"legacy_channel_present={str(legacy_present).lower()}"
     )
     raise SystemExit(0)
 
 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-backup_dir = backup_root / f"cpa-workbuddy-model-pins-backup-{stamp}"
+backup_dir = backup_root / f"cpa-workbuddy-alias-bridge-backup-{stamp}"
 backup_dir.mkdir(parents=True, mode=0o700)
 os.chmod(backup_dir, 0o700)
 backup_path = backup_dir / "config.yaml"
 shutil.copy2(config_path, backup_path)
-os.chmod(backup_path, 0o600)
-backup_bytes = config_path.read_bytes()
 
-try:
-    with config_path.open("r+", encoding="utf-8", newline="") as handle:
-        handle.seek(0)
-        handle.write(updated_text)
-        handle.truncate()
-        handle.flush()
-        os.fsync(handle.fileno())
-    after_bytes = config_path.read_bytes()
-    verify_data = parse(after_bytes.decode("utf-8"))
-    verify_section = section(verify_data)
-    if verify_section.get("models_cn") != desired_cn or verify_section.get("models_intl") != desired_intl:
-        raise RuntimeError("post-write WorkBuddy models pin mismatch")
-except Exception:
-    with config_path.open("r+", encoding="utf-8", newline="") as handle:
-        handle.seek(0)
-        handle.truncate()
-        handle.write(backup_bytes.decode("utf-8"))
-        handle.flush()
-        os.fsync(handle.fileno())
-    raise
+temp_path = config_path.with_name(".workbuddy-alias-bridge.tmp")
+with temp_path.open("w", encoding="utf-8", newline="") as handle:
+    handle.write(updated_text)
+os.chmod(temp_path, 0o600)
+os.replace(temp_path, config_path)
 
-print(
-    "WORKBUDDY_MODEL_PINS=APPLIED "
-    f"cn={desired_cn} intl={desired_intl}"
-)
-print(f"SHA256_BEFORE={digest(before_text.encode('utf-8'))}")
-print(f"SHA256_AFTER={digest(after_bytes)}")
-print(f"BACKUP={backup_path}")
+with config_path.open("rb") as handle:
+    written = handle.read()
+if hashlib.sha256(written).hexdigest() != hashlib.sha256(updated_text.encode("utf-8")).hexdigest():
+    raise SystemExit("REFUSE post-write digest mismatch")
+print(f"WORKBUDDY_ALIAS_BRIDGE=APPLIED backup={backup_path} aliases=deepseek-v4.1-flash-intl+hy4free")
 PY
-
-if [ "$APPLY" = "1" ]; then
-  sleep 3
-  echo "CONFIG_RELOAD_SETTLE=3s"
-fi
-'@.Replace("__APPLY__", $applyLiteral).Replace("__MODELS_CN__", $ModelsCn).Replace("__MODELS_INTL__", $ModelsIntl)
-
-Invoke-LauncherRemoteCommand `
-  -Python $script:Python `
-  -ProjectRoot $repoRoot `
-  -Config $Config `
-  -Profile $Profile `
-  -Command $remoteCommand `
-  -RemoteTempPrefix "workbuddy-model-pins"
+'@
+$remoteCommand = $remoteCommand.Replace("__APPLY__", $applyLiteral).Replace("__MANIFEST_B64__", $manifestB64)
+if ($remoteCommand -match "__APPLY__|__MANIFEST_B64__") {
+  throw "Unfilled WorkBuddy alias-bridge placeholders."
+}
+Invoke-LauncherRemoteCommand -Python $python -ProjectRoot $repoRoot `
+  -Config $config -Profile $Profile -Command $remoteCommand `
+  -IdleTimeoutSeconds 120 -HardTimeoutSeconds 300

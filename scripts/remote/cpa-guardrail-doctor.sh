@@ -1582,30 +1582,36 @@ else:
     print("deepseek-live-opencode-models=alias-only")
 
 auth_dir = Path(sys.argv[3])
-names = sorted(
+# 2026-11-17 luode0320 cutover: INTL auth files carry the workbuddyai-
+# prefix (the workbuddy-ai-provider plugin's own naming rule); CN files keep
+# workbuddy-<uid>.json. A leftover workbuddy-intl- file means the rename
+# half of the credential migration did not complete.
+cn = sorted(
     path.name
     for path in auth_dir.glob("workbuddy-*.json")
     if path.is_file()
 )
-cn = [name for name in names if not name.startswith("workbuddy-intl-")]
-intl = [name for name in names if name.startswith("workbuddy-intl-")]
-other = len(names) - len(cn) - len(intl)
-print(f"workbuddy-realm-counts=cn:{len(cn)},intl:{len(intl)},other:{other}")
-if cn and intl:
-    # Serving order is CN first (user-mandated 2026-11-08, re-flip of the
-    # 2026-11-02 mandate): CN accounts use the bare "workbuddy-<uuid>.json"
-    # naming (hex uuid first char sorts below "i") while INTL keeps the
-    # "workbuddy-intl-" marker, so lexicographic candidate order (also the
-    # sticky picker's fallback chain) drains CN credit-billed accounts before
-    # the INTL shared-bucket daily quota. "workbuddy-tier2-" names are
-    # legacy-INTL-first-era CN naming and still classify as cn here.
-    if max(cn) < min(intl):
-        print("workbuddy-realm-order=CN_THEN_INTL")
-    else:
-        print("workbuddy-realm-order=DRIFT")
-        failed = True
+intl = sorted(
+    path.name
+    for path in auth_dir.glob("workbuddyai-*.json")
+    if path.is_file()
+)
+legacy = sorted(
+    path.name
+    for path in auth_dir.glob("workbuddy-intl-*.json")
+    if path.is_file()
+)
+cn = [name for name in cn if not name.startswith("workbuddy-intl-")]
+print(f"workbuddy-realm-counts=cn:{len(cn)},intl:{len(intl)},legacy:{len(legacy)}")
+if legacy:
+    print("workbuddy-realm-rename=DRIFT note=workbuddy_intl_files_remaining")
+    failed = True
 else:
-    print("workbuddy-realm-order=PARTIAL note=sticky_pool_order_not_provable")
+    print("workbuddy-realm-rename=COMPLETE")
+# The old CN_THEN_INTL lexicographic order gate pinned the single-plugin
+# shared candidate chain (INTL shared-bucket quota drain). Each realm now
+# runs its own plugin scheduler, so the cross-pool order has no consumer.
+print("workbuddy-realm-order=PLUGIN_LOCAL note=each_realm_has_its_own_scheduler")
 
 if not failed:
     print("deepseek-provider-order=WB_BARE_ONLY_OC_ALIAS")
@@ -3023,16 +3029,17 @@ else
   mark_fail workbuddy-version
 fi
 echo "==workbuddy-config=="
-# The 2026-10-24 panel incident proved that PUT
-# /v8/management/config/plugins/configs/workbuddy replaces the whole plugin
-# section (PATCH merges) and the config differ never covers plugins.*, so a
-# partial panel form silently drops keys with no change-log trace. Lost model
-# pins eventually surface as MODEL_IDS_UNKNOWN in ==client-model-catalog==,
-# but only after a /v1/models request triggers realm discovery; the
-# automation switches have no indirect signal at all. usage_config.go
-# pre-initializes all four next*Auto flags to true, so a wiped section
-# silently re-enables the growth-center, lifecycle and keepalive loops this
-# deployment runs with off. This gate reads the deployed policy directly.
+# The 2026-10-24 panel incident proved that PUT management config calls
+# replace a whole plugin section, and the config differ never covers
+# plugins.*, so a partial panel form silently drops keys with no change-log
+# trace. 2026-11-17 luode0320 cutover: the single mmqz "workbuddy" section
+# became workbuddy-provider (CN) + workbuddy-ai-provider (INTL). The client
+# surface rides on the host-level fork-alias bridge and the per-provider
+# oauth-excluded-models narrowing; the ==client-model-catalog== gate proves
+# the actual surface, this gate pins the deployed policy directly: the
+# legacy section must be gone, the luode default-on loops stay explicitly
+# off, the INTL plugin stays enabled with keepalive off, and the alias
+# bridge entries the admission lane entry points depend on must exist.
 python3 - "$DIR/config.yaml" <<'PY'
 import sys
 import yaml
@@ -3046,30 +3053,26 @@ except Exception as exc:
 
 plugins = config.get("plugins") if isinstance(config, dict) else None
 configs = plugins.get("configs") if isinstance(plugins, dict) else None
-section = configs.get("workbuddy") if isinstance(configs, dict) else None
+if not isinstance(configs, dict):
+    print("workbuddy-config=UNREADABLE note=plugins_configs_missing")
+    raise SystemExit(1)
+if "workbuddy" in configs:
+    print("workbuddy-config=DRIFT note=legacy_workbuddy_section_present")
+    raise SystemExit(1)
+section = configs.get("workbuddy-provider")
+intl_section = configs.get("workbuddy-ai-provider")
 if not isinstance(section, dict) or not section.get("enabled"):
     print("workbuddy-config=DISABLED note=gate_applies_only_when_enabled")
     raise SystemExit(0)
 
-# Pin presence is asserted, not the pinned value: the value is enforced where
-# it is consumed (admission lane model list, ==client-model-catalog==), and
-# restating it here would create a second source of truth to keep in sync.
-# Require explicit switches: absent background keys revert to true upstream.
-# Pin the opt-in identity switch off as well: 429 must not change quota lanes.
 SWITCHES = (
     ("checkin_auto", True),
-    ("tasks_auto", False),
+    ("growth_auto", False),
     ("lifecycle_auto", False),
     ("token_keepalive", False),
-    ("identity_switch_on_429", False),
-    ("scheduler_priority_reclaim", True),
+    ("rotation_enabled", False),
 )
 drift = []
-# Preserve the deployed sticky/failover picker. A partial panel PUT can
-# silently drop this field; the plugin default is off (host delegation),
-# which loses its cached exhaustion checks. selected is a different policy,
-# not a substitute for the current credits pool. Do not echo unknown values
-# from configuration: diagnostics must remain redaction-first.
 mode = section.get("scheduler_mode")
 if mode == "credits":
     print("workbuddy-scheduler_mode=credits")
@@ -3092,66 +3095,57 @@ for key, expected in SWITCHES:
     if value != expected:
         drift.append(f"{key}:{str(value).lower()}")
 
-# Per-credential in-flight cap (2026-10-26, plugin 0.9.70): keeps parallel
-# big-context conversations off one credential, the fastest path to a
-# model-scoped 6004 (2026-10-25 triple-credential incident). Absent means the
-# upstream default 0 = disabled, so absence is drift, not "off".
-cap = section.get("account_max_concurrent")
-if isinstance(cap, bool) or not isinstance(cap, int):
-    drift.append(
-        f"account_max_concurrent:{'absent' if cap is None else 'non-int'}"
-    )
-    print(
-        "workbuddy-account_max_concurrent="
-        + ("ABSENT" if cap is None else "NON_INT")
-        + " expected=1"
-    )
+if not isinstance(intl_section, dict) or not intl_section.get("enabled"):
+    drift.append("intl_plugin:disabled_or_absent")
+    print("workbuddy-intl-plugin=DISABLED expected=enabled")
+elif intl_section.get("token_keepalive") is False:
+    print("workbuddy-intl-plugin=enabled keepalive=off")
 else:
-    print(f"workbuddy-account_max_concurrent={cap}")
-    if cap != 1:
-        drift.append(f"account_max_concurrent:{cap}")
+    drift.append("intl_plugin:token_keepalive_not_false")
+    print("workbuddy-intl-plugin=enabled keepalive=NOT_OFF expected=off")
 
-for realm in ("models_cn", "models_intl"):
-    pin = section.get(realm)
-    if isinstance(pin, str) and pin.strip():
-        print(f"workbuddy-{realm}=PINNED")
-    else:
-        drift.append(f"{realm}:unpinned")
-        print(f"workbuddy-{realm}=UNPINNED note=pin_loss_reopens_realm_discovery")
-
-# Sticky new-login realm: a leftover cn makes future logins enter the CN
-# realm, but it is legitimately toggled during a CN login flow, so it is
-# reported as an explicit warning instead of gated. Never echo an unknown
-# config value: diagnostics must remain redaction-first.
-region = section.get("login_region")
-if isinstance(region, str) and region.strip():
-    normalized_region = region.strip().lower()
-    if normalized_region == "intl":
-        print("workbuddy-login_region=intl state=ok")
-    elif normalized_region == "cn":
-        print(
-            "workbuddy-login_region=cn expected=intl "
-            "warning=sticky_cn_new_logins_only"
-        )
-    else:
-        print("workbuddy-login_region=unknown expected=intl warning=unrecognized")
+alias_map = config.get("oauth-model-alias") if isinstance(config, dict) else None
+raw_entries = alias_map.get("workbuddy-ai-provider") if isinstance(alias_map, dict) else None
+bridge = {}
+if isinstance(raw_entries, list):
+    for entry in raw_entries:
+        if isinstance(entry, dict) and isinstance(entry.get("alias"), str):
+            bridge[entry["alias"]] = entry.get("name")
+expect_bridge = {
+    "deepseek-v4.1-flash-intl": "deepseek-v4.1-flash-sg",
+    "hy4free": "hy4flash-free",
+}
+missing = sorted(a for a, name in expect_bridge.items() if bridge.get(a) != name)
+if missing:
+    drift.append("oauth_model_alias:" + ",".join(missing))
+    print("workbuddy-alias-bridge=MISSING expected=intl+hy4free")
 else:
-    print("workbuddy-login_region=absent expected=intl warning=missing")
+    print("workbuddy-alias-bridge=OK intl+hy4free")
+if isinstance(alias_map, dict) and "workbuddy" in alias_map:
+    drift.append("oauth_model_alias:legacy_workbuddy_channel_present")
+    print("workbuddy-alias-legacy-channel=PRESENT note=remove")
+
+excluded = config.get("oauth-excluded-models") if isinstance(config, dict) else None
+for provider_key in ("workbuddy-provider", "workbuddy-ai-provider"):
+    lst = excluded.get(provider_key) if isinstance(excluded, dict) else None
+    if isinstance(lst, list) and lst:
+        print(f"workbuddy-excluded-{provider_key}=PRESENT n={len(lst)}")
+    else:
+        drift.append(f"oauth_excluded_models:{provider_key}")
+        print(f"workbuddy-excluded-{provider_key}=ABSENT note=realm_discovery_reopened")
 
 if drift:
     print("workbuddy-config=DRIFT " + ",".join(drift))
     raise SystemExit(1)
 print("workbuddy-config=OK")
 print(
-    "workbuddy-config-coverage=pins_block_realm_discovery_spill; "
-    "absent_background_switch_reconfigures_to_upstream_default_true; "
-    "policy_20261027=identity_switch_on_429_false_explicit; "
-    "policy_20261104=scheduler_priority_reclaim_true_first_live; "
-    "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
-    "policy_20261026=account_max_concurrent_1_one_inflight_per_credential; "
-    "login_region_expected_intl_except_during_cn_login; "
-    "scheduler_mode_credits_preserves_sticky_failover_not_credit_max_ranking; "
-    "pin_value_enforced_by_admission_and_catalog_gates_not_here"
+    "workbuddy-config-coverage=legacy_section_absent; "
+    "luode_switches_checkin_on_growth_lifecycle_keepalive_rotation_off; "
+    "scheduler_mode_credits; intl_plugin_enabled_keepalive_off; "
+    "alias_bridge_deepseek_intl_and_hy4free; "
+    "legacy_alias_channel_absent; "
+    "excluded_surface_present_both_providers; "
+    "surface_value_enforced_by_client_model_catalog_gate_not_here"
 )
 PY
 WORKBUDDY_CONFIG_RC=$?

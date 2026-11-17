@@ -196,7 +196,6 @@ class ScriptValidationMixin:
         '.Replace("__APPLY__", $applyLiteral)',
     )
     LANE_OPT_IN_FORM: dict[str, str] = {
-        "cpa_workbuddy_login_region": "python",
         "cpa_workbuddy_model_pins": "python",
     }
 
@@ -210,7 +209,6 @@ class ScriptValidationMixin:
             # print SHA256_BEFORE/SHA256_AFTER. They never emit the
             # ROLLBACK_VERIFIED marker, so pinning that literal here would
             # assert a shape the lane deliberately does not have.
-            "cpa_workbuddy_login_region",
             "cpa_workbuddy_model_pins",
         }
     )

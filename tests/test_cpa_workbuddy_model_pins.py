@@ -1,7 +1,14 @@
-"""Tests for the remote mutation embedded in cpa_workbuddy_model_pins.ps1."""
+"""Tests for the remote mutation embedded in cpa_workbuddy_model_pins.ps1.
+
+2026-11-17 luode0320 cutover: the tool no longer writes plugin model pins
+(the mmqz keys are gone); it projects the route manifest's
+workbuddy-ai-provider fork-alias bridge into config.yaml's
+oauth-model-alias section and removes a leftover legacy workbuddy channel.
+"""
 
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 import sys
@@ -11,65 +18,49 @@ from typing import Any
 import yaml
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "cpa_workbuddy_model_pins.ps1"
+MANIFEST = Path(__file__).parents[1] / "scripts" / "remote" / "cpa_provider_routes.json"
+
+BRIDGE_ENTRIES = [
+    {
+        "name": "deepseek-v4.1-flash-sg",
+        "alias": "deepseek-v4.1-flash-intl",
+        "fork": True,
+    },
+    {"name": "hy4flash-free", "alias": "hy4free"},
+]
 
 
 def _python_block() -> str:
     source = SCRIPT.read_text(encoding="utf-8")
-    marker = 'python3 - "$CONFIG" "$MODELS_CN" "$MODELS_INTL" "$APPLY" "$BACKUP_ROOT" <<\'PY\'\n'
+    marker = 'python3 - "$CONFIG" "$APPLY" "$BACKUP_ROOT" "$MANIFEST_B64" <<\'PY\'\n'
     return source.split(marker, 1)[1].split("\nPY\n", 1)[0]
 
 
-def test_host_side_validates_model_pins_before_projection() -> None:
-    """The PS layer must refuse malformed pin values before the payload.
-
-    The remote python token check only runs after bash has parsed the
-    assignment, so a value carrying quotes or substitutions would break out
-    of MODELS_CN="..." before any REFUSE could fire. Mirror of the
-    vasma_kernel_update_cron.ps1 host-side pin rule.
-    """
-    source = SCRIPT.read_text(encoding="utf-8")
-    assert "-notmatch '^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$'" in source
-    assert 'throw "-ModelsCn/-ModelsIntl must be comma-separated model tokens' in source
+def _manifest_b64() -> str:
+    return base64.b64encode(MANIFEST.read_bytes()).decode("ascii")
 
 
 def _run(
     tmp_path: Path,
+    config: dict[str, Any],
     *,
-    models_cn: str,
-    models_intl: str,
     apply: bool,
-    mutate: dict[str, Any] | None = None,
+    manifest_b64: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    config: dict[str, Any] = {
-        "routing": {"retry": {"request-retry": 0}},
-        "plugins": {
-            "configs": {
-                "workbuddy": {
-                    "enabled": True,
-                    "login_region": "intl",
-                    "models_cn": "deepseek-v4.1-flash",
-                    "models_intl": "deepseek-v4.1-flash,deepseek-v4.1-flash-sg",
-                }
-            }
-        },
-    }
-    if mutate:
-        config["plugins"]["configs"]["workbuddy"].update(mutate)
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     backup_root = tmp_path / "backups"
     env = os.environ.copy()
-    env["WORKBUDDY_MODEL_PINS_BACKUP_ROOT"] = str(backup_root)
+    env["WORKBUDDY_ALIAS_BRIDGE_BACKUP_ROOT"] = str(backup_root)
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             _python_block(),
             str(config_path),
-            models_cn,
-            models_intl,
             "1" if apply else "0",
             str(backup_root),
+            manifest_b64 if manifest_b64 is not None else _manifest_b64(),
         ],
         capture_output=True,
         text=True,
@@ -80,88 +71,73 @@ def _run(
     return result, config_path, backup_root
 
 
+def _config(
+    *,
+    alias_channel: Any = None,
+    plugins: Any = None,
+) -> dict[str, Any]:
+    if alias_channel is None:
+        alias_channel = {"workbuddy": BRIDGE_ENTRIES[:1]}
+    config: dict[str, Any] = {
+        "routing": {"retry": {"request-retry": 0}},
+        "plugins": plugins
+        if plugins is not None
+        else {
+            "configs": {
+                "workbuddy-provider": {"enabled": True},
+                "workbuddy-ai-provider": {"enabled": True},
+            }
+        },
+        "oauth-model-alias": alias_channel,
+    }
+    return config
+
+
 def test_dry_run_reports_target_without_mutation(tmp_path: Path) -> None:
-    result, config_path, backup_root = _run(
-        tmp_path,
-        models_cn="deepseek-v4.1-flash,hy4free",
-        models_intl="deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free",
-        apply=False,
-    )
+    result, config_path, backup_root = _run(tmp_path, _config(), apply=False)
     assert result.returncode == 0, result.stderr
-    assert "WORKBUDDY_MODEL_PINS_DRY_RUN" in result.stdout
-    assert "target_cn=deepseek-v4.1-flash,hy4free" in result.stdout
-    assert (
-        "target_intl=deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free"
-        in result.stdout
-    )
+    assert "WORKBUDDY_ALIAS_BRIDGE_DRY_RUN" in result.stdout
+    assert "legacy_channel_present=true" in result.stdout
     assert not backup_root.exists()
 
     loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    wb = loaded["plugins"]["configs"]["workbuddy"]
-    assert wb["models_cn"] == "deepseek-v4.1-flash"
-    assert wb["models_intl"] == "deepseek-v4.1-flash,deepseek-v4.1-flash-sg"
+    assert "workbuddy" in loaded["oauth-model-alias"]
+    assert "workbuddy-ai-provider" not in loaded["oauth-model-alias"]
 
 
 def test_already_applied_exits_cleanly(tmp_path: Path) -> None:
     result, _, backup_root = _run(
         tmp_path,
-        models_cn="deepseek-v4.1-flash",
-        models_intl="deepseek-v4.1-flash,deepseek-v4.1-flash-sg",
+        _config(alias_channel={"workbuddy-ai-provider": BRIDGE_ENTRIES}),
         apply=True,
     )
     assert result.returncode == 0, result.stderr
-    assert "WORKBUDDY_MODEL_PINS=ALREADY_APPLIED" in result.stdout
+    assert "WORKBUDDY_ALIAS_BRIDGE=ALREADY_APPLIED" in result.stdout
     assert not backup_root.exists()
 
 
-def test_apply_updates_config_and_leaves_backup(tmp_path: Path) -> None:
-    result, config_path, backup_root = _run(
-        tmp_path,
-        models_cn="deepseek-v4.1-flash,hy4free",
-        models_intl="deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free",
-        apply=True,
-    )
+def test_apply_swaps_channel_drops_legacy_and_leaves_backup(tmp_path: Path) -> None:
+    result, config_path, backup_root = _run(tmp_path, _config(), apply=True)
     assert result.returncode == 0, result.stderr
-    assert "WORKBUDDY_MODEL_PINS=APPLIED" in result.stdout
-    assert "cn=deepseek-v4.1-flash,hy4free" in result.stdout
-    assert "intl=deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free" in result.stdout
+    assert "WORKBUDDY_ALIAS_BRIDGE=APPLIED" in result.stdout
+    assert "aliases=deepseek-v4.1-flash-intl+hy4free" in result.stdout
 
     loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    wb = loaded["plugins"]["configs"]["workbuddy"]
-    assert wb["models_cn"] == "deepseek-v4.1-flash,hy4free"
-    assert wb["models_intl"] == "deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free"
+    assert "workbuddy" not in loaded["oauth-model-alias"]
+    assert loaded["oauth-model-alias"]["workbuddy-ai-provider"] == BRIDGE_ENTRIES
+    # Nothing outside the alias section moved.
+    assert loaded["routing"] == {"retry": {"request-retry": 0}}
+    assert "workbuddy-provider" in loaded["plugins"]["configs"]
 
-    backups = list(backup_root.glob("cpa-workbuddy-model-pins-backup-*"))
+    backups = list(backup_root.glob("cpa-workbuddy-alias-bridge-backup-*"))
     assert len(backups) == 1
-    backup_file = backups[0] / "config.yaml"
-    assert backup_file.exists()
-    backup_wb = yaml.safe_load(backup_file.read_text(encoding="utf-8"))["plugins"][
-        "configs"
-    ]["workbuddy"]
-    assert backup_wb["models_cn"] == "deepseek-v4.1-flash"
-    assert backup_wb["models_intl"] == "deepseek-v4.1-flash,deepseek-v4.1-flash-sg"
-
-
-def test_refuse_on_disabled_plugin(tmp_path: Path) -> None:
-    result, _, _ = _run(
-        tmp_path,
-        models_cn="deepseek-v4.1-flash,hy4free",
-        models_intl="deepseek-v4.1-flash,deepseek-v4.1-flash-sg,hy4free",
-        apply=False,
-        mutate={"enabled": False},
+    backup_config = yaml.safe_load(
+        (backups[0] / "config.yaml").read_text(encoding="utf-8")
     )
+    assert "workbuddy" in backup_config["oauth-model-alias"]
+
+
+def test_refuse_when_alias_section_missing(tmp_path: Path) -> None:
+    result, _, _ = _run(tmp_path, _config(alias_channel={}), apply=False)
     assert result.returncode != 0
-    assert "REFUSE WorkBuddy plugin is not enabled" in (result.stderr + result.stdout)
-
-
-def test_refuse_on_invalid_token(tmp_path: Path) -> None:
-    result, _, _ = _run(
-        tmp_path,
-        models_cn="deepseek-v4.1-flash;rm -rf /",
-        models_intl="deepseek-v4.1-flash",
-        apply=False,
-    )
-    assert result.returncode != 0
-    assert "REFUSE models_cn contains invalid model token" in (
-        result.stderr + result.stdout
-    )
+    assert "REFUSE oauth-model-alias section missing" in (result.stderr + result.stdout)

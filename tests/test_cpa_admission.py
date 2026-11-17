@@ -40,7 +40,7 @@ def test_workbuddy_plugin_routes_match_realm_pins() -> None:
     upstream_pins = {
         route["realm"]: route["models"]
         for route in manifest["plugin_routes"]
-        if route.get("provider") == "workbuddy"
+        if str(route.get("provider", "")).startswith("workbuddy")
     }
     assert upstream_pins == WORKBUDDY_PLUGIN_MODELS
     admission = json.loads(
@@ -49,7 +49,7 @@ def test_workbuddy_plugin_routes_match_realm_pins() -> None:
     lane_by_realm = {
         route["realm"]: route["admission_lane"]
         for route in manifest["plugin_routes"]
-        if route.get("provider") == "workbuddy"
+        if str(route.get("provider", "")).startswith("workbuddy")
     }
     admission_by_realm = {
         route["realm"]: [
@@ -60,7 +60,7 @@ def test_workbuddy_plugin_routes_match_realm_pins() -> None:
             )
         ]
         for route in manifest["plugin_routes"]
-        if route.get("provider") == "workbuddy"
+        if str(route.get("provider", "")).startswith("workbuddy")
     }
     assert set(lane_by_realm) == set(WORKBUDDY_PLUGIN_ADMISSION_MODELS)
     assert {
@@ -1157,13 +1157,12 @@ def test_shared_route_manifest_rejects_unreviewed_or_cross_lane_pooling(
     manifest_path = tmp_path / "cpa_provider_routes.json"
 
     manifest["plugin_routes"][1]["admission_lane"] = "chatgpt-oauth"
-    manifest["oauth_settings"]["workbuddy"] = [
+    manifest["oauth_settings"]["workbuddy-ai-provider"] = [
         entry
-        for entry in manifest["oauth_settings"]["workbuddy"]
+        for entry in manifest["oauth_settings"]["workbuddy-ai-provider"]
         if "alias" not in entry
     ]
     manifest["pooled_aliases"] = []
-    manifest["plugin_routes"][1]["models"].remove("deepseek-v4.1-flash")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash-sg"] == (
         "chatgpt-oauth"

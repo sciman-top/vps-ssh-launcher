@@ -120,7 +120,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   隔离加载证明 ABI 兼容）与 WorkBuddy `0.9.82 -> 0.9.84`
   是用户当次明确授权的联合 canary，不改变上面的每日成熟候选规则。新插件
   带现有账号保护、字符串化 11-128 冷却修复与 auth operator-field 回填；
-  doctor 的 `==workbuddy-version==` 锁定 `0.9.84`，版本缺失或漂移即失败。
+  （历史）doctor 的 `==workbuddy-version==` 曾锁定 `0.9.84`；2026-11-17 起该门钉定双插件 `workbuddy-provider 0.21.27 + workbuddy-ai-provider 0.1.40`，且拒绝 legacy `workbuddy.so` 残留。
   该门禁只读注册日志（168h 覆盖），不能证明请求层行为。
 - 2026-11-03 的 `v8.0.51 -> v8.0.52`（插件 0.9.84 不变，隔离加载证明 ABI 兼容；
   同窗配对双 antigravity aicode re-login，runbook aicode 节闭环）同为用户明确
@@ -483,10 +483,11 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   lane 和持久状态；WorkBuddy `credits` scheduler 仍可能在 auth pool 中回退，
   所以这不是 per-auth realm 绑定，也不能保证一次 6008 只来自对应 realm 的账号。
   `selected`/sticky 优先于 round-robin。只有
-  合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑（2026-11-08
-  `auth/` 只读清点：7 × `workbuddy-<uuid>*`（CN-first 契约裸名）+ 7 ×
-  `workbuddy-intl-*`，CN 侧 `region=cn`/`domain=www.codebuddy.cn`，全部
-  `disabled=false`）：ChatGPT OAuth 1 个
+  合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑（2026-11-17 luode0320 插件切换当日
+  `auth/` 只读清点：10 × `workbuddy-<uid>.json`（CN，type 改写
+  `workbuddy-provider`）+ 7 × `workbuddyai-<uid>.json`（INTL，自
+  `workbuddy-intl-` 改名，type 改写 `workbuddy-ai-provider`），
+  凭据 token 原地平移、无一重登）：ChatGPT OAuth 1 个
   账号、Antigravity OAuth 2 份凭据、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
   允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
   不等于越安全**：每个凭据都是独立的账号级风险面，池化只把“单账号被限”的影响摊到

@@ -785,15 +785,28 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
     if not isinstance(raw_aliases, dict):
         issues.append("route manifest oauth_model_aliases must be a mapping")
         raw_aliases = {}
-    upstream_names = provider_model_names | {
-        model["name"].lower()
-        for route in manifest.get("oauth_routes", [])
-        if isinstance(route, dict)
-        for model in route.get("models", [])
-        if isinstance(model, dict)
-        and isinstance(model.get("name"), str)
-        and model["name"]
-    }
+    upstream_names = (
+        provider_model_names
+        | {
+            model["name"].lower()
+            for route in manifest.get("oauth_routes", [])
+            if isinstance(route, dict)
+            for model in route.get("models", [])
+            if isinstance(model, dict)
+            and isinstance(model.get("name"), str)
+            and model["name"]
+        }
+        | {
+            # 2026-11-17 luode0320 cutover: a plugin channel's alias source is one
+            # of that channel's own upstream pins (plugin_routes.models), not a
+            # providers/oauth-route model.
+            model.lower()
+            for route in manifest.get("plugin_routes", [])
+            if isinstance(route, dict)
+            for model in route.get("models", [])
+            if isinstance(model, str)
+        }
+    )
     alias_names: set[str] = set()
     for channel, entries in raw_aliases.items():
         label = f"route manifest oauth_model_aliases.{channel}"
@@ -840,8 +853,11 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                     f"{entry_label} alias is not owned by the plugin provider's "
                     "intl realm"
                 )
-            if plugin_routes and entry.get("fork") is not True:
-                issues.append(f"{entry_label} must fork the INTL alias")
+            # fork=true keeps the upstream id alongside the client alias;
+            # fork omitted REPLACES the id with the alias in the client
+            # surface (2026-11-17: hy4free rides on hy4flash-free that way).
+            # Both shapes are valid; a non-boolean fork is already reported
+            # above.
             if alias.lower() in alias_names:
                 issues.append(f"OAuth model alias {alias!r} is declared more than once")
             alias_names.add(alias.lower())
@@ -857,14 +873,31 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                         f"{entry_label} source is blocked by the {channel} "
                         f"exclusion {pattern!r}"
                     )
+    # 2026-11-17 luode0320 cutover: on a plugin channel, an alias whose
+    # source is that channel's own upstream pin may omit fork — the alias
+    # then REPLACES the upstream id in the client surface (hy4free riding on
+    # hy4flash-free), and there is no dual-name coexistence to preserve.
+    plugin_pin_sources: set[str] = set()
+    for route in manifest.get("plugin_routes", []):
+        if not isinstance(route, dict):
+            continue
+        channel = route.get("provider")
+        for model in route.get("models", []) or []:
+            if isinstance(model, str):
+                plugin_pin_sources.add((str(channel), model.lower()))
     alias_without_fork = {
         entry["alias"]
-        for entries in raw_aliases.values()
+        for channel, entries in raw_aliases.items()
         if isinstance(entries, list)
         for entry in entries
         if isinstance(entry, dict)
         and entry.get("fork") is not True
         and isinstance(entry.get("alias"), str)
+        and not (
+            isinstance(channel, str)
+            and isinstance(entry.get("name"), str)
+            and (channel, entry["name"].strip().lower()) in plugin_pin_sources
+        )
     }
     if alias_without_fork:
         issues.append(
@@ -1119,7 +1152,11 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
                 for model in models
                 if isinstance(model, dict) and isinstance(model.get("alias"), str)
             )
-    plugin_aliases: dict[str, str] = {}
+    # 2026-11-17 luode0320 cutover: unfold the fork bridge exactly like
+    # scripts/cpa_catalog_check.py plugin_lane_aliases — every alias entry
+    # contributes its client name, and the bare upstream id stays expected
+    # only under fork=true (fork omitted REPLACES the id with the alias).
+    plugin_aliases: dict[str, list[tuple[str, bool]]] = {}
     raw_aliases = manifest.get("oauth_model_aliases")
     if isinstance(raw_aliases, dict):
         for provider, entries in raw_aliases.items():
@@ -1131,21 +1168,34 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
                     and isinstance(entry.get("name"), str)
                     and isinstance(entry.get("alias"), str)
                 ):
-                    plugin_aliases[entry["name"].strip()] = entry["alias"].strip()
+                    name_key = entry["name"].strip()
+                    plugin_aliases.setdefault(name_key, []).append(
+                        (entry["alias"].strip(), bool(entry.get("fork")))
+                    )
     for route in manifest.get("plugin_routes", []):
         if isinstance(route, dict) and route.get("shared_consumption") is True:
             lane = route.get("admission_lane")
             models = route.get("models")
             if isinstance(lane, str) and isinstance(models, list):
-                expected.setdefault(lane, set()).update(
-                    (
-                        plugin_aliases.get(model, model)
+                expanded: list[str] = []
+                for model in models:
+                    if not isinstance(model, str) or not model:
+                        continue
+                    pin_entries = (
+                        plugin_aliases.get(model, [])
                         if route.get("realm") == "intl"
-                        else model
+                        else []
                     )
-                    for model in models
-                    if isinstance(model, str) and model
-                )
+                    if not pin_entries:
+                        expanded.append(model)
+                        continue
+                    keep_original = False
+                    for alias, fork in pin_entries:
+                        expanded.append(alias)
+                        keep_original = keep_original or fork
+                    if keep_original:
+                        expanded.append(model)
+                expected.setdefault(lane, set()).update(expanded)
     return expected
 
 

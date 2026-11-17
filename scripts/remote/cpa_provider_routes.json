@@ -171,32 +171,35 @@
         "max-context-length": 1000000
       }
     ],
-    "workbuddy": [
+    "workbuddy-provider": [
       {
         "name": "deepseek-v4.1-flash",
+        "max-context-length": 1000000
+      }
+    ],
+    "workbuddy-ai-provider": [
+      {
+        "name": "deepseek-v4.1-flash-sg",
         "alias": "deepseek-v4.1-flash-intl",
         "max-context-length": 1000000
       },
       {
-        "name": "deepseek-v4.1-flash",
-        "max-context-length": 1000000
-      },
-      {
-        "name": "deepseek-v4.1-flash-sg",
-        "max-context-length": 1000000
-      },
-      {
-        "name": "hy4free",
+        "name": "hy4flash-free",
+        "alias": "hy4free",
         "max-context-length": 1000000
       }
     ]
   },
   "oauth_model_aliases": {
-    "workbuddy": [
+    "workbuddy-ai-provider": [
       {
-        "name": "deepseek-v4.1-flash",
+        "name": "deepseek-v4.1-flash-sg",
         "alias": "deepseek-v4.1-flash-intl",
         "fork": true
+      },
+      {
+        "name": "hy4flash-free",
+        "alias": "hy4free"
       }
     ]
   },
@@ -316,24 +319,23 @@
   ],
   "plugin_routes": [
     {
-      "provider": "workbuddy",
+      "provider": "workbuddy-provider",
       "realm": "cn",
       "models": [
         "deepseek-v4.1-flash"
       ],
-      "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn. 2026-11-17: the client bare name belongs to this CN admission lane. The INTL client alias deepseek-v4.1-flash-intl maps to the same upstream model on the separate workbuddy-intl-oauth lane. The plugin's credit scheduler still supports failover across its configured auth pool; this manifest split isolates admission state and client entry points.",
+      "note": "2026-11-17 luode0320 cutover: the CN plugin registers as workbuddy-provider and its dynamic catalog is narrowed back to this single pin via oauth-excluded-models; the client bare name belongs to the CN admission lane.",
       "shared_consumption": true,
       "admission_lane": "workbuddy-oauth"
     },
     {
-      "provider": "workbuddy",
+      "provider": "workbuddy-ai-provider",
       "realm": "intl",
       "models": [
-        "deepseek-v4.1-flash",
         "deepseek-v4.1-flash-sg",
-        "hy4free"
+        "hy4flash-free"
       ],
-      "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl. 2026-11-17: the INTL client entry point is the forked alias deepseek-v4.1-flash-intl, while the plugin keeps its upstream pin deepseek-v4.1-flash. deepseek-v4.1-flash-sg remains the second INTL model bucket.",
+      "note": "2026-11-17 luode0320 cutover: the INTL plugin registers as workbuddy-ai-provider. Its upstream pins are the two ids its dynamic catalog actually serves: deepseek-v4.1-flash-sg keeps the bare client name (fork alias deepseek-v4.1-flash-intl rides on it), hy4flash-free is replaced outright by the client alias hy4free (fork omitted), so no upstream id leaks into the client surface.",
       "shared_consumption": true,
       "admission_lane": "workbuddy-intl-oauth"
     }

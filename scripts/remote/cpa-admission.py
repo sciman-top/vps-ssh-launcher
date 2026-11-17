@@ -614,7 +614,7 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
         for provider, entries in raw_aliases.items():
             if not isinstance(provider, str) or not isinstance(entries, list):
                 continue
-            mapping: dict[str, str] = {}
+            mapping: dict[str, list[tuple[str, bool]]] = {}
             for entry in entries:
                 if (
                     isinstance(entry, dict)
@@ -623,8 +623,9 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
                     and entry["name"].strip()
                     and entry["alias"].strip()
                 ):
-                    mapping[entry["name"].strip().lower()] = (
-                        entry["alias"].strip().lower()
+                    name_key = entry["name"].strip().lower()
+                    mapping.setdefault(name_key, []).append(
+                        (entry["alias"].strip().lower(), bool(entry.get("fork")))
                     )
             plugin_aliases[provider] = mapping
 
@@ -657,32 +658,49 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
                 )
             for model in models:
                 if key == "plugin_routes":
-                    alias = model
+                    # 2026-11-17 luode0320 cutover: unfold the fork bridge
+                    # like scripts/cpa_catalog_check.py plugin_lane_aliases —
+                    # every alias entry contributes its client name, and the
+                    # bare upstream id stays listed only under fork=true
+                    # (fork omitted REPLACES the id with the alias).
+                    model_name = str(model).strip()
+                    expansions: list[str] = []
                     if route.get("realm") == "intl" and isinstance(
                         route.get("provider"), str
                     ):
-                        alias = plugin_aliases.get(route["provider"], {}).get(
-                            str(model).strip().lower(), model
+                        pin_entries = plugin_aliases.get(route["provider"], {}).get(
+                            model_name.lower()
                         )
+                        if pin_entries:
+                            keep_original = False
+                            for alias_name, fork in pin_entries:
+                                expansions.append(alias_name)
+                                keep_original = keep_original or fork
+                            if keep_original:
+                                expansions.append(model_name.lower())
+                    if not expansions:
+                        expansions = [model_name]
+                    normalized_names = expansions
                 else:
                     alias = model.get("alias") if isinstance(model, dict) else None
-                if not isinstance(alias, str) or not alias.strip():
-                    raise ValueError(
-                        f"shared route manifest {key}[{index}] contains an invalid model alias"
-                    )
-                normalized = alias.strip().lower()
-                existing_lane = expected.get(normalized)
+                    if not isinstance(alias, str) or not alias.strip():
+                        raise ValueError(
+                            f"shared route manifest {key}[{index}] contains an invalid model alias"
+                        )
+                    normalized_names = [alias.strip().lower()]
                 normalized_lane = lane.strip()
-                if existing_lane is None:
-                    expected[normalized] = normalized_lane
-                elif normalized not in normalized_pooled_aliases:
-                    raise ValueError(
-                        "shared route manifest assigns a model more than once"
-                    )
-                elif existing_lane != normalized_lane:
-                    raise ValueError(
-                        "shared route manifest assigns a pooled model to different lanes"
-                    )
+                for normalized in normalized_names:
+                    existing_lane = expected.get(normalized)
+                    if existing_lane is None:
+                        expected[normalized] = normalized_lane
+                    elif normalized not in normalized_pooled_aliases:
+                        raise ValueError(
+                            "shared route manifest assigns a model more than once"
+                        )
+                    elif existing_lane != normalized_lane:
+                        raise ValueError(
+                            "shared route manifest assigns a pooled model to different lanes"
+                        )
     return expected
 
 

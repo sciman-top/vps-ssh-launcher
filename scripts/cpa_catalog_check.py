@@ -45,8 +45,8 @@ LANE_SOURCES: dict[str, tuple[str, ...]] = {
     "chatgpt-oauth": ("oauth_route", "chatgpt-plus-oauth"),
     "antigravity-oauth": ("oauth_route", "antigravity-oauth"),
     "zhipu-coding-plan": ("provider", "zhipu-plan"),
-    "workbuddy-oauth": ("plugin", "workbuddy", "cn"),
-    "workbuddy-intl-oauth": ("plugin", "workbuddy", "intl"),
+    "workbuddy-oauth": ("plugin", "workbuddy-provider", "cn"),
+    "workbuddy-intl-oauth": ("plugin", "workbuddy-ai-provider", "intl"),
 }
 
 TOMBSTONE_KEYS = (
@@ -148,19 +148,42 @@ def plugin_lane_models(
 def plugin_lane_aliases(
     manifest: dict[str, Any], provider: str, models: list[str]
 ) -> list[str]:
-    """Forked CPA aliases for this plugin pin set, without duplicating them."""
+    """Client-facing names this plugin pin set serves, in pin order.
+
+    Mirrors the host behavior in CLIProxyAPI's applyOAuthModelAliasEntries:
+    a pin with alias entries contributes each alias, and keeps the bare name
+    only when an entry sets fork=true (fork aliases are added alongside the
+    original id); a pin without entries keeps its bare name; an entry without
+    fork replaces the bare name outright, so an upstream id whose client
+    surface should only ever be reached through its alias stays unlisted.
+    One pin may carry several entries (several aliases plus fork).
+    """
     raw_aliases = manifest.get("oauth_model_aliases")
     entries = raw_aliases.get(provider, []) if isinstance(raw_aliases, dict) else []
     if not isinstance(entries, list):
         entries = []
-    by_source = {
-        entry["name"].strip(): entry["alias"].strip()
-        for entry in entries
-        if isinstance(entry, dict)
-        and isinstance(entry.get("name"), str)
-        and isinstance(entry.get("alias"), str)
-    }
-    return [by_source.get(model, model) for model in models]
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for entry in entries:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("name"), str)
+            or not isinstance(entry.get("alias"), str)
+        ):
+            continue
+        by_source.setdefault(entry["name"].strip(), []).append(entry)
+    out: list[str] = []
+    for model in models:
+        pin_entries = by_source.get(model, [])
+        if not pin_entries:
+            out.append(model)
+            continue
+        keep_original = False
+        for entry in pin_entries:
+            out.append(entry["alias"].strip())
+            keep_original = keep_original or bool(entry.get("fork"))
+        if keep_original:
+            out.append(model)
+    return out
 
 
 def derive_lanes(manifest: dict[str, Any], errors: list[str]) -> dict[str, list[str]]:
@@ -205,14 +228,11 @@ def derive_lanes(manifest: dict[str, Any], errors: list[str]) -> dict[str, list[
             plugin_lanes.append((source, lane, models, source_spec[2]))
         else:  # pragma: no cover - the table literal above is exhaustive
             errors.append(f"LANE_SOURCES has an unknown kind {kind!r} for {lane!r}")
-    for provider, lane, models, realm in plugin_lanes:
-        aliases = plugin_lane_aliases(manifest, provider, models)
-        # The plugin's CN entry keeps the unchanged client name. INTL exposes
-        # the explicitly forked alias while its plugin pin remains untouched.
-        derived[lane] = [
-            alias if realm == "intl" else model
-            for model, alias in zip(models, aliases, strict=True)
-        ]
+    for provider, lane, models, _realm in plugin_lanes:
+        # plugin_lane_aliases already unfolds every pin into its full
+        # client-facing name set (aliases plus fork-kept bare names), so the
+        # lane list is the unfolded sequence for both realms.
+        derived[lane] = plugin_lane_aliases(manifest, provider, models)
     return derived
 
 

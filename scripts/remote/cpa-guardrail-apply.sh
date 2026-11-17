@@ -1638,7 +1638,18 @@ for channel, entries in oauth_aliases_manifest.items():
         raise SystemExit(
             f"REFUSE oauth_model_aliases.{channel} alias is not an OAuth route alias"
         )
-    if not all(entry["fork"] for entry in normalized_aliases):
+    # 2026-11-17 luode0320 cutover: on a plugin channel an alias may omit
+    # fork — it then REPLACES the upstream id in the client surface
+    # (hy4free riding on hy4flash-free) and there is no dual-name
+    # coexistence to pin. Every other channel still must fork every alias.
+    plugin_channels = {
+        route.get("provider")
+        for route in route_manifest.get("plugin_routes", [])
+        if isinstance(route, dict) and isinstance(route.get("provider"), str)
+    }
+    if channel not in plugin_channels and not all(
+        entry["fork"] for entry in normalized_aliases
+    ):
         raise SystemExit(
             f"REFUSE oauth_model_aliases.{channel} must fork every alias"
         )
