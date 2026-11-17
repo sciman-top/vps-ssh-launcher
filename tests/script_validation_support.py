@@ -343,7 +343,13 @@ class ScriptValidationMixin:
                     "providers": {
                         "antigravity": {
                             "antigravity-credits": False,
-                            "sensitive-words": ["gpt", "openai"],
+                            "sensitive-words": ["gpt", "openai", "codex"],
+                            "sensitive-words-replace": {
+                                "chatgpt": "chatservice",
+                                "openai": "vendor",
+                                "codex": "agentx",
+                                "gpt": "agentx",
+                            },
                         }
                     },
                     "settings": json.loads(

@@ -489,13 +489,58 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # The list is the reviewed fingerprint-breaking set: shrinking,
         # growing, or replacing it silently re-opens the masked-429 content
         # filter (or obfuscates more than reviewed) on the antigravity lane.
-        for bad in ([], ["gpt"], ["gpt", "openai", "codex"], ["openai", "gpt"], "gpt"):
+        for bad in (
+            [],
+            ["gpt"],
+            ["gpt", "openai", "codex", "claude"],
+            ["openai", "gpt"],
+            "gpt",
+        ):
             mutated = json.loads(json.dumps(config))
             mutated["oauth"]["providers"]["antigravity"]["sensitive-words"] = bad
             issues = policy["validate_config"](mutated)
             self.assertTrue(
                 any("sensitive-words" in issue for issue in issues),
                 f"expected sensitive-words pin to reject {bad!r}",
+            )
+
+    def test_cpa_policy_pins_antigravity_sensitive_words_replace(self) -> None:
+        import json
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        # The swap table is the effective masking surface since the 11-17 WAF
+        # escalation: shrinking, growing, or retargeting it silently re-opens
+        # the fingerprint 429 (or rewrites more than reviewed) on the
+        # antigravity lane.
+        for bad in (
+            {},
+            {"codex": "agentx"},
+            {
+                "codex": "helper",
+                "openai": "vendor",
+                "chatgpt": "chatservice",
+                "gpt": "agentx",
+            },
+            {
+                "codex": "",
+                "openai": "vendor",
+                "chatgpt": "chatservice",
+                "gpt": "agentx",
+            },
+        ):
+            mutated = json.loads(json.dumps(config))
+            mutated["oauth"]["providers"]["antigravity"]["sensitive-words-replace"] = (
+                bad
+            )
+            issues = policy["validate_config"](mutated)
+            self.assertTrue(
+                any("sensitive-words-replace" in issue for issue in issues),
+                f"expected sensitive-words-replace pin to reject {bad!r}",
             )
 
     def test_cpa_policy_rejects_oauth_setting_manifest_drift(self) -> None:

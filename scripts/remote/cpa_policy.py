@@ -124,7 +124,26 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This
     # rewrite is not a ban-prevention control; retire it with API migration.
-    ("oauth", "providers", "antigravity", "sensitive-words"): ["gpt", "openai"],
+    # "codex" joined 2026-11-18: the upstream WAF escalation trips on the bare
+    # "Codex" literal alone in the system instruction (desktop-shaped verbatim
+    # replay 429 fast-fail vs word-replaced replay 200, single-variable pair).
+    ("oauth", "providers", "antigravity", "sensitive-words"): [
+        "gpt",
+        "openai",
+        "codex",
+    ],
+    # Literal replacements supersede the zero-width obfuscation above on the
+    # system instruction: the 2026-11-18 probes showed the WAF matches through
+    # zero-width-padded words (T2) and through raw user-role text (T1), while
+    # an input-fully-swapped replay with verbatim tool schemas completes (T6).
+    # This swap table plus the requests.payload.replace rule below are the
+    # effective masking surfaces for the antigravity lane.
+    ("oauth", "providers", "antigravity", "sensitive-words-replace"): {
+        "chatgpt": "chatservice",
+        "openai": "vendor",
+        "codex": "agentx",
+        "gpt": "agentx",
+    },
     # Stabilized device profile: confirmed Claude Code callers contribute their
     # real software profile, persisted per credential (KV 7d TTL), avoiding
     # restart churn. Deliberately no UA/OS/timezone overrides set. Location is
@@ -1582,6 +1601,55 @@ if (
         }
         for name in sorted(set(_workbuddy_developer_override_spec["models"]))
     ]
+# Google's antigravity WAF escalated on 2026-11-17: fingerprint literals
+# are now matched in user-role conversational text too (T1 probe), and the
+# zero-width obfuscation built into `sensitive-words` no longer defeats the
+# match (T2 probe), while an input-fully-swapped replay with verbatim tool
+# schemas completes (T6 probe). The sanctioned config-level lever is
+# literal replacement: `sensitive-words-replace` rewrites the system
+# instruction and a requests.payload.replace rule rewrites user-role text,
+# both scoped to the antigravity gemini models on responses-wire requests
+# only. The pairs reuse the word families and replacement words validated
+# by the 2026-11-18 controlled probes. A manifest spec that fails
+# validation degrades to "expect no rules", which a rule-bearing live
+# config then fails exact-match on (fail closed).
+_antigravity_fingerprint_spec = ROUTE_MANIFEST.get("antigravity_fingerprint_swap")
+_ANTIGRAVITY_FINGERPRINT_REPLACE_RULES: list[dict[str, Any]] = []
+if (
+    isinstance(_antigravity_fingerprint_spec, dict)
+    and _antigravity_fingerprint_spec.get("from_protocol") == "responses"
+    and isinstance(_antigravity_fingerprint_spec.get("models"), list)
+    and _antigravity_fingerprint_spec["models"]
+    and all(
+        isinstance(name, str) and name
+        for name in _antigravity_fingerprint_spec["models"]
+    )
+    and len(_antigravity_fingerprint_spec["models"])
+    == len(set(_antigravity_fingerprint_spec["models"]))
+    and isinstance(_antigravity_fingerprint_spec.get("replacements"), list)
+    and _antigravity_fingerprint_spec["replacements"]
+    and all(
+        isinstance(pair, list)
+        and len(pair) == 2
+        and all(isinstance(side, str) and side for side in pair)
+        for pair in _antigravity_fingerprint_spec["replacements"]
+    )
+    and len({pair[0] for pair in _antigravity_fingerprint_spec["replacements"]})
+    == len(_antigravity_fingerprint_spec["replacements"])
+):
+    _ANTIGRAVITY_FINGERPRINT_REPLACE_RULES = [
+        {
+            "models": [
+                {"name": name, "from-protocol": "responses"}
+                for name in sorted(set(_antigravity_fingerprint_spec["models"]))
+            ],
+            "target": {"role": "user", "all": True},
+            "replacements": [
+                {pair[0]: pair[1]}
+                for pair in _antigravity_fingerprint_spec["replacements"]
+            ],
+        }
+    ]
 EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     "override": [
         {
@@ -1637,6 +1705,7 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
         }
         for name in _APPLY_PATCH_FILTER_MODEL_NAMES
     ],
+    "replace": _ANTIGRAVITY_FINGERPRINT_REPLACE_RULES,
 }
 # The claude-lane thinking-binding override and the conditional trailing-
 # assistant prefill filter retired 2026-10-20: CLIProxyAPI v8.0.34 (deployed

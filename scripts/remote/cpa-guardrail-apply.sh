@@ -1439,7 +1439,17 @@ if not isinstance(oauth_providers_after, dict):
 antigravity_provider_after = oauth_providers_after.setdefault("antigravity", {})
 if not isinstance(antigravity_provider_after, dict):
     raise SystemExit("REFUSE oauth.providers.antigravity must be a mapping")
-antigravity_provider_after["sensitive-words"] = ["gpt", "openai"]
+antigravity_provider_after["sensitive-words"] = ["gpt", "openai", "codex"]
+# Literal replacements supersede the zero-width obfuscation above on the
+# system instruction: the 2026-11-18 probes showed the WAF matches through
+# zero-width-padded words, so this swap table is the effective masking
+# surface for the antigravity lane.
+antigravity_provider_after["sensitive-words-replace"] = {
+    "chatgpt": "chatservice",
+    "openai": "vendor",
+    "codex": "agentx",
+    "gpt": "agentx",
+}
 oauth_exclusions = oauth_block_after.get("excluded-models")
 if oauth_exclusions is None:
     oauth_exclusions = {}
@@ -1765,6 +1775,40 @@ if (
         "REFUSE workbuddy_developer_role_override must carry from_protocol='responses' "
         "and unique non-empty model names"
     )
+# Google's antigravity WAF escalated on 2026-11-17 (user-role text matching
+# plus zero-width-defeated obfuscation; probe archive 2026-11-18). The
+# sanctioned lever is literal replacement on the antigravity gemini models:
+# sensitive-words-replace for the system instruction plus a
+# requests.payload.replace rule for user-role text. Mirror cpa_policy's
+# derivation exactly: the semantic_policy gate compares this block against
+# the policy, so any drift between the two derivations fails the apply.
+antigravity_fingerprint_swap = route_manifest.get("antigravity_fingerprint_swap")
+if (
+    not isinstance(antigravity_fingerprint_swap, dict)
+    or antigravity_fingerprint_swap.get("from_protocol") != "responses"
+    or not isinstance(antigravity_fingerprint_swap.get("models"), list)
+    or not antigravity_fingerprint_swap["models"]
+    or any(
+        not isinstance(name, str) or not name
+        for name in antigravity_fingerprint_swap["models"]
+    )
+    or len(antigravity_fingerprint_swap["models"])
+    != len(set(antigravity_fingerprint_swap["models"]))
+    or not isinstance(antigravity_fingerprint_swap.get("replacements"), list)
+    or not antigravity_fingerprint_swap["replacements"]
+    or any(
+        not isinstance(pair, list)
+        or len(pair) != 2
+        or any(not isinstance(side, str) or not side for side in pair)
+        for pair in antigravity_fingerprint_swap["replacements"]
+    )
+    or len({pair[0] for pair in antigravity_fingerprint_swap["replacements"]})
+    != len(antigravity_fingerprint_swap["replacements"])
+):
+    raise SystemExit(
+        "REFUSE antigravity_fingerprint_swap must carry from_protocol='responses', "
+        "unique non-empty model names, and unique two-string replacement pairs"
+    )
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
@@ -1846,6 +1890,19 @@ requests_after["payload"] = {
             ],
         }
         for name in apply_patch_filter_models
+    ],
+    "replace": [
+        {
+            "models": [
+                {"name": name, "from-protocol": "responses"}
+                for name in sorted(set(antigravity_fingerprint_swap["models"]))
+            ],
+            "target": {"role": "user", "all": True},
+            "replacements": [
+                {pair[0]: pair[1]}
+                for pair in antigravity_fingerprint_swap["replacements"]
+            ],
+        }
     ],
 }
 

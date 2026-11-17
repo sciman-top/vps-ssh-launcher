@@ -461,6 +461,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 "from_protocol": "responses",
                 "models": ["ds-test"],
             },
+            "antigravity_fingerprint_swap": {
+                "from_protocol": "responses",
+                "models": ["gemini-test"],
+                "replacements": [
+                    ["ChatGPT", "Chatservice"],
+                    ["codex", "agentx"],
+                    ["gpt", "agentx"],
+                ],
+            },
             "codex_api_key_routes": [
                 {
                     "base-url": "https://zen.example/v1",
@@ -518,6 +527,19 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                             'tools.#(type=="custom")',
                             'input.#(type=="additional_tools")#.tools.#(name=="functions")#'
                             '.tools.#(name=="apply_patch")#',
+                        ],
+                    },
+                ],
+                "replace": [
+                    {
+                        "models": [
+                            {"name": "gemini-test", "from-protocol": "responses"}
+                        ],
+                        "target": {"role": "user", "all": True},
+                        "replacements": [
+                            {"ChatGPT": "Chatservice"},
+                            {"codex": "agentx"},
+                            {"gpt": "agentx"},
                         ],
                     },
                 ],
