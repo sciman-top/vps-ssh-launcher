@@ -1157,11 +1157,9 @@ def test_shared_route_manifest_rejects_unreviewed_or_cross_lane_pooling(
     manifest_path = tmp_path / "cpa_provider_routes.json"
 
     manifest["plugin_routes"][1]["admission_lane"] = "chatgpt-oauth"
-    manifest["oauth_settings"]["workbuddy-ai-provider"] = [
-        entry
-        for entry in manifest["oauth_settings"]["workbuddy-ai-provider"]
-        if "alias" not in entry
-    ]
+    # The intl settings channel is removed while the lane is closed dark
+    # (2026-11-17); pop it defensively for older manifest shapes.
+    manifest["oauth_settings"].pop("workbuddy-ai-provider", None)
     manifest["pooled_aliases"] = []
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash-sg"] == (

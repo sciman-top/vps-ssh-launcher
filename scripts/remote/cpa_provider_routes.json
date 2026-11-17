@@ -176,13 +176,6 @@
         "name": "deepseek-v4.1-flash",
         "max-context-length": 1000000
       }
-    ],
-    "workbuddy-ai-provider": [
-      {
-        "name": "deepseek-v4.1-flash-sg",
-        "alias": "deepseek-v4.1-flash-intl",
-        "max-context-length": 1000000
-      }
     ]
   },
   "oauth_model_aliases": {

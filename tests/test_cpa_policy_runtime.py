@@ -515,9 +515,13 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["oauth_settings"]["workbuddy-ai-provider"].append(
+        # The workbuddy-ai-provider settings channel is removed while the
+        # INTL lane is closed dark (2026-11-17); the policy rule it exercised
+        # (settings entries must reference declared models) is validated
+        # through a fresh channel instead.
+        manifest["oauth_settings"]["workbuddy-ai-provider"] = [
             {"name": "undeclared-model", "max-context-length": 1000}
-        )
+        ]
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(
             any("names undeclared model" in issue for issue in issues),
