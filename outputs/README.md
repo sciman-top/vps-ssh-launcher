@@ -19,6 +19,13 @@
   `deploy-admission-text-finish-20261101.ps1`、`deploy-admission-first-text-20261104.ps1`、
   `deploy-admission-credits-6008-20261107.ps1`、`release-workbuddy-hold-20261107.ps1`）：
   在役代际的回滚素材与历史事务对照，不得再部署到生产。
+- 2026-11-17 luode0320 迁移演练（隔离实例，未动生产）：mmqz 凭据**免重登平移实证**
+  （CN 10+INTL 7 全部解析、ping 全通、free 模型端到端 200）。转换=auth 文件
+  `type`/`provider` 改写（`workbuddy`→`workbuddy-provider`，intl→`workbuddy-ai-provider`）
+  + intl 文件名 `workbuddy-intl-`→`workbuddyai-`；插件配置键=文件 stem。采纳素材暂存
+  bwg `/root/wb-luode-rehearsal-20261117/`（`workbuddy-provider.so` SHA `a726f672…`
+  0.21.27、`workbuddy-ai-provider.so` SHA `8fa992e8…` 0.1.40），fixture 凭据副本已删，
+  切换另行裁决。
 - 其余旧代一次性件已退役到 git 历史：需要时用
   `git log --diff-filter=D -- outputs/` 找回；新增件默认不入库
   （`.gitignore` 整目录忽略），被 tests/ 或 tracked 收据点名的事务脚本
