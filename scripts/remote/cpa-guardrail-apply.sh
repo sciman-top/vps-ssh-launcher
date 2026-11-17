@@ -1740,6 +1740,31 @@ if (
         "REFUSE zhipu_developer_role_override must carry from_protocol='responses' "
         "and unique non-empty model names"
     )
+# WorkBuddy's gateway (copilot.tencent.com v2/chat/completions) began
+# rejecting the OpenAI `developer` role with 11128 "Illegal API invocation
+# from an unapproved channel" on 2026-11-17 ~20:50+08; Codex Desktop
+# 0.169.0-alpha carries the desktop system prompt as developer-role input
+# items, so every desktop deepseek turn 500s through the responses->chat
+# translation. Mirror cpa_policy's derivation exactly: the semantic_policy
+# gate compares this block against the policy, so any drift between the two
+# derivations fails the apply.
+workbuddy_developer_override = route_manifest.get("workbuddy_developer_role_override")
+if (
+    not isinstance(workbuddy_developer_override, dict)
+    or workbuddy_developer_override.get("from_protocol") != "responses"
+    or not isinstance(workbuddy_developer_override.get("models"), list)
+    or not workbuddy_developer_override["models"]
+    or any(
+        not isinstance(name, str) or not name
+        for name in workbuddy_developer_override["models"]
+    )
+    or len(workbuddy_developer_override["models"])
+    != len(set(workbuddy_developer_override["models"]))
+):
+    raise SystemExit(
+        "REFUSE workbuddy_developer_role_override must carry from_protocol='responses' "
+        "and unique non-empty model names"
+    )
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
@@ -1774,6 +1799,15 @@ requests_after["payload"] = {
             },
         }
         for name in sorted(set(zhipu_developer_override["models"]))
+    ]
+    + [
+        {
+            "models": [{"name": name, "from-protocol": "responses"}],
+            "params": {
+                'messages.#(role=="developer")#.role': "system",
+            },
+        }
+        for name in sorted(set(workbuddy_developer_override["models"]))
     ],
     "filter": [
         {

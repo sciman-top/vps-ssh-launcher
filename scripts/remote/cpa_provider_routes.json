@@ -16,6 +16,14 @@
       "glm-5.3-flash"
     ]
   },
+  "workbuddy_developer_role_override": {
+    "from_protocol": "responses",
+    "models": [
+      "deepseek-v4.1-flash",
+      "deepseek-v4.1-flash-intl",
+      "deepseek-v4.1-flash-sg"
+    ]
+  },
   "providers": [
     {
       "slot": 1,

@@ -457,6 +457,10 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 "from_protocol": "responses",
                 "models": ["glm-test"],
             },
+            "workbuddy_developer_role_override": {
+                "from_protocol": "responses",
+                "models": ["ds-test"],
+            },
             "codex_api_key_routes": [
                 {
                     "base-url": "https://zen.example/v1",
@@ -489,6 +493,12 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     },
                     {
                         "models": [{"name": "glm-test", "from-protocol": "responses"}],
+                        "params": {
+                            'messages.#(role=="developer")#.role': "system",
+                        },
+                    },
+                    {
+                        "models": [{"name": "ds-test", "from-protocol": "responses"}],
                         "params": {
                             'messages.#(role=="developer")#.role': "system",
                         },

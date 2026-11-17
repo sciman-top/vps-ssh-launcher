@@ -589,9 +589,13 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 for rule in override_rules
             )
         )
+        expected_override_names = sorted(
+            set(manifest["zhipu_developer_role_override"]["models"])
+            | set(manifest["workbuddy_developer_role_override"]["models"])
+        )
         self.assertEqual(
             sorted(rule["models"][0]["name"] for rule in override_rules),
-            sorted(manifest["zhipu_developer_role_override"]["models"]),
+            expected_override_names,
         )
         # A config that lost the developer-role override (e.g. restored from
         # a pre-rules backup) must fail exact-match validation closed.

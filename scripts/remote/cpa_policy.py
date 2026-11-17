@@ -1548,6 +1548,40 @@ if (
         }
         for name in sorted(set(_zhipu_developer_override_spec["models"]))
     ]
+# WorkBuddy's gateway began rejecting the OpenAI `developer` role with 11128
+# "Illegal API invocation from an unapproved channel" (measured 2026-11-18
+# 00:29+08 on deepseek-v4.1-flash; role=system with identical content
+# returns 200). Codex Desktop 0.169.0-alpha carries the desktop system
+# prompt as developer-role input items, so every desktop deepseek turn dies
+# in the responses->chat translation. Same sanctioned lever as the zhipu
+# lane: rewrite developer to system on responses-wire requests only. A
+# manifest spec that fails validation degrades to "expect no rules", which
+# a rule-bearing live config then fails exact-match on (fail closed).
+_workbuddy_developer_override_spec = ROUTE_MANIFEST.get(
+    "workbuddy_developer_role_override"
+)
+_WORKBUDDY_DEVELOPER_OVERRIDE_RULES = []
+if (
+    isinstance(_workbuddy_developer_override_spec, dict)
+    and _workbuddy_developer_override_spec.get("from_protocol") == "responses"
+    and isinstance(_workbuddy_developer_override_spec.get("models"), list)
+    and _workbuddy_developer_override_spec["models"]
+    and all(
+        isinstance(name, str) and name
+        for name in _workbuddy_developer_override_spec["models"]
+    )
+    and len(_workbuddy_developer_override_spec["models"])
+    == len(set(_workbuddy_developer_override_spec["models"]))
+):
+    _WORKBUDDY_DEVELOPER_OVERRIDE_RULES = [
+        {
+            "models": [{"name": name, "from-protocol": "responses"}],
+            "params": {
+                'messages.#(role=="developer")#.role': "system",
+            },
+        }
+        for name in sorted(set(_workbuddy_developer_override_spec["models"]))
+    ]
 EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     "override": [
         {
@@ -1561,7 +1595,8 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
         }
         for name in _CODEX_ROUTE_MODEL_NAMES
     ]
-    + _ZHIPU_DEVELOPER_OVERRIDE_RULES,
+    + _ZHIPU_DEVELOPER_OVERRIDE_RULES
+    + _WORKBUDDY_DEVELOPER_OVERRIDE_RULES,
     "filter": [
         {
             "models": [{"name": name}],
