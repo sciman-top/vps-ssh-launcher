@@ -157,9 +157,22 @@ FORK_PATCH_ACCEPTANCE=PASS
 | 项 | 原因 | 建议 |
 |---|---|---|
 | updater **演练本身**（`cpa-update-acceptance.py` 的 8 个场景） | 派生 fork 镜像按设计无法运行它；**判据已可验证化**（§A6），但场景内容仍未在本机跑过 | 需一个"官方镜像时代"的演练窗口 |
-| B7 真实生成探测 | 消耗账号额度与画像 | 等用户单独授权 |
+| ~~B7 真实生成探测~~ | ~~消耗账号额度与画像~~ | **已补做（同日 B7 追记，见下）** |
 | 本地 Cockpit 1.4.0 重钉 | 未经验证的版本不进 pin | 用户确认升级方案后再改策略 |
-| CN/INTL 拆 lane | 契约变更 | 用户裁决 |
+| ~~CN/INTL 拆 lane~~ | ~~契约变更~~ | **用户已裁决，同日落地（部署回执见 cpintl-split 事务 + TOS 启用回执）** |
+
+## F. B7 追记（2026-11-17 同日补做，用户授权）
+
+零重试单发 ×2（8318 回环、max_tokens=64、响应体不打印）：
+
+| 探针 | 结果 |
+|---|---|
+| `deepseek-v4.1-flash-intl` | http 200，1.75s，served_model=`deepseek-v4.1-flash`（fork 别名正确解析），finish=stop，in=9/out=1；admission 归因 `workbuddy-intl-oauth` |
+| `deepseek-v4.1-flash` | http 200，1.72s，served_model=`deepseek-v4.1-flash`，finish=stop；归因 `workbuddy-oauth` |
+
+零替换、零冷却、零凭据级信号；codex（luna 24h n=1386/completed 1369）与
+antigravity（sonnet/hydrogen 各 1 发完成）车道已有当日自然流量活体证据，未额外
+消耗。至此本回执 A1–A5 + B6 + B7 全部闭环。
 
 ## E. 回滚 / 清理
 
