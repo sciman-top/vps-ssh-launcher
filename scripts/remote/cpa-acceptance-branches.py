@@ -163,22 +163,33 @@ def main():
         raise SystemExit("STUB_UPSTREAM_NOT_ON_8317")
     process, log = start_shadow(config_path, port, workdir)
     try:
-        # 1. pooled alias: a credential-scoped 6003 on the pooled name must
-        #    narrow to the model slot, not park the whole alias through the
-        #    lane-wide ladder that also owns the backup provider.
+        # 1. account-shaped 6003 on the CN bare name stays lane-scoped and
+        #    rides the transient capacity ladder. tests/test_cpa_admission.py
+        #    pins capacity_scope == "lane" for 6003 ("no proven model-only
+        #    wording"); only 6004 acquires the model shortcut. The pre-split
+        #    pooled-models narrowing no longer exists -- the CN lane is
+        #    single-model after the 12c487f CN/INTL split, so the lane
+        #    breaker is the correct blast radius for an account-shaped signal.
         Upstream.status = 200
         Upstream.body = b'{"code":6003,"msg":"frequency limited"}'
         status, _ = post(port, "deepseek-v4.1-flash")
         state = settle(port, "workbuddy-oauth")
         checks.append(
             (
-                "pooled-scope",
+                "cn-6003-lane-scoped",
                 status == 200
-                and state.get("cooldown_scope") == "model"
-                and 0 < state["model_cooldowns"].get("deepseek-v4.1-flash", 0) <= 300
+                and state.get("cooldown_scope") == "lane"
+                and state.get("cooldown_active") is True
+                and not state.get("model_cooldowns")
                 and state.get("hold_reason") is None,
-                "status=%s scope=%s cooldowns=%s"
-                % (status, state.get("cooldown_scope"), state.get("model_cooldowns")),
+                "status=%s scope=%s active=%s remaining=%s cooldowns=%s"
+                % (
+                    status,
+                    state.get("cooldown_scope"),
+                    state.get("cooldown_active"),
+                    state.get("cooldown_remaining"),
+                    state.get("model_cooldowns"),
+                ),
             )
         )
 
