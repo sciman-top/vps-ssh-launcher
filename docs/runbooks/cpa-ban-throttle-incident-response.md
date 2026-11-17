@@ -188,6 +188,29 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 3. 是否重新接入（新账号或官方 API key）是用户决策；接入前先更新
    `cpa_provider_routes.json` 路由与排除清单，再 `-Apply`。
 
+## antigravity TOS_VIOLATION 池级保护停（2026-11-17 起在役）
+
+v8.0.72+ 内置的 TOS 处理（上游 #7515，提案先例 #7296）：
+
+- **自动面**：首例 `403 TOS_VIOLATION` → 违规凭据自动停用（OAuth 刷新保留，
+  管理 API 透出 `tos_appeal_url`）+ Antigravity 全池暂停
+  `tos-pause-window: "2h"`（2026-11-17 用户裁决启用，`oauth.providers.antigravity`
+  下）。暂停只覆盖 Antigravity 车道；**429/配额类永不触发或延长**（上游仅
+  TOS 路径写入）。
+- **恢复**：窗口到期自动恢复（本机 kv.db 持久化 + TTL 兜底，重启容器不清）。
+  **提前恢复手筋**：确认无新 TOS 信号后，把该键值**保 inode** 翻 `"0"`
+  （CPA watcher 热加载即时生效，`docker logs` 应出现
+  `config file changed, reloading`），处置完翻回 `"2h"`。运行时读数以
+  `/v0/management/config` 的 `antigravity.tos-pause-window` 为准
+  （`X-Management-Key` 头，键文件 `/root/.cpa-management-key`）。
+- **陷阱**：host 侧对该文件的 rename 类编辑（`os.replace`/tmp+mv）对单文件
+  bind-mount 里的容器**不可见**（容器钉在旧 inode，2026-11-17 实证），需
+  `docker compose up -d --force-recreate`（drain 锁 + 有界等待）才生效。
+  常规配置编辑一律保 inode 写入。
+- 申诉与凭据善后（官方表单 revoke OAuth → 重登 → appeal_url；社区实证
+  2026-02 波有分批解封先例）是人工动作，与池恢复正交；"解封后再犯=永久"
+  纪律不变。
+
 ## claude-oauth lane 信号形态与急停（2026-10-17 lane 落地起）
 
 claude 订阅 OAuth lane 在役后，本页分级对本 lane 适用。判读入口仍是 strict
