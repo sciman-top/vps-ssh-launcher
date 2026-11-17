@@ -211,6 +211,42 @@ v8.0.72+ 内置的 TOS 处理（上游 #7515，提案先例 #7296）：
   2026-02 波有分批解封先例）是人工动作，与池恢复正交；"解封后再犯=永久"
   纪律不变。
 
+## antigravity 封号触发面与登录风控纪律（2026-11-18 增补）
+
+社区 2026-02 起报告的 Antigravity 永久封禁潮（2026-11 第二波延续）把可核验
+触发面收敛为下表。本节只登记**行为收敛与观测**纪律：一切规避检测类操作仍按
+本页置顶哲学全部否决；混淆类手段（零宽字符等）已实证会被破且本身即条款红线
+（#6280 路线判否，勿重开）。
+
+### 触发面清单（社区口径，非官方公告）
+
+| 触发面 | 证据 | 本栈姿态 |
+|---|---|---|
+| 第三方框架路由 Gemini token（OpenClaw 类，社区转述 2026-02-25 起官方按"恶意使用"限制访问） | [Reddit 封禁潮帖](https://www.reddit.com/r/google_antigravity/comments/1r1unas/google_is_permanently_banning_antigravity_users/)（转述） | CPA 网关本身在该打击面上——**结构性残余风险，不可本地消除**（同 OpenAI 行结论）；对冲=上节 TOS 池级暂停 + L3/L4 分级停流 + 凭据池备份（agy 池 8/8 已做 2026-11-18 复核，恢复演练挂月维），不新增对抗手段 |
+| 配额规避与多账号切换 | 同上；Google ToS 明禁"规避安全保护" | 2026-10-22 边界不变：不新增账号、不轮换凭据、不预防性隔离；已封凭据走官方申诉（上节），在役健康账号不做预防性 re-login（CPA-only 裁决） |
+| 网络环境/IP 不纯净、出口与账号多对多 | 社区封禁归因主项 | 单账号钉死既有 bwg 出口；不为防风控换 IP/换出口（主动换出口本身是被识别的滥用形态） |
+| 风控信号出现后反复重试登录/数据面 | [登录 403 处置](http://littlemagic8.github.io/2026/11/15/how-to-solve-antigravity-login)：反复重试加深"异常"标签 | 与 L3 同义：登录页 403 / 数据面风控提示=立即停手；事件窗口不重试、不换号、不清冷却，lane hold 人工释放后才动 |
+| 第三方"账号管理器"类工具批量操作凭据 | [Antigravity-Manager #646](https://github.com/lbjlaq/Antigravity-Manager/issues/646)（新号 429 风控与该类工具伴生） | 凭据操作只走本仓 guardrails/面板既有事务，不引入外部管理器 |
+| 账号类型集中（jio/pixel/学生号等定向扫荡传闻） | 2026-11-16 社区传闻（按扩大处理） | 现有池保持多来源分散；传闻并入全池暂停纪律处置，不按类型预防性删号 |
+
+### 降智检测锚（served-model 观测）
+
+- 服务侧已有：doctor `==model-substitution==`（`upstream served model` warn +
+  `model_substitution_distinct_pairs` 拆分），判读见上文"静默换模型判读"；
+  不新增周期探针，观测仍走 doctor 既有计数与事发取证。
+- 外部锚：Gemini API response 的 `modelVersion` 字段是 served 模型的客观读数；
+  free tier 有 forced fallback（请求名被 smaller variant 接管、社区报质量劣化），
+  付费/Priority 档显著减少但非零（[模型文档](https://aistudio.google.com/docs/models)、
+  [Tier-2 503 实例](https://discuss.ai.google.dev/t/persistent-503-on-gemini-3-7-flash-with-priority-tier-tier-2-paid-0-success-over-multiple-retries/179804)）。
+- 已定性结论不变：agy 降智=Google tier serving 政策（碳/氩 served 裸名、flash-n
+  全池降级、换凭据无效），**客户端无解**；唯一杠杆=更高档凭据或车道分流。
+  不凭主观感受开案：先固定请求模型与样例，再对照替换对计数与 modelVersion 读数。
+- 限额口径（官方页）：组模型共享 5h 窗与周顶，Ultra（$100/mo）token 限额 ≈ 5×
+  Pro（$20/mo）（[Plans 文档](https://antigravity.google/docs/plans)）；有 Pro 仍可能
+  显示 "ineligible for higher rate limits"
+  （[Dev Forum](https://discuss.ai.google.dev/t/ineligible-for-higher-antigravity-rate-limits-although-account-is-eligible-for-google-ai-pro/183071)），
+  资格判定以官方页读数为准，勿按社区画像补判。
+
 ## claude-oauth lane 信号形态与急停（2026-10-17 lane 落地起）
 
 claude 订阅 OAuth lane 在役后，本页分级对本 lane 适用。判读入口仍是 strict
