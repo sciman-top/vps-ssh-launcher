@@ -3104,7 +3104,14 @@ else:
     drift.append("intl_plugin:token_keepalive_not_false")
     print("workbuddy-intl-plugin=enabled keepalive=NOT_OFF expected=off")
 
-alias_map = config.get("oauth-model-alias") if isinstance(config, dict) else None
+# The deployed config carries the bridge inside the oauth: block
+# (oauth.model-alias); the top-level spelling is a legacy fallback.
+alias_map = None
+oauth_block = config.get("oauth") if isinstance(config, dict) else None
+if isinstance(oauth_block, dict) and isinstance(oauth_block.get("model-alias"), dict):
+    alias_map = oauth_block.get("model-alias")
+elif isinstance(config, dict) and isinstance(config.get("oauth-model-alias"), dict):
+    alias_map = config.get("oauth-model-alias")
 raw_entries = alias_map.get("workbuddy-ai-provider") if isinstance(alias_map, dict) else None
 bridge = {}
 if isinstance(raw_entries, list):
@@ -3125,7 +3132,11 @@ if isinstance(alias_map, dict) and "workbuddy" in alias_map:
     drift.append("oauth_model_alias:legacy_workbuddy_channel_present")
     print("workbuddy-alias-legacy-channel=PRESENT note=remove")
 
-excluded = config.get("oauth-excluded-models") if isinstance(config, dict) else None
+excluded = None
+if isinstance(oauth_block, dict) and isinstance(oauth_block.get("excluded-models"), dict):
+    excluded = oauth_block.get("excluded-models")
+elif isinstance(config, dict) and isinstance(config.get("oauth-excluded-models"), dict):
+    excluded = config.get("oauth-excluded-models")
 for provider_key in ("workbuddy-provider", "workbuddy-ai-provider"):
     lst = excluded.get(provider_key) if isinstance(excluded, dict) else None
     if isinstance(lst, list) and lst:
