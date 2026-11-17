@@ -2724,11 +2724,18 @@ except Exception as exc:
                     1,
                     "got=0.21.26",
                 ),
+                # Closed-dark healthy state: only the CN plugin registers.
+                (
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.27",
+                    0,
+                    "workbuddy-version=cn:0.21.27 intl:disabled_closed_dark_20261117",
+                ),
+                # An INTL registration while the lane is closed = drift.
                 (
                     "plugin registered plugin_id=workbuddy-provider version=0.21.27\n"
                     "plugin registered plugin_id=workbuddy-ai-provider version=0.1.40",
-                    0,
-                    "workbuddy-version=cn:0.21.27 intl:0.1.40",
+                    1,
+                    "workbuddy-version=UNEXPECTED_REGISTRATION plugin=workbuddy-ai-provider got=0.1.40",
                 ),
             ):
                 with self.subTest(mock_log=mock_log):

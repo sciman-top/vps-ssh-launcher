@@ -2,10 +2,13 @@
 # Read-only WorkBuddy plugin-version gate. The dynamically loaded .so files
 # report their versions only through the registration lines, so container
 # recreation resets the bounded container-log evidence like the adjacent
-# runtime checks. 2026-11-17 luode0320 cutover: two plugins, two pins —
+# runtime checks. 2026-11-17 luode0320 cutover: two plugins —
 # workbuddy-provider (CN) and workbuddy-ai-provider (INTL) — and the legacy
 # single-plugin workbuddy.so must be gone, or a stale mmqz artifact would
 # register alongside the pair and serve an unpinned surface.
+# 2026-11-17 (user directive, same day): the INTL lane is closed dark —
+# workbuddy-ai-provider stays deployed but must NOT register; a registration
+# line is an accidental re-open and fails this gate.
 set -eu
 
 DIR="${CPA_DIR:-/opt/cliproxyapi}"
@@ -57,13 +60,11 @@ if [ "$registered_cn" != "$EXPECTED_CN" ]; then
   exit 1
 fi
 if [ -z "$registered_intl" ]; then
-  echo "workbuddy-version=UNVERIFIED plugin=workbuddy-ai-provider expected=$EXPECTED_INTL current_process_log=none"
-  exit 1
+  # Closed-dark healthy state: the INTL plugin must not register while the
+  # lane is closed. Its .so stays deployed for the one-flag re-enable.
+  echo "workbuddy-version=cn:$registered_cn intl:disabled_closed_dark_20261117"
+  echo "workbuddy-version-coverage=current_container_process_only; recreation resets the window; loading does not prove request behavior"
+  exit 0
 fi
-if [ "$registered_intl" != "$EXPECTED_INTL" ]; then
-  echo "workbuddy-version=MISMATCH plugin=workbuddy-ai-provider expected=$EXPECTED_INTL got=$registered_intl"
-  exit 1
-fi
-
-echo "workbuddy-version=cn:$registered_cn intl:$registered_intl"
-echo "workbuddy-version-coverage=current_container_process_only; recreation resets the window; loading does not prove request behavior"
+echo "workbuddy-version=UNEXPECTED_REGISTRATION plugin=workbuddy-ai-provider got=$registered_intl note=closed_dark_20261117"
+exit 1
