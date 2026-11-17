@@ -860,6 +860,14 @@ manifest `antigravity_oauth_exclusions` 派生，doctor
 1M 统一窗口）与 `claude-sonnet-5-5-high`（1M 窗口）：两模型仅其中一份 pro
 凭据可供（IDE 实证），单点无 failover；`claude-sonnet-5-5-high` 同日移出
 `antigravity_oauth_exclusions` 并入 `codex_api_key_exclusions` 防抢注。
+2026-11-17 池重组为 7 份凭据文件（换血删 mamo、双新 pro 入池、cockpit 导入
+与自有号入池）；同日夜间实证上游会对高级请求档做**静默降级替换**：
+`gemini-3.8-flash-high` 被以 `gemini-3.8-flash-n` 服务、
+`gemini-4-hydrogen-xhigh` 被以 `gemini-4-hydrogen` 服务，executor 仅打
+`usage_helpers.go` warn、HTTP 照常 200；另有凭据对同一请求直接
+`429 RESOURCE_EXHAUSTED`（裸错误体、本地用量≈0，与调用方用量无关，呈
+凭据子集分化）。单发验收必须断言 served model，替换响应不得计为通过；
+当日唯一未被替换的在役模型为 `claude-sonnet-5-5-high`。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`

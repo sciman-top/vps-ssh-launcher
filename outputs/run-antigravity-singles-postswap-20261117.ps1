@@ -38,7 +38,7 @@ single() {
 import json, sys
 path, model = sys.argv[1], sys.argv[2]
 text = open(path, encoding="utf-8", errors="replace").read()
-parts = []; terminal = False; events = 0
+parts = []; terminal = False; events = 0; served = set()
 for line in text.splitlines():
     if not line.startswith("data: "):
         continue
@@ -52,8 +52,14 @@ for line in text.splitlines():
     events += 1
     ch = (ev.get("choices") or [{}])[0]
     parts.append(str((ch.get("delta") or {}).get("content") or ""))
+    if ev.get("model"):
+        served.add(str(ev["model"]))
 tag = model.upper().replace(".", "_").replace("-", "_")
 print("%s_SSE_EVENTS=%d TERMINAL=%s TEXT=%r" % (tag, events, str(terminal).lower(), "".join(parts).strip()))
+served_ids = ", ".join(sorted(served)) if served else "unknown"
+print("%s_SERVED_MODEL=%s" % (tag, served_ids))
+if served and model not in served:
+    print("%s_SUBSTITUTED=YES upstream_replaced_requested_model" % tag)
 for marker in ("VALIDATION_REQUIRED", "PERMISSION_DENIED", "operator_review_required", "TOS_VIOLATION"):
     if marker in text:
         print("%s_SIGNAL=%s" % (tag, marker))

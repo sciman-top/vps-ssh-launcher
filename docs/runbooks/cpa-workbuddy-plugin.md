@@ -227,7 +227,11 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 5. 当日按独立受控变更验收：配置前后快照、`/v1/models` 读回、两条 lane 的
    `/healthz` 与状态文件归属、CN 裸名和 INTL alias/`sg` 的单发受控
    验收分别留痕。单发通过只证明当次路由与响应，不证明长期 QoS、账号资格或
-   provider 的全局限流隔离。
+   provider 的全局限流隔离。单发必须同时断言 served model（SSE chunk 的
+   `model` 字段或日志 `upstream served model`）与实际绑定的凭据文件：上游可
+   静默用低配档替换请求档（2026-11-17 实证 `hy4flash-free`→`hy4`、
+   `hy4-flash-free`），替换响应 HTTP 照常 200、仅一行 `usage_helpers.go`
+   warn——按替换响应验收通过属假阳性。
 
 Strict doctor 不把登录窗口中的 `cn` 当作立即失败，但会显式输出
 `workbuddy-login_region=cn expected=intl warning=sticky_cn_new_logins_only`；
@@ -335,7 +339,7 @@ Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；
 | `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。INTL lane 曾有的零成本例外（`hy4free`/`hy4flash-free`）已随 2026-11-17 该模型退役而摘除，lane 现关闭暗置不产生流量。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
 | `14003` "模型繁忙"（官方归模型侧；2026-10-20 增补，同日策略更新） | 先分流：双账号同现且面板额度未耗尽支持模型/通道侧故障的判断，但不能单独排除共享出口或账号风控；单账号独现也不足以确认账号受限，须结合完整错误及官方账号状态。停止调用端连点重试（实测 Codex 客户端 5 连发会加深突发画像）。自 2026-10-20 起 admission 对模型侧 14003 **不再置 operator-review hold**：无 `Retry-After` 的 429 只落冷却阶梯首档（当前首档 60 秒，阶梯 60/120/240/480/900 秒；可信上游期限可延长窗口），窗后允许后续请求但不保证上游恢复；账号型信号（`rate_limit_error`/6003/6004/11140/认证类）仍照旧持锁。人工干预仅在整个阶梯走完仍失败时按 [cpa-gateway 人工恢复](cpa-gateway.md#oauth-持久化风险状态的人工恢复) 评估。实测窗口 2026-10-20 为 ~31 分钟自愈（[台账 §6](../change-evidence/20261020-bwg-cpa-v8035-canary.md)）；社区"按出口 IP 聚合"属非官方观测，不将换网络试探作为常规恢复动作。**2026-10-21 缺陷收口**：部署后首波 14003 经 CPA 包装信封（wrapper `type=rate_limit_error`）误置 durable hold——wrapper 标签击败 header 层阶梯改动（生产形状未被原钉住测试覆盖）；已修复并部署（[台账](../change-evidence/20261021-bwg-workbuddy-14003-wrapper-fix.md)，pin `19d64361`）：分类按 wrapper message 内嵌上游 code，wrapper-14003 归阶梯自恢复，裸 rate_limit_error/内嵌 6003/6004 仍持锁。 |
 | `11115 INPUT TOO LONG` | 按官方错误码说明缩短输入或压缩上下文，在本地检查请求大小；该码本身不是账号受限证据，不换号重发超长请求。 |
-| `11128`、超时或普通 5xx | 不循环重发原请求。保留一次脱敏错误上下文并停止自动化；若是请求格式错误，在本地修正后再按官方支持路径评估，不通过反复探测来确认账号状态。 |
+| `11128`、超时或普通 5xx | 不循环重发原请求。保留一次脱敏错误上下文并停止自动化；若是请求格式错误，在本地修正后再按官方支持路径评估，不通过反复探测来确认账号状态。2026-11-17 夜波实证：11128 可按客户端指纹触发——codex 客户端发起的 wb 流量（跨 `/v1/responses` 端点、跨凭据、跨 luode 双插件）被上游 `Illegal API invocation from an unapproved channel`（HTTP 400）拒绝并包装为 500，loopback/无 codex 特征的请求不受影响；会话亲和只认 quota 类重绑（11128/500 不换凭据），故对 codex 持续失败。处置=受影响客户端改道（deepseek 裸名→`-oc` 走 opencode）或等上游放松/插件指纹更新（luode 上游仓已删库，无新版本可拉；回挂 `workbuddy.so.upstream-0.9.58.bak` 做 A/B 属维护窗受控实验），勿循环重试原形状加深画像。 |
 | 输出质量变化（“降智”） | 不把单次回答或模型自动路由结果定性为账号处罚。记录实际模型/Auto 状态、套餐或积分、上下文长度、时间与 request ID；只在官方产品提供的固定模型/设置下做少量同任务对照，避免反复试探。没有受控对照或官方状态说明时标记为“原因未证实”。 |
 
 官方[错误码说明](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)将 `6003/6004` 列为频率限制信号，但没有公开可通用于该插件的请求阈值。社区 [issue #2152](https://github.com/yetone/magpie/issues/2152) 报告过 `403/11140` 与账号受限；这是单个用户报告，变量未经控制，不能推断封禁阈值、触发原因或安全 IP/请求节奏。
