@@ -868,6 +868,14 @@ manifest `antigravity_oauth_exclusions` 派生，doctor
 `429 RESOURCE_EXHAUSTED`（裸错误体、本地用量≈0，与调用方用量无关，呈
 凭据子集分化）。单发验收必须断言 served model，替换响应不得计为通过；
 当日唯一未被替换的在役模型为 `claude-sonnet-5-5-high`。
+2026-11-18 01:33+08 复测（outputs/probe-agy-flash-sample-20261118.ps1）：
+429 已解除（6 发零 RESOURCE_EXHAUSTED），但 **flash-high→flash-n 替换已
+扩散为全池**（6 个不同凭据 auth_index 均出现替换 warn）——`-high` 档被
+上游整体降级，换凭据无法取回 high 档；`<system-conventions>` 内容触发
+假设经带/不带对照探针判否。质量敏感流量用 `claude-sonnet-5-5-high`；
+doctor `==model-substitution-by-credential==` 段为常驻观察面。社区同族
+报告：CLIProxyAPI #5751（配额健康仍 429）、oh-my-pi #12029（另一客户端的
+内容触发变体）、Google AI Dev Forum/Reddit 的静默降档报告。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
