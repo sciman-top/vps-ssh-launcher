@@ -356,7 +356,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument(
         "--model",
-        choices=("gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra"),
+        choices=(
+            "gpt-6-luna",
+            "gpt-5.6-luna",
+            "gpt-6.1-sol",
+            "gpt-6.1-terra",
+            "gpt-6.2-sol",
+        ),
         required=True,
     )
     parser.add_argument("--port", type=int, choices=(10909, 14185))

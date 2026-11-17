@@ -421,11 +421,14 @@ expected = {
         "gpt-5.6-luna",
         "gpt-6.1-sol",
         "gpt-6.1-terra",
+        "gpt-6.2-sol",
     ],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
         "gemini-4-hydrogen-xhigh",
+        "gemini-4-carbon-high",
+        "gemini-4-argon-high",
         "claude-sonnet-5-5-high",
     ],
     "workbuddy-oauth": [

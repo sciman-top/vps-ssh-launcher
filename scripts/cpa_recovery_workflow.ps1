@@ -23,7 +23,7 @@ param(
   # were revived 2026-11-14, see docs/change-evidence/20261114-bwg-cpa-sol-terra-revival-restore.md).
   # The default stays a name that is live on the current upstream: a reset-event
   # recovery dispatches a one-shot probe at it.
-  [ValidateSet("gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra")]
+  [ValidateSet("gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol")]
   [string]$RecoveryModel = "gpt-6-luna",
   [ValidateRange(0.01, 720)]
   [double]$Hours = 4

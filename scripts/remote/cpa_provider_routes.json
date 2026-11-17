@@ -53,9 +53,16 @@
           "name": "gpt-6-astra",
           "alias": "gpt-6-astra",
           "max-context-length": 272000
+        },
+        {
+          "name": "gpt-6.2-astra",
+          "alias": "gpt-6.2-astra",
+          "max-context-length": 272000
         }
       ],
-      "optional_models": [],
+      "optional_models": [
+        "gpt-6.2-astra"
+      ],
       "retired_models": [
         "gpt-6.1-sol-input"
       ]
@@ -140,6 +147,10 @@
         {
           "name": "gpt-6.1-terra",
           "alias": "gpt-6.1-terra"
+        },
+        {
+          "name": "gpt-6.2-sol",
+          "alias": "gpt-6.2-sol"
         }
       ]
     },
@@ -156,6 +167,14 @@
         {
           "name": "gemini-4-hydrogen-xhigh",
           "alias": "gemini-4-hydrogen-xhigh"
+        },
+        {
+          "name": "gemini-4-carbon-high",
+          "alias": "gemini-4-carbon-high"
+        },
+        {
+          "name": "gemini-4-argon-high",
+          "alias": "gemini-4-argon-high"
         },
         {
           "name": "claude-sonnet-5-5-high",
@@ -181,6 +200,10 @@
       {
         "name": "gpt-6.1-terra",
         "max-context-length": 272000
+      },
+      {
+        "name": "gpt-6.2-sol",
+        "max-context-length": 500000
       }
     ],
     "antigravity": [
@@ -230,8 +253,6 @@
     "claude-opus-4-6-thinking",
     "claude-opus-5-5-high",
     "claude-sonnet-4-6",
-    "gemini-4-argon-high",
-    "gemini-4-carbon-high",
     "gpt-oss-120b-medium"
   ],
   "antigravity_upstream_static_models": [
@@ -251,6 +272,7 @@
   ],
   "oauth_exclusions": [
     "codex-auto-review",
+    "gpt-6.2-astra",
     "deepseek-v4.1-flash-oc",
     "gpt-5.4-mini",
     "gpt-5.5",
@@ -274,6 +296,9 @@
   ],
   "codex_api_key_exclusions": [
     "gpt-6-luna",
+    "gpt-6.2-sol",
+    "gpt-6.2-astra",
+    "gemini-4-argon-high",
     "codex-auto-review",
     "gpt-5.4-mini",
     "gpt-5.5",

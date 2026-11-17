@@ -800,7 +800,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["antigravity_oauth_exclusions"].remove("gemini-4-argon-high")
+        manifest["antigravity_oauth_exclusions"].remove("gemini-3-flash")
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(
             any(

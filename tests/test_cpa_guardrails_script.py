@@ -1839,9 +1839,12 @@ except Exception as exc:
             [model["alias"] for model in slot1_route["models"]],
             [
                 "gpt-6-astra",
+                # gpt-6.2-astra pre-opened 2026-11-18 (user directive) ahead of
+                # the upstream serving it; optional until confirmed live.
+                "gpt-6.2-astra",
             ],
         )
-        self.assertEqual(slot1_route["optional_models"], [])
+        self.assertEqual(slot1_route["optional_models"], ["gpt-6.2-astra"])
         self.assertEqual(slot1_route["retired_models"], ["gpt-6.1-sol-input"])
         # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
         # whole image_models key disappears instead of staying an empty list.
