@@ -154,8 +154,7 @@
       "name": "workbuddy-intl-oauth",
       "models": [
         "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
-        "hy4flash-free"
+        "deepseek-v4.1-flash-sg"
       ],
       "max_inflight": 1,
       "max_pending": 4,
@@ -185,9 +184,6 @@
         "quota exceeded",
         "usage limit",
         "usage_limit_reached"
-      ],
-      "zero_cost_models": [
-        "hy4flash-free"
       ]
     }
   ]

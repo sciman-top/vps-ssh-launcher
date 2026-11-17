@@ -29,8 +29,9 @@ $manifestJson = Get-Content -Raw -Encoding utf8 $manifestPath
 $manifestB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifestJson))
 
 # Validate the manifest shape before anything is projected: since the
-# 2026-11-17 user-directed rename the bridge is exactly the one intl fork
-# alias (hy4flash-free surfaces bare, so no alias entry covers it), and the
+# 2026-11-17 user-directed rename+retirement the bridge is exactly the one
+# intl fork alias (deepseek-v4.1-flash-intl riding on the declared-but-closed
+# deepseek-v4.1-flash-sg; hy4flash-free is retired outright), and the
 # legacy workbuddy channel must stay gone. Note the deployed bridge lives
 # inside config.yaml's oauth: block (oauth.model-alias); this tool's surgery
 # still targets the legacy top-level spelling and therefore refuses against

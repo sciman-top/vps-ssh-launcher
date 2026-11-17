@@ -98,7 +98,6 @@ ADMISSION_LANE_MODELS = {
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4flash-free",
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
@@ -110,20 +109,23 @@ ADMISSION_LANE_MODELS = {
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
     # 2026-11-17 luode0320 cutover: pins are the upstream ids each realm's
-    # dynamic catalog actually serves. hy4flash-free (x0.00 credits) is the
-    # INTL zero-cost fallback and, since the 2026-11-17 user-directed rename,
-    # surfaces under its bare upstream id: the interim client alias hy4free
-    # named the retired upstream id and was retired with it. The CN pool
+    # dynamic catalog actually serves. 2026-11-17 (user directive, second
+    # batch): hy4flash-free (the x0.00 free tier that surfaced bare after the
+    # hy4free alias rename) is RETIRED — removed from the pin and tombstoned
+    # in the deployed oauth-excluded-models; the doctor client-model-catalog
+    # gate fails closed if it ever reappears. deepseek-v4.1-flash-sg stays
+    # DECLARED but closed dark (excluded upstream only): re-enabling is a
+    # one-line removal from oauth-excluded-models, which brings back both the
+    # sg bare name and the deepseek-v4.1-flash-intl fork alias. The CN pool
     # still carries only the paid primary.
     "cn": ["deepseek-v4.1-flash"],
-    "intl": ["deepseek-v4.1-flash-sg", "hy4flash-free"],
+    "intl": ["deepseek-v4.1-flash-sg"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
     "cn": ["deepseek-v4.1-flash"],
     "intl": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4flash-free",
     ],
 }
 

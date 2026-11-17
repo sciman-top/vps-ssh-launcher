@@ -434,7 +434,6 @@ expected = {
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4flash-free",
     ],
 }
 
@@ -3122,9 +3121,10 @@ expect_bridge = {
     "deepseek-v4.1-flash-intl": "deepseek-v4.1-flash-sg",
 }
 missing = sorted(a for a, name in expect_bridge.items() if bridge.get(a) != name)
-# 2026-11-17 user-directed rename: the interim hy4free alias retired with the
-# upstream id it named; hy4flash-free surfaces bare, so the only bridge entry
-# left is the intl fork alias. Any other alias on this channel is drift.
+# 2026-11-17 user-directed rename, same-day retirement: the interim hy4free
+# alias and then hy4flash-free itself left the surface, so the only bridge
+# entry left is the intl fork alias over the declared-but-closed sg pin. Any
+# other alias on this channel is drift.
 extra = sorted(a for a in bridge if a not in expect_bridge)
 if missing or extra:
     drift.append("oauth_model_alias:" + ",".join(missing + extra))

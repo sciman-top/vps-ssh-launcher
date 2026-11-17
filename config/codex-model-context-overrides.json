@@ -84,12 +84,6 @@
       "context_window": 1000000,
       "max_context_window": 1000000,
       "auto_compact_token_limit": 900000
-    },
-    {
-      "slug": "hy4flash-free",
-      "context_window": 1000000,
-      "max_context_window": 1000000,
-      "auto_compact_token_limit": 900000
     }
   ]
 }

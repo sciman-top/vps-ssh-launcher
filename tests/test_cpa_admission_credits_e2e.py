@@ -8,8 +8,10 @@ latch, persistence, and the per-model refusal are exercised in the order
 production sees them.
 
 Regression target: one drained credential used to gate every model, including
-the zero-cost ``hy4flash-free`` (the 2026-11-17 rename retired the interim
-``hy4free`` client alias), and reported the cause as a missing deadline.
+zero-cost ones, and reported the cause as a missing deadline. Production
+currently carries no zero-cost model (hy4flash-free retired 2026-11-17), so
+the zero-cost scenario rides a synthetic fixture name injected into the intl
+lane config here; the bypass logic itself is generic lane configuration.
 
 ``traffic_lock_path`` is deliberately left unset: that guard needs ``fcntl``,
 which does not exist on the Windows development host. With no lock path the
@@ -37,6 +39,11 @@ MODULE = runpy.run_path(
 )
 AdmissionProxy = cast(Any, MODULE["AdmissionProxy"])
 AdmissionServer = cast(Any, MODULE["Server"])
+
+# Production carries no zero-cost model since the 2026-11-17 hy4flash-free
+# retirement; the zero-cost bypass scenario rides this synthetic fixture name
+# injected into the intl lane by _run().
+ZERO_COST_FIXTURE = "wb-zero-cost-fixture"
 
 
 def _credits_body(code: int = 6008) -> bytes:
@@ -107,7 +114,12 @@ def _run(
     upstream, upstream_thread = _serve(CreditsUpstream)
     loaded = config()
     # The test intentionally shortens both lane queues, but keeps their
-    # production routing and independent persistent circuit state.
+    # production routing and independent persistent circuit state. The intl
+    # lane carries no zero-cost model in production any more, so the bypass
+    # scenario rides the synthetic fixture name.
+    intl_configured = lane(loaded, "workbuddy-intl-oauth")
+    intl_configured["models"] = list(intl_configured["models"]) + [ZERO_COST_FIXTURE]
+    intl_configured["zero_cost_models"] = [ZERO_COST_FIXTURE]
     for lane_name in ("workbuddy-oauth", "workbuddy-intl-oauth"):
         loaded_lane = lane(loaded, lane_name)
         loaded_lane["max_inflight"] = 2
@@ -175,8 +187,11 @@ def test_6008_arms_the_capacity_ladder_without_a_hold(tmp_path: Path) -> None:
 
 
 def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
-    """`hy4flash-free` costs x0.00 credits, so a burned-through allowance must
-    not gate it.
+    """A zero-cost lane model costs x0.00 credits, so a burned-through
+    allowance must not gate it.
+
+    The scenario rides the synthetic ZERO_COST_FIXTURE name (production
+    carries no zero-cost model since the hy4flash-free retirement).
 
     The fake upstream refuses everything, so the free request also ends in an
     upstream error -- what matters is that it was *admitted* (it reached the
@@ -190,7 +205,7 @@ def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
             "deepseek-v4.1-flash-sg",
             "deepseek-v4.1-flash-intl",
             "deepseek-v4.1-flash",
-            "hy4flash-free",
+            ZERO_COST_FIXTURE,
         ],
     )
     assert info["states"]["intl"]["hold_reason"] is None
@@ -200,7 +215,7 @@ def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
     # independent and the zero-cost INTL model still passed its cooldown...
     assert "deepseek-v4.1-flash-intl" not in info["calls"], info["calls"]
     assert "deepseek-v4.1-flash" in info["calls"], info["calls"]
-    assert "hy4flash-free" in info["calls"], info["calls"]
+    assert ZERO_COST_FIXTURE in info["calls"], info["calls"]
     refused = responses[-1].decode("utf-8", errors="replace")
     assert "operator_review_required" not in refused
 

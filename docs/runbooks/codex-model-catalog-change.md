@@ -35,13 +35,13 @@
 | ---: | --- |
 | 272000 | `gpt-6-astra`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra` |
 | 500000 | `gpt-6.1-sol` |
-| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-sg`, `deepseek-v4.1-flash-oc`, `claude-sonnet-5-5-high`, `hy4flash-free` |
+| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-sg`, `deepseek-v4.1-flash-oc`, `claude-sonnet-5-5-high` |
 | 1048576 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh` |
 
 三个 DeepSeek 名称指向同一真实模型窗口；`-sg` 是 WorkBuddy realm
-归属，`-oc` 是 provider alias。`hy4flash-free`（2026-11-17 更名前的客户端
-名是 `hy4free`，随已退役上游 id 一并退役）上游同名裸回显，仍使用
-1M 窗口，WorkBuddy 的输入上限为 960K，故客户端总上下文 pin 保持
+归属，`-oc` 是 provider alias。WorkBuddy INTL 的 `hy4flash-free`（x0.00
+免费档，更名前客户端名 `hy4free`）已于 2026-11-17 退役删除，1M 窗口条目
+随之撤销；WorkBuddy 的输入上限为 960K，故客户端总上下文 pin 保持
 1000000。Cockpit 内置 `codex-auto-review` 和编辑器里的 `gpt-reserve`
 不属于 CPA 这 15 个在役模型。
 

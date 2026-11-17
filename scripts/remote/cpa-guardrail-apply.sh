@@ -2293,7 +2293,6 @@ expected = {
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
-        "hy4flash-free",
     ],
 }
 expected_max_inflight = {

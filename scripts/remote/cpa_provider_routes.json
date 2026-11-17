@@ -182,10 +182,6 @@
         "name": "deepseek-v4.1-flash-sg",
         "alias": "deepseek-v4.1-flash-intl",
         "max-context-length": 1000000
-      },
-      {
-        "name": "hy4flash-free",
-        "max-context-length": 1000000
       }
     ]
   },
@@ -327,10 +323,9 @@
       "provider": "workbuddy-ai-provider",
       "realm": "intl",
       "models": [
-        "deepseek-v4.1-flash-sg",
-        "hy4flash-free"
+        "deepseek-v4.1-flash-sg"
       ],
-      "note": "2026-11-17 luode0320 cutover: the INTL plugin registers as workbuddy-ai-provider. Its upstream pins are the two ids its dynamic catalog actually serves: deepseek-v4.1-flash-sg keeps the bare client name (fork alias deepseek-v4.1-flash-intl rides on it), and hy4flash-free also surfaces bare. The cutover initially replaced hy4flash-free with the interim client alias hy4free (fork omitted) to keep the client surface byte-identical; on 2026-11-17 (user directive) that alias was retired with the old upstream id it named, so the free model is reached under its real upstream id.",
+      "note": "2026-11-17 luode0320 cutover: the INTL plugin registers as workbuddy-ai-provider. Its upstream pin is the one id its dynamic catalog serves: deepseek-v4.1-flash-sg keeps the bare client name (fork alias deepseek-v4.1-flash-intl rides on it). 2026-11-17 (user directive, second batch): hy4flash-free (x0.00 free tier, previously surfaced bare after the hy4free alias rename) is RETIRED — removed from this pin and tombstoned in the deployed oauth-excluded-models; the doctor client-model-catalog gate fails closed if it ever reappears. deepseek-v4.1-flash-sg is KEPT but CLOSED dark: it stays declared here and in the admission lane, and is only excluded upstream, so re-enabling is a one-line removal from oauth-excluded-models (both client names sg and the intl fork alias reappear).",
       "shared_consumption": true,
       "admission_lane": "workbuddy-intl-oauth"
     }

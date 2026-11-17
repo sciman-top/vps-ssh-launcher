@@ -5,9 +5,10 @@ plugin. The client surface now has three cooperating layers, each pinned
 here: (1) the route manifest's plugin_routes declare the upstream ids each
 realm's dynamic catalog must keep narrowed to via oauth-excluded-models,
 (2) the oauth_model_aliases fork bridge maps them to their client names,
-and (3) hy4flash-free stays an INTL-only zero-cost fallback under its bare
-upstream id (the 2026-11-17 rename retired the interim hy4free alias) - the
-CN pool still carries only the paid primary.
+and (3) hy4flash-free is RETIRED (2026-11-17, user directive) while
+deepseek-v4.1-flash-sg stays declared but closed dark via oauth-excluded-
+models — re-enabling is a one-line exclusion removal. The CN pool still
+carries only the paid primary.
 """
 
 from __future__ import annotations
@@ -47,15 +48,16 @@ def test_manifest_cn_plugin_pin_is_the_paid_primary_only() -> None:
     assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
 
-def test_manifest_intl_pins_are_the_two_served_upstream_ids() -> None:
+def test_manifest_intl_pin_is_the_single_declared_upstream_id() -> None:
     routes = _manifest()["plugin_routes"]
     intl = [r for r in routes if r["realm"] == "intl"]
     assert len(intl) == 1
     assert intl[0]["provider"] == "workbuddy-ai-provider"
     # deepseek-v4.1-flash-sg keeps the bare client name (fork alias rides on
-    # it); hy4flash-free also surfaces bare since the 2026-11-17 rename
-    # retired the interim hy4free replace-alias.
-    assert intl[0]["models"] == ["deepseek-v4.1-flash-sg", "hy4flash-free"]
+    # it). It is currently closed dark upstream via oauth-excluded-models but
+    # stays DECLARED for one-line re-enabling; hy4flash-free retired
+    # 2026-11-17 (user directive) and must not return to the pin.
+    assert intl[0]["models"] == ["deepseek-v4.1-flash-sg"]
     assert intl[0]["admission_lane"] == "workbuddy-intl-oauth"
 
 
@@ -74,21 +76,29 @@ def test_fork_bridge_maps_the_intl_client_alias_only() -> None:
     }
 
 
-def test_hy4flash_free_is_not_a_pooled_alias() -> None:
-    """hy4flash-free is exclusive to the independent INTL lane."""
+def test_hy4flash_free_is_retired_and_sg_stays_declared() -> None:
+    """hy4flash-free retired 2026-11-17; sg/intl kept declared but closed."""
 
     routes = _manifest()
+    # Retired: not pooled, not pinned, not in any expectation list.
     assert "hy4flash-free" not in routes["pooled_aliases"]
-    holders = [
-        r["realm"] for r in routes["plugin_routes"] if "hy4flash-free" in r["models"]
-    ]
-    assert holders == ["intl"]
-    # The retired interim alias must not reappear as a live name: no pin list
-    # carries it (prose in the note may still reference it historically).
+    assert "hy4free" not in routes["pooled_aliases"]
+    assert "hy4flash-free" not in json.dumps(
+        [r["models"] for r in routes["plugin_routes"]]
+    )
     models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_MODELS
     admission_models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_ADMISSION_MODELS
+    assert "hy4flash-free" not in models["cn"] + models["intl"]
+    assert "hy4flash-free" not in admission_models["cn"] + admission_models["intl"]
     assert "hy4free" not in models["cn"] + models["intl"]
     assert "hy4free" not in admission_models["cn"] + admission_models["intl"]
+    # Closed-dark keepers: sg stays declared upstream-side and both client
+    # names stay on the admission lane for one-line re-enabling.
+    assert models["intl"] == ["deepseek-v4.1-flash-sg"]
+    assert admission_models["intl"] == [
+        "deepseek-v4.1-flash-intl",
+        "deepseek-v4.1-flash-sg",
+    ]
 
 
 def test_legacy_workbuddy_provider_route_is_gone() -> None:

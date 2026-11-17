@@ -98,11 +98,16 @@ def test_neighbouring_codes_keep_their_existing_meaning(
     assert hold != "account_credits_exhausted"
 
 
-def test_zero_cost_models_are_declared_in_lane_config(admission: ModuleType) -> None:
-    """hy4flash-free is served at x0.00 credits, so billing cannot gate it.
+def test_zero_cost_models_are_absent_after_hy4flash_free_retirement(
+    admission: ModuleType,
+) -> None:
+    """hy4flash-free retired 2026-11-17 (user directive): the INTL lane now
+    carries no zero-cost models — billing gates every remaining model.
 
     The list is lane configuration, not a code constant: which models are free
-    is provider catalog data that moves without a code change.
+    is provider catalog data that moves without a code change. The zero-cost
+    bypass path itself stays covered by the credits e2e suite through a
+    synthetic lane fixture.
     """
     loaded = admission.load_config(
         Path(__file__).resolve().parent.parent / "scripts/remote/cpa-admission.json"
@@ -110,7 +115,7 @@ def test_zero_cost_models_are_declared_in_lane_config(admission: ModuleType) -> 
     lane = next(
         item for item in loaded["lanes"] if item["name"] == "workbuddy-intl-oauth"
     )
-    assert "hy4flash-free" in lane["zero_cost_models"]
+    assert not lane.get("zero_cost_models")
 
 
 def test_zero_cost_models_default_to_empty_when_absent(admission: ModuleType) -> None:
