@@ -202,10 +202,6 @@
         "max-context-length": 1000000
       },
       {
-        "name": "claude-opus-5-5-high",
-        "max-context-length": 1000000
-      },
-      {
         "name": "claude-sonnet-5-5-high",
         "max-context-length": 1000000
       }
