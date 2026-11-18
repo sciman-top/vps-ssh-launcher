@@ -254,3 +254,51 @@ def test_context_overrides_must_match_live_manifest_windows(
         "gemini-4-argon-high" in error and "no max-context-length" in error
         for error in errors
     ), errors
+
+
+def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    overrides = tmp_path / "codex-model-context-overrides.json"
+    overrides.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "models": [
+                    {
+                        "slug": "deepseek-v4.1-flash-oc",
+                        "context_window": 1000000,
+                        "max_context_window": 1000000,
+                        "auto_compact_token_limit": 900001,
+                    },
+                    {
+                        "slug": "glm-5.3",
+                        "context_window": 1000000,
+                        "max_context_window": 1000000,
+                        "auto_compact_token_limit": "256000",
+                    },
+                    {
+                        "slug": "gemini-3.8-flash-high",
+                        "context_window": 1048576,
+                        "max_context_window": 1048576,
+                        "auto_compact_token_limit": 256000,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cpa_catalog_check, "CONTEXT_OVERRIDES", overrides)
+    errors = cpa_catalog_check.check()
+    assert any(
+        "deepseek-v4.1-flash-oc" in error and "between 1 and 900000" in error
+        for error in errors
+    ), errors
+    assert any(
+        "glm-5.3" in error and "auto_compact_token_limit='256000'" in error
+        for error in errors
+    ), errors
+    assert not any(
+        "gemini-3.8-flash-high" in error and "auto_compact_token_limit" in error
+        for error in errors
+    ), errors
