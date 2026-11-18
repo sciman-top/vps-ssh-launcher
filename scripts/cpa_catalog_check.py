@@ -516,6 +516,10 @@ def check() -> list[str]:
                 continue
             expected_window = manifest_contexts.get(slug)
             if expected_window is None:
+                errors.append(
+                    f"{_relative(CONTEXT_OVERRIDES)}: {slug!r} has no "
+                    "max-context-length in the manifest"
+                )
                 continue
             expected_compact = (expected_window * 9) // 10
             if (

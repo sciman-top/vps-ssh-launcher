@@ -238,3 +238,19 @@ def test_context_overrides_must_match_live_manifest_windows(
     errors = cpa_catalog_check.check()
     assert any("hy4flash-free" in error for error in errors), errors
     assert any("gpt-6.1-sol" in error and "500000" in error for error in errors), errors
+
+    manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
+    manifest["oauth_settings"]["antigravity"] = [
+        entry
+        for entry in manifest["oauth_settings"]["antigravity"]
+        if entry.get("name") != "gemini-4-argon-high"
+    ]
+    unpinned = tmp_path / "cpa_provider_routes.json"
+    unpinned.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.undo()
+    monkeypatch.setattr(cpa_catalog_check, "MANIFEST", unpinned)
+    errors = cpa_catalog_check.check()
+    assert any(
+        "gemini-4-argon-high" in error and "no max-context-length" in error
+        for error in errors
+    ), errors

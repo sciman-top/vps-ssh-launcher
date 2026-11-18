@@ -200,6 +200,64 @@ def test_summary_counts_lost_tokens_and_ratio() -> None:
     assert summary["mechanisms"] == {"cache_eviction": 1}
 
 
+def test_additive_provider_usage_stays_bounded_and_eligible() -> None:
+    """Providers that report uncached input in usage_in must not exceed 1.0
+    or drop warm hits below min_prefix_tokens from cache_eligible_turns."""
+
+    lines = [
+        _line(
+            stamp="2026-11-18 01:00:00",
+            lane="workbuddy-oauth",
+            model="deepseek-v4.1-flash",
+            usage_in=1_500,
+            usage_cached=200_000,
+        ),
+        _line(
+            stamp="2026-11-18 01:01:00",
+            lane="workbuddy-oauth",
+            model="deepseek-v4.1-flash",
+            usage_in=205_000,
+            usage_cached=0,
+        ),
+    ]
+    turns = probe.parse_journal(lines)
+    summary = probe.summarise(turns, probe.attribute(turns))
+    expected_ratio = 200_000 / (200_000 + 1_500 + 205_000)
+    assert summary["cache_eligible_turns"] == 2
+    assert summary["cache_hit_ratio"] == pytest.approx(expected_ratio, abs=1e-4)
+    assert summary["eligible_cache_hit_ratio"] == pytest.approx(
+        expected_ratio, abs=1e-4
+    )
+
+
+def test_filter_hours_anchors_on_newest_turn(tmp_path: Path, capsys: Any) -> None:
+    journal = tmp_path / "adm.log"
+    journal.write_text(
+        "\n".join(
+            [
+                _line(
+                    stamp="2026-11-15 01:00:00",
+                    conversation="old",
+                    usage_in=210_000,
+                    usage_cached=0,
+                ),
+                _line(
+                    stamp="2026-11-18 01:00:00",
+                    conversation="recent",
+                    usage_in=100_000,
+                    usage_cached=98_000,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert probe.main(["--file", str(journal), "--hours", "24", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert '"turns": 1' in out
+    assert '"restarts": 0' in out
+
+
 def test_render_emits_no_credential_or_prompt_shapes() -> None:
     lines = [_line(usage_in=240_000, usage_cached=0)]
     turns = probe.parse_journal(lines)
@@ -214,6 +272,37 @@ def test_render_emits_no_credential_or_prompt_shapes() -> None:
 def test_cli_requires_a_source() -> None:
     with pytest.raises(SystemExit):
         probe.main([])
+    with pytest.raises(SystemExit):
+        probe.main(["--file", "a.log", "--ssh-profile", "bwg"])
+    with pytest.raises(SystemExit):
+        probe.main(["--file", "a.log", "--hours", "0"])
+
+
+def test_cli_ssh_profile_stages_remote_probe(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    import subprocess as sp
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> sp.CompletedProcess[str]:
+        captured["argv"] = argv
+        return sp.CompletedProcess(
+            argv,
+            0,
+            stdout='{"summary": {"restarts": 0}, "restarts": []}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    rc = probe.main(["--ssh-profile", "bwg", "--hours", "24", "--json"])
+    assert rc == 0
+    joined = " ".join(captured["argv"])
+    assert "--profile bwg" in joined
+    assert "--strict-host-key-checking" in joined
+    assert "24 hours ago" in joined
+    assert "--file -" in joined
+    assert '"restarts": 0' in capsys.readouterr().out
 
 
 def test_cli_reads_a_file_and_emits_json(tmp_path: Path) -> None:

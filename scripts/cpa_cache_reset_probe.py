@@ -59,6 +59,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence, Tuple
 
@@ -67,6 +68,7 @@ _TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})")
 _FIELD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
 
 _MIN_PREFIX_TOKENS_DEFAULT = 20000
+_DEFAULT_REMOTE_HOURS = 48.0
 
 _PROVIDER_MODEL_ALIASES = (
     (re.compile(r"^(gemini-3\.8-flash)(?:-n)?$"), r"\1-high"),
@@ -126,6 +128,37 @@ class Turn:
     def has_usage(self) -> bool:
         return self.usage_in is not None or self.usage_cached is not None
 
+    @property
+    def prompt_tokens(self) -> Optional[int]:
+        """Total prompt tokens across inclusive and additive provider shapes.
+
+        Most OpenAI-shaped responses report total input in ``usage_in``, while
+        WorkBuddy and several Antigravity/Gemini shapes report uncached input
+        in ``usage_in`` and cache reads in ``usage_cached``. ``usage_cached >
+        usage_in`` is the same discriminant used by ``cpa-admission.py`` and
+        ``cpa_natural_traffic_audit.py``.
+        """
+
+        if self.usage_in is None and self.usage_cached is None:
+            return None
+        reported_in = self.usage_in or 0
+        reported_cached = self.usage_cached or 0
+        if reported_cached > reported_in:
+            return reported_cached + reported_in
+        return reported_in
+
+    @property
+    def uncached_tokens(self) -> Optional[int]:
+        """Uncached prompt tokens for cache-ratio denominators."""
+
+        if self.usage_in is None and self.usage_cached is None:
+            return None
+        reported_in = self.usage_in or 0
+        reported_cached = self.usage_cached or 0
+        if reported_cached > reported_in:
+            return reported_in
+        return max(0, reported_in - reported_cached)
+
     def cold(self, min_prefix_tokens: int = _MIN_PREFIX_TOKENS_DEFAULT) -> bool:
         """A turn that had a prefix but got no cache credit for it."""
 
@@ -180,6 +213,32 @@ def parse_journal(lines: Iterable[str]) -> list[Turn]:
             )
         )
     return turns
+
+
+def _parse_stamp(stamp: str) -> Optional[datetime]:
+    if not stamp:
+        return None
+    try:
+        return datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+
+
+def filter_hours(turns: Sequence[Turn], hours: Optional[float]) -> list[Turn]:
+    """Restrict turns to the trailing ``hours`` window ending at newest row."""
+
+    if hours is None:
+        return list(turns)
+    stamps = [parsed for turn in turns if (parsed := _parse_stamp(turn.at)) is not None]
+    if not stamps:
+        return list(turns)
+    cutoff = max(stamps) - timedelta(hours=hours)
+    kept: list[Turn] = []
+    for turn in turns:
+        parsed = _parse_stamp(turn.at)
+        if parsed is None or parsed >= cutoff:
+            kept.append(turn)
+    return kept
 
 
 def classify(turn: Turn, previous: Optional[Turn]) -> Tuple[str, str]:
@@ -244,25 +303,26 @@ def summarise(
         lost_tokens += finding.turn.usage_in or 0
 
     cached = sum(t.usage_cached or 0 for t in turns if t.has_usage)
-    total = sum(t.usage_in or 0 for t in turns if t.has_usage)
+    uncached = sum(t.uncached_tokens or 0 for t in turns if t.has_usage)
+    total = cached + uncached
     # Probe and title requests carry usage but no reusable prefix. They are
     # legitimate traffic, yet including them in the denominator is what made a
     # review read a healthy lane as a 12% hit ratio.
     cache_turns = [
-        t for t in turns if t.usage_in is not None and t.usage_in >= min_prefix_tokens
+        t
+        for t in turns
+        if t.prompt_tokens is not None and t.prompt_tokens >= min_prefix_tokens
     ]
+    eligible_cached = sum(t.usage_cached or 0 for t in cache_turns)
+    eligible_total = eligible_cached + sum(t.uncached_tokens or 0 for t in cache_turns)
 
     return {
         "turns": len(turns),
         "turns_with_usage": sum(1 for t in turns if t.has_usage),
         "cache_eligible_turns": len(cache_turns),
         "eligible_cache_hit_ratio": (
-            round(
-                sum(t.usage_cached or 0 for t in cache_turns)
-                / sum(t.usage_in or 1 for t in cache_turns),
-                4,
-            )
-            if cache_turns
+            round(eligible_cached / eligible_total, 4)
+            if cache_turns and eligible_total
             else None
         ),
         "conversations": len(conversations),
@@ -326,12 +386,65 @@ def render(summary: Mapping[str, object], findings: Sequence[Finding]) -> str:
 def _read_source(args: argparse.Namespace) -> list[str]:
     if not args.file:
         raise ValueError(
-            "--file is required; save the journal first "
+            "pass --file or --ssh-profile; save the journal first "
             '(journalctl -u cpa-admission --since "48 hours ago" --no-pager -o cat > adm48.log)'
         )
     if args.file == "-":
         return sys.stdin.read().splitlines()
     return Path(args.file).read_text(encoding="utf-8", errors="replace").splitlines()
+
+
+def _run_remote_probe(
+    profile: str,
+    hours: float,
+    min_prefix_tokens: int,
+    as_json: bool,
+) -> tuple[int, str, str]:
+    try:
+        from scripts import launcher_transport
+        from vps_ssh_launcher import config as target_config
+    except ImportError:
+        if __package__:
+            raise
+        from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
+
+        ensure_repo_imports()
+        from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]
+        from vps_ssh_launcher import (  # type: ignore[import-not-found,no-redef]
+            config as target_config,
+        )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = target_config.resolve_default_config_path(repo_root)
+    payload = launcher_transport.encode_source_payload(Path(__file__).read_bytes())
+    json_flag = " --json" if as_json else ""
+    action = (
+        f"journalctl -u cpa-admission --since '{hours:g} hours ago' "
+        f'--no-pager -o cat | python3 "$tmp" --file - '
+        f"--min-prefix-tokens {int(min_prefix_tokens)}{json_flag}"
+    )
+    command = launcher_transport.remote_temp_python_command(
+        payload=payload,
+        temp_prefix="cpa-cache-reset-probe",
+        action=action,
+    )
+    argv = launcher_transport.launcher_argv(
+        repo_root=repo_root,
+        command=command,
+        profile=profile,
+        config=config_path,
+        idle_timeout_seconds=60,
+        hard_timeout_seconds=180,
+    )
+    completed = subprocess.run(  # nosec B603
+        [sys.executable, *argv],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return completed.returncode, completed.stdout, completed.stderr
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -340,8 +453,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--file",
-        required=True,
-        help="saved admission journal text; dump it with journalctl -o cat",
+        default=None,
+        help="saved admission journal text (or '-' for stdin); dump with journalctl -o cat",
+    )
+    parser.add_argument(
+        "--ssh-profile",
+        default=None,
+        help="read the live admission journal on the named ssh_tool.py profile",
+    )
+    parser.add_argument(
+        "--hours",
+        type=float,
+        default=None,
+        help="trailing journal window in hours (defaults to 48 with --ssh-profile)",
     )
     parser.add_argument(
         "--min-prefix-tokens",
@@ -356,13 +480,38 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.hours is not None and args.hours <= 0:
+        parser.error("--hours must be positive")
+    if args.file and args.ssh_profile:
+        parser.error("pass either --file or --ssh-profile, not both")
+    if not args.file and not args.ssh_profile:
+        parser.error("one of --file or --ssh-profile is required")
+
+    if args.ssh_profile:
+        window_hours = args.hours if args.hours is not None else _DEFAULT_REMOTE_HOURS
+        try:
+            returncode, stdout, stderr = _run_remote_probe(
+                args.ssh_profile,
+                window_hours,
+                args.min_prefix_tokens,
+                args.json,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            print("input-error: {0}".format(error), file=sys.stderr)
+            return 2
+        if returncode != 0:
+            sys.stderr.write(stderr or stdout)
+            return returncode or 2
+        sys.stdout.write(stdout)
+        return 0
+
     try:
         lines = _read_source(args)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print("input-error: {0}".format(error), file=sys.stderr)
         return 2
 
-    turns = parse_journal(lines)
+    turns = filter_hours(parse_journal(lines), args.hours)
     findings = attribute(turns, args.min_prefix_tokens)
     summary = summarise(turns, findings, args.min_prefix_tokens)
     if args.json:

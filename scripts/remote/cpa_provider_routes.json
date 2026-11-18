@@ -218,6 +218,14 @@
         "max-context-length": 1048576
       },
       {
+        "name": "gemini-4-carbon-high",
+        "max-context-length": 1048576
+      },
+      {
+        "name": "gemini-4-argon-high",
+        "max-context-length": 1048576
+      },
+      {
         "name": "claude-sonnet-5-5-high",
         "max-context-length": 1000000
       }
