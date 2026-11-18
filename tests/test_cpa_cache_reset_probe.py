@@ -74,6 +74,11 @@ def test_provider_variant_is_not_a_model_switch() -> None:
     """flash-n is the provider echo of flash-high; both normalise to one name."""
 
     assert probe.normalise_model("gemini-3.8-flash-n") == "gemini-3.8-flash-high"
+    assert probe.normalise_model("gemini-3.8-flash") == "gemini-3.8-flash-high"
+    assert probe.normalise_model("gemini-4-hydrogen") == "gemini-4-hydrogen-xhigh"
+    assert probe.normalise_model("gemini-4-carbon") == "gemini-4-carbon-high"
+    assert probe.normalise_model("gemini-4-argon") == "gemini-4-argon-high"
+    assert probe.normalise_model("gemini-4-argon-trial") == "gemini-4-argon-high"
     # 2026-11-17: the luode cutover serves hy4flash-free upstream (echoed
     # bare); the retired hy4free upstream echoed hy4-free and keeps its
     # historical label so old journal windows stay stable.
@@ -226,3 +231,23 @@ def test_cli_reads_a_file_and_emits_json(tmp_path: Path) -> None:
 def test_cli_reports_unreadable_input(tmp_path: Path, capsys: Any) -> None:
     assert probe.main(["--file", str(tmp_path / "missing.log")]) == 2
     assert "input-error" in capsys.readouterr().err
+
+
+def test_cli_reads_stdin_when_file_is_dash(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    import io
+
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            _line(usage_in=100_000, usage_cached=99_000)
+            + "\n"
+            + _line(usage_in=240_000, usage_cached=0)
+            + "\n"
+        ),
+    )
+    assert probe.main(["--file", "-", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert '"restarts": 1' in out

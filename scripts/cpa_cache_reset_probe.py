@@ -69,7 +69,10 @@ _FIELD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
 _MIN_PREFIX_TOKENS_DEFAULT = 20000
 
 _PROVIDER_MODEL_ALIASES = (
-    (re.compile(r"^(gemini-3\.8-flash)-n$"), r"\1-high"),
+    (re.compile(r"^(gemini-3\.8-flash)(?:-n)?$"), r"\1-high"),
+    (re.compile(r"^(gemini-4-hydrogen)$"), r"\1-xhigh"),
+    (re.compile(r"^(gemini-4-carbon)$"), r"\1-high"),
+    (re.compile(r"^(gemini-4-argon)(?:-trial)?$"), r"\1-high"),
     # 2026-11-17: the luode cutover put hy4flash-free upstream (echoed bare);
     # the hy4-free line stays for journal rows from the retired hy4free
     # upstream so historical windows keep a stable label.
@@ -326,6 +329,8 @@ def _read_source(args: argparse.Namespace) -> list[str]:
             "--file is required; save the journal first "
             '(journalctl -u cpa-admission --since "48 hours ago" --no-pager -o cat > adm48.log)'
         )
+    if args.file == "-":
+        return sys.stdin.read().splitlines()
     return Path(args.file).read_text(encoding="utf-8", errors="replace").splitlines()
 
 

@@ -190,3 +190,51 @@ def test_retired_name_in_an_entry_point_choice_is_reported(
     monkeypatch.setattr(cpa_catalog_check, "CHOICE_SITES", (entry,))
     errors = cpa_catalog_check.check()
     assert any(retired in error for error in errors)
+
+
+def test_local_cockpit_policy_cannot_retire_a_live_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    policy = tmp_path / "cockpit_local_provider_policy.json"
+    policy.write_text(
+        json.dumps({"retired_hosts": [], "retired_models": ["deepseek-v4.1-flash-oc"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cpa_catalog_check, "COCKPIT_POLICY", policy)
+    errors = cpa_catalog_check.check()
+    assert any(
+        "deepseek-v4.1-flash-oc" in error and "retired_models" in error
+        for error in errors
+    ), errors
+
+
+def test_context_overrides_must_match_live_manifest_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    overrides = tmp_path / "codex-model-context-overrides.json"
+    overrides.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "models": [
+                    {
+                        "slug": "hy4flash-free",
+                        "context_window": 1000000,
+                        "max_context_window": 1000000,
+                        "auto_compact_token_limit": 900000,
+                    },
+                    {
+                        "slug": "gpt-6.1-sol",
+                        "context_window": 272000,
+                        "max_context_window": 272000,
+                        "auto_compact_token_limit": 244800,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cpa_catalog_check, "CONTEXT_OVERRIDES", overrides)
+    errors = cpa_catalog_check.check()
+    assert any("hy4flash-free" in error for error in errors), errors
+    assert any("gpt-6.1-sol" in error and "500000" in error for error in errors), errors

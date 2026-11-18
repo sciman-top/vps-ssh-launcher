@@ -39,6 +39,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "scripts" / "remote" / "cpa_provider_routes.json"
 ADMISSION_CONFIG = ROOT / "scripts" / "remote" / "cpa-admission.json"
 EXPECTATIONS = ROOT / "tests" / "cpa_catalog_expectations.py"
+COCKPIT_POLICY = ROOT / "scripts" / "cockpit_local_provider_policy.json"
+CONTEXT_OVERRIDES = ROOT / "config" / "codex-model-context-overrides.json"
 
 # lane name -> (kind, source name, optional plugin realm)
 LANE_SOURCES: dict[str, tuple[str, ...]] = {
@@ -457,6 +459,76 @@ def check() -> list[str]:
                 f"{_relative(path)}: does not offer live {CHOICE_LANE} alias(es) "
                 f"{missing}; the manifest serves {wanted}"
             )
+
+    # 6. Local Cockpit retirement policy must never target a live CPA alias:
+    # when a retired alias is re-admitted in the manifest (e.g.
+    # deepseek-v4.1-flash-oc on 2026-11-14), leaving it in retired_models makes
+    # cockpit_model_catalog_prune / cockpit_retired_models delete the live route.
+    cockpit_policy = _load_json(COCKPIT_POLICY, errors)
+    raw_local_retired = cockpit_policy.get("retired_models")
+    if isinstance(raw_local_retired, list):
+        live_marked_retired = sorted(
+            {str(name) for name in raw_local_retired if isinstance(name, str)} & live
+        )
+        for name in live_marked_retired:
+            errors.append(
+                f"{_relative(COCKPIT_POLICY)}: retired_models contains live alias "
+                f"{name!r}"
+            )
+
+    # 7. Desktop context overrides must only name live CPA aliases and agree
+    # with the manifest's max-context-length pins.
+    manifest_contexts: dict[str, int] = {}
+    for provider in manifest.get("providers", []) or []:
+        if not isinstance(provider, dict):
+            continue
+        for model in provider.get("models", []) or []:
+            if not isinstance(model, dict):
+                continue
+            alias = model.get("alias") or model.get("name")
+            window = model.get("max-context-length")
+            if isinstance(alias, str) and alias and type(window) is int:
+                manifest_contexts[alias] = window
+    oauth_settings = manifest.get("oauth_settings")
+    if isinstance(oauth_settings, dict):
+        for entries in oauth_settings.values():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                alias = entry.get("alias") or entry.get("name")
+                window = entry.get("max-context-length")
+                if isinstance(alias, str) and alias and type(window) is int:
+                    manifest_contexts[alias] = window
+    overrides = _load_json(CONTEXT_OVERRIDES, errors)
+    override_models = overrides.get("models")
+    if isinstance(override_models, list):
+        for entry in override_models:
+            if not isinstance(entry, dict) or not isinstance(entry.get("slug"), str):
+                continue
+            slug = entry["slug"]
+            if slug not in live:
+                errors.append(
+                    f"{_relative(CONTEXT_OVERRIDES)}: {slug!r} is not a live "
+                    "manifest alias"
+                )
+                continue
+            expected_window = manifest_contexts.get(slug)
+            if expected_window is None:
+                continue
+            expected_compact = (expected_window * 9) // 10
+            if (
+                entry.get("context_window") != expected_window
+                or entry.get("max_context_window") != expected_window
+                or entry.get("auto_compact_token_limit") != expected_compact
+            ):
+                errors.append(
+                    f"{_relative(CONTEXT_OVERRIDES)}: {slug!r} window "
+                    f"({entry.get('context_window')}/{entry.get('max_context_window')}/"
+                    f"{entry.get('auto_compact_token_limit')}) != manifest "
+                    f"({expected_window}/{expected_window}/{expected_compact})"
+                )
     return errors
 
 

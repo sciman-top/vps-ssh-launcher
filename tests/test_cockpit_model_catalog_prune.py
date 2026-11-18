@@ -174,9 +174,14 @@ def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
             Path(__file__).parents[1] / "scripts/cockpit_local_provider_policy.json"
         ).read_text(encoding="utf-8")
     )
-    assert {"deepseek-v4.1-flash-oc", "gpt-6.1-sol-input"} <= set(
-        policy["retired_models"]
-    )
+    retired = set(policy["retired_models"])
+    assert {
+        "gpt-reserve",
+        "gpt-6.1-sol-input",
+        "hy4free",
+        "hy4flash-free",
+    } <= retired
+    assert "deepseek-v4.1-flash-oc" not in retired
 
 
 def test_retired_model_planner_removes_entries_not_provider_keys() -> None:

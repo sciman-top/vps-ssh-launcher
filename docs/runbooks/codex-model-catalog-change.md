@@ -24,26 +24,27 @@
 由 cockpit 按窗口值统一生成，compact=90%（272000→244800、1000000→900000、
 1048576→943718），与 manifest 语义一致。
 
-### CPA 在役模型上下文契约（2026-11-16）
+### CPA 在役模型上下文契约（2026-11-18）
 
 `config/codex-model-context-overrides.json` 与
 `scripts/remote/cpa_provider_routes.json` 的 provider/`oauth_settings`
-上下文值保持一致。当前 CPA 用户可见的 15 个模型（包含
+上下文值保持一致。当前桌面受管目录可见的 16 个 CPA 模型（包含
 `deepseek-v4.1-flash-oc` 这个 provider alias）按下列窗口钉定：
 
 | 窗口 | 模型 |
 | ---: | --- |
 | 272000 | `gpt-6-astra`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra` |
-| 500000 | `gpt-6.1-sol` |
-| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-sg`, `deepseek-v4.1-flash-oc`, `claude-sonnet-5-5-high` |
-| 1048576 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh` |
+| 500000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
+| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc`, `claude-sonnet-5-5-high` |
+| 1048576 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-carbon-high`, `gemini-4-argon-high` |
 
-三个 DeepSeek 名称指向同一真实模型窗口；`-sg` 是 WorkBuddy realm
-归属，`-oc` 是 provider alias。WorkBuddy INTL 的 `hy4flash-free`（x0.00
-免费档，更名前客户端名 `hy4free`）已于 2026-11-17 退役删除，1M 窗口条目
-随之撤销；WorkBuddy 的输入上限为 960K，故客户端总上下文 pin 保持
-1000000。Cockpit 内置 `codex-auto-review` 和编辑器里的 `gpt-reserve`
-不属于 CPA 这 15 个在役模型。
+两个在役 DeepSeek 名称（`deepseek-v4.1-flash` 与 provider alias
+`deepseek-v4.1-flash-oc`）指向同一真实模型窗口；WorkBuddy INTL 的
+`deepseek-v4.1-flash-sg` / `deepseek-v4.1-flash-intl` 于 2026-11-17 关闭暗置
+（不在客户端目录宣告），`hy4flash-free`（更名前 `hy4free`）已同日退役删除；
+`gpt-6.2-astra`（272000）在 `ai.input.im` 通道预开放（optional）。WorkBuddy 的
+输入上限为 960K，故客户端总上下文 pin 保持 1000000。Cockpit 内置
+`codex-auto-review` 和编辑器里的 `gpt-reserve` 不属于 CPA 在役模型。
 
 ## 增加模型（desktop 要看到新名）
 
