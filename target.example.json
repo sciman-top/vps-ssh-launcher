@@ -6,6 +6,12 @@
       "user": "root",
       "password_env": "VPS_EXAMPLE_PASSWORD",
       "socks5": "127.0.0.1:10808"
+    },
+    "example-domestic": {
+      "host": "YOUR_DOMESTIC_VPS_IP",
+      "port": 22,
+      "user": "root",
+      "password_env": "VPS_DOMESTIC_PASSWORD"
     }
   },
   "default": "example"
