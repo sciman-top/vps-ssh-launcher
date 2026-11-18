@@ -341,14 +341,18 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
 
 - **shortId 长度才是熵，不是“非空”**：上游 JSON 构建器把任意偶数长度的 hexadecimal
   shortId 写入零填充的 8 字节槽，所以 `17` 与 `1700000000000000` 是同一个 id。现网两机
-  均为 16 字符（`6ba85179e30d4fc2`），因为短值等价于“所有用同一模板的客户端共享同一个
+  均为 16 字符，因为短值等价于“所有用同一模板的客户端共享同一个
   shortId”。漂移门禁新增 `reality_shortid_short=` 输出，双核（xray `shortIds`、
   sing-box `short_id` 字符串或列表）任一出现短值即报 `reality-shortid`；恢复用
   `reality_shortid_harden.ps1` 或直接改成 16 字符并 `xray run -test`。
-  **2026-11-18 复核：本批次不做 shortId 轮换。** 两台现值为 16 字符满熵；轮换必须与两份
-  订阅（vasma 本地文件 + 静态合并订阅）同批发布，任何客户端未及时刷新即断连，收益与
-  代价不成比例。真要轮换时的顺序：两台同时改 → 立即 `merged_subscription_lane.ps1 -Apply`
-  发新 sid → 再 `zz_subscription_republish.ps1 -Apply` 重写 vasma 本地文件 → 验收。
+  **2026-11-18 已执行 shortId 轮换。** 两台原先共用同一个 16 字符 id（sha256 前缀 `2a7dc072`），
+  等于两台互为同一把共享钥匙，且该值已出现在验收判据行里。轮换后两台各用独立随机 id
+  （指纹 `152e768c…` / `6564c544…`，旧值在两台配置与四份订阅里均已不存在）。
+  执行顺序（已验证）：备份 → 改服务端 → 发布 vasma 订阅 → 发布合并订阅 → 重启 xray →
+  验收。两端 `ACCEPTANCE_RESULT=PASS`。备份在 `/var/backups/reality-shortid-roll-*`。
+  验收判据行不再打印 `sid=`，只报端口。
+  再轮换时的顺序：两台同时改 → 立即 `zz_subscription_republish.ps1 -Apply` →
+  `merged_subscription_lane.ps1 -Apply` → 重启 → 验收。
 - **`minClientVer` / `maxTimeDiff` 不是安全参数**：二者只在 AEAD 认证通过后参与判定，
   主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
   的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
