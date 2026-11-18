@@ -1,8 +1,7 @@
 {
   "version": 1,
   "retired_hosts": [
-    "codex.ciii.club",
-    "35.213.82.91"
+    "codex.ciii.club"
   ],
   "retired_models": [
     "gpt-reserve",
@@ -13,5 +12,5 @@
     "hy4free",
     "hy4flash-free"
   ],
-  "note": "Local Cockpit-only retirement policy for provider hosts and exact model IDs. gpt-6.1-sol-input retired from BWG CPA on 2026-11-11; hy4free and hy4flash-free retired from the WorkBuddy INTL lane on 2026-11-17; 35.213.82.91 (http-bridge-8003) and models gpt-6-astra, gpt-5.6-terra, gemini-4-carbon-high retired on 2026-11-18; deepseek-v4.1-flash-oc was re-admitted on 2026-11-14 with the OpenCode Go renewal and stays active. api.deepseek.com and input.codes remain direct providers managed from local API-key accounts and are not retired here."
+  "note": "Local Cockpit-only retirement policy for provider hosts and exact model IDs. gpt-6.1-sol-input retired from BWG CPA on 2026-11-11; hy4free and hy4flash-free retired from the WorkBuddy INTL lane on 2026-11-17; gpt-6-astra, gpt-5.6-terra, and gemini-4-carbon-high retired on 2026-11-18; deepseek-v4.1-flash-oc was re-admitted on 2026-11-14 with the OpenCode Go renewal and stays active. api.deepseek.com, input.codes, and 35.213.82.91 remain backed by local API-key accounts in account_store.sqlite (deleting their provider entries causes Cockpit to recreate them with unpruned default catalogs on startup) and are not retired in retired_hosts."
 }
