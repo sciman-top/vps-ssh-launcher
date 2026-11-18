@@ -782,3 +782,27 @@ Anthropic/Claude 的条款、地区与凭据边界见
 2026-10-17 曾在役，2026-10-20 已随账号停用退役（三名认领 + 16 墓碑的目录契约
 保留为复活评审基线），复活后本页分级与 claude 信号形态表对其适用；
 Antigravity OAuth lane 在役（`==antigravity-lane==` 门禁）。
+
+### 2026-11-18 一手条款原文复核与出口实测
+
+本节只记录本次直接读取的官方原文与只读实测；仍不构成对封号阈值的任何判断。
+
+| 来源 | 原文要点（摘要） | 对本栈的含义 |
+|---|---|---|
+| [Antigravity Terms](https://antigravity.google/terms) | 通过第三方软件、工具或服务访问服务（例：OpenClaw 配 Antigravity OAuth）属违约，可致 Antigravity 与 Gemini CLI 账号暂停或终止 | `antigravity-oauth` lane 落在条款禁止面内；结构性残余风险 |
+| [OpenAI Terms of Use](https://openai.com/policies/terms-of-use/) | 不得共享账号凭据或让他人使用账号；不得自动或程序化提取数据或 Output；不得规避速率限制或保护措施（站点对脚本返回 403，经只读文本代理读取） | `chatgpt-oauth` lane 同属条款风险面；API Key 另适用商业条款，本次未读 |
+| [CodeBuddy 用户协议 §8](https://www.codebuddy.cn/agreement) | 不得通过非腾讯云授权的第三方软件、插件、外挂登录或使用本软件；账号需实名并绑定腾讯云账号 | `workbuddy-*` lane 同属条款风险面 |
+| [Google 官方公告 gemini-cli#20632](https://github.com/google-gemini/gemini-cli/discussions/20632) | 封禁针对用第三方工具或代理访问 Antigravity 资源与额度；风控在后端统一层，故同时阻断 Gemini CLI 与 Gemini Code Assist；今后被标记账号会收到邮件与专门报错，走自助表单恢复 | 被封后按官方表单恢复，不换出口、不换号重试；**不得用日常主力 Google 账号接入 CPA**，专用账号才可作为可丢通道 |
+
+2026-11-18 只读实测（不输出凭据，标签为 sha256[:8]）：
+
+- 现役 auth 共 25 份，权限均为 600：antigravity 8、codex 1、workbuddy 国内 10（1 禁用）、
+  workbuddy 国际 7（6 禁用）；**无一配置账号级 `proxy-url`**，故全部账号共用 BWG 单一出口。
+  该事实按本页既有口径登记为接受项：不为防风控换出口；条件触发（多号同窗被封或持续
+  IP 级限流）才评估拆分，且逐号小批、先预演、单独授权。
+- 7 天窗内唯一 `PERMISSION_DENIED` 信号（标签 `5edbfc5b`）的 `auth_file` 取自日志值，
+  不是现役 auth 文件名；现役 25 份均不匹配，较可能对应 `auth-removed-20261105` 中的
+  已摘除凭据（推断，未读文件内容）。无现役账号被标记。
+- OpenAI 状态页近两周无持续性容量事故，仅 2026-11-09 API 错误率升高等小事件；
+  容量不足按短时高峰处理，不据此调整网关。
+- 降智：本次未取得可引用的社区量化数据，判读仍以本页 served-model 观测锚为准。
