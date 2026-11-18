@@ -176,7 +176,15 @@ docker() {{
         known_output = run("\n".join([known] * 6))
         self.assertIn("model_substitution_known_name_variant_pairs=1", known_output)
         self.assertIn("model_substitution_unknown_pairs=0", known_output)
-        self.assertIn("model_substitution=KNOWN_NAME_VARIANT", known_output)
+        self.assertIn(
+            "model_substitution=WARN_SUBSTITUTION_REVIEWED_PAIR", known_output
+        )
+
+        known_single_output = run(known)
+        self.assertIn(
+            "model_substitution=WARN_SUBSTITUTION_REVIEWED_PAIR",
+            known_single_output,
+        )
 
         unknown = 'upstream served model "gemini-3.8-flash-lite" for requested model "gemini-3.8-flash-high"'
         unknown_output = run("\n".join([unknown] * 6))

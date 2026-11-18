@@ -3205,25 +3205,20 @@ if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" |
   SUBST_PAIRS=$(wc -l < "$SUBST_PAIRS_TMP")
   echo "model_substitution_distinct_pairs=$SUBST_PAIRS"
   awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "model_substitution_pair=%s%s\n", count, $0 }'
-  # Antigravity currently reports the Gemini modelVersion base name
-  # `gemini-3.8-flash-n` for the reviewed `gemini-3.8-flash-high` alias.
-  # Keep this as an explicit observation so ordinary request volume does not
-  # look like a new degradation event. Any other pair remains review-worthy.
+  # This pair was historically treated as a Gemini modelVersion base-name
+  # echo. Desktop-shaped observations on 2026-11-18 found the same
+  # high-to-n substitution across the credential pool, so keep recognizing the
+  # pair for attribution but surface it for review regardless of request
+  # coverage. The pair alone still does not prove a quality change.
   KNOWN_NAME_VARIANT_PAIR='gemini-3.8-flash-n <== gemini-3.8-flash-high'
   KNOWN_SUBST_PAIRS=$(grep -F -x -c "$KNOWN_NAME_VARIANT_PAIR" "$SUBST_PAIRS_TMP" 2>/dev/null || true)
   UNKNOWN_SUBST_PAIRS=$((SUBST_PAIRS - KNOWN_SUBST_PAIRS))
   echo "model_substitution_known_name_variant_pairs=$KNOWN_SUBST_PAIRS"
   echo "model_substitution_unknown_pairs=$UNKNOWN_SUBST_PAIRS"
-  # A "known pair" only says the NAME is the reviewed one. It says nothing about
-  # RATE: measured 2026-11-08, 879 antigravity requests produced 879 substitution
-  # warnings -- every single request -- yet the pair is the benign naming echo
-  # and reasoning effort demonstrably still applies (medium produced 117-249
-  # reasoning tokens, low produced 0 on the same prompt). So coverage is the
-  # discriminator that separates "the upstream echoes the base model name" from
-  # "this lane was silently downgraded": a benign echo sits at ~100% coverage,
-  # while a real downgrade would show the pair changing or a new pair appearing.
-  # Report the ratio so the operator sees which case they are in, and never let
-  # KNOWN_NAME_VARIANT read as "quality verified".
+  # A recognized pair is not evidence that the requested and served models are
+  # quality-equivalent. Coverage is useful for describing how widespread the
+  # substitution is, but it cannot distinguish a label echo from a tier
+  # fallback. Keep this as an observation rather than a strict gate.
   # Denominator is antigravity-served requests only. Counting every provider
   # would divide the warning count by unrelated traffic and report a meaningless
   # ratio (measured: 886 warnings / 3741 all-provider requests = 23%).
@@ -3243,17 +3238,17 @@ if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" |
   rm -f "$SUBST_PAIRS_TMP"
   if [ "$SUBSTITUTIONS_7D" -gt 5 ] 2>/dev/null; then
     # Not a gate, but warrants manual review: with per-request emission a high
-    # count alone does not mean spread — a single recorded pair (e.g. the
-    # antigravity -high naming observation) is fine, a NEW pair or a count
-    # jumping without matching usage warrants a quality-canary review first.
+    # count alone does not mean spread. Any occurrence of the reviewed
+    # Antigravity high-to-n pair is also review-worthy, even if it is the only
+    # pair and appears on every request.
     if [ "$UNKNOWN_SUBST_PAIRS" -eq 0 ] 2>/dev/null && [ "$KNOWN_SUBST_PAIRS" -gt 0 ] 2>/dev/null; then
-      echo "model_substitution=KNOWN_NAME_VARIANT"
+      echo "model_substitution=WARN_SUBSTITUTION_REVIEWED_PAIR"
     else
       echo "model_substitution=WARN_SUBSTITUTION_ELEVATED"
     fi
   elif [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
     if [ "$UNKNOWN_SUBST_PAIRS" -eq 0 ] 2>/dev/null && [ "$KNOWN_SUBST_PAIRS" -gt 0 ] 2>/dev/null; then
-      echo "model_substitution=KNOWN_NAME_VARIANT"
+      echo "model_substitution=WARN_SUBSTITUTION_REVIEWED_PAIR"
     else
       echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
     fi
@@ -3264,7 +3259,7 @@ else
   echo "model_substitution_warnings_7d=unavailable"
   echo "model_substitution=UNAVAILABLE_VERSION"
 fi
-echo "model_substitution_coverage=retained container logs only; container recreation resets coverage; current runtime emits per-request warnings so counts track request volume; zero warnings do not prove absence over a full 7d window; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; coverage_pct_of_lane_requests near 100 with the reviewed pair means the upstream echoes the base model name on every turn (measured 2026-11-08: 879/879) and is NOT evidence of downgrade -- a real downgrade changes the pair or adds an unknown pair; OAuth quality probes require separate admission; observation only, not a strict gate"
+echo "model_substitution_coverage=retained container logs only; container recreation resets coverage; current runtime emits per-request warnings so counts track request volume; zero warnings do not prove absence over a full 7d window; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; high coverage describes substitution frequency but cannot establish name equivalence or output quality; the reviewed Antigravity high-to-n pair remains a review warning; OAuth quality probes require separate admission; observation only, not a strict gate"
 echo "==tls-cert=="
 # 2026-10-13 incident: the vasma fork's RenewTLS renews on the literal day of
 # expiry, so its heartbeat stays green while the gateway cert ages into a

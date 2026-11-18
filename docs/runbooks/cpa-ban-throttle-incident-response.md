@@ -68,9 +68,11 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 判扩散看 doctor 同段的 `model_substitution_distinct_pairs`、
 `model_substitution_known_name_variant_pairs`、
 `model_substitution_unknown_pairs` 与 `model_substitution_pair` 拆分（只含模型名，
-凭据哈希不进 doctor 输出）。当所有替换对都属于已登记的 Antigravity 名称回显
-时，状态为 `KNOWN_NAME_VARIANT`；只要出现未知替换对，状态仍会显示
-`WARN_SUBSTITUTION_*`，必须按新降智信号复核。临时
+凭据哈希不进 doctor 输出）。`model_substitution_known_name_variant_pairs` 只表示
+替换对已登记，不证明请求与实际服务模型质量等价。2026-11-18 起，
+`gemini-3.8-flash-n <== gemini-3.8-flash-high` 即使是唯一替换对，也报告
+`WARN_SUBSTITUTION_REVIEWED_PAIR`；未知替换对仍报告 `WARN_SUBSTITUTION_*`。
+这是复核信号，不单独判定质量变化。临时
 取证（auth_index 归属或自定义时间窗）仍用手工一行：
 
 ```bash
@@ -79,10 +81,10 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   | sort | uniq -c
 ```
 
-- 单一（凭据，模型）对：先查本仓是否已有该对的已记录观察，不重复开案。例：
+- 单一（凭据，模型）对：先查本仓是否已有该对的已记录观察。例：
   2026-10-15 保留窗口内 29 条全部是 `gemini-3.8-flash-n <== gemini-3.8-flash-high`
-  （2026-10-15 当时为 antigravity 单凭据；当前运行态为两份凭据），即已记录的上游
-  命名观察，不单独构成降智证据。
+  （当时为 Antigravity 单凭据），不足以单独证明降智；2026-11-18 的 desktop 形状
+  对照则观察到该替换扩散至凭据池，因此当前 doctor 将该对持续标为复核信号。
 - 替换源属于 OAuth lane 时，**默认** `quality-canary` 看不见它（默认排除 OAuth
   lane），照 doctor 提示直接跑会得到无信息的绿灯。要么停在日志级归因，要么按
   下文 L3 的准入显式回选 `CPA_HEALTH_INCLUDE_OAUTH=1`。
