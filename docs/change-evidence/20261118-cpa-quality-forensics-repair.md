@@ -15,5 +15,9 @@
   回滚文件为 `/opt/cliproxyapi/cpa-health-backup.nlYhKR/cpa-health.py`。
 - 后续复验：模型自然恢复到 `/models` 后，使用 curl 经本机 CPA 发送单次
   `deepseek-v4.1-flash-oc` 生成请求，HTTP 200、`finish_reason=stop`，
-  输出与预期 `OK` 一致。Python 健康探针触发的 1010 仍需避免重复触发。
-- 限制：完整自动质量矩阵尚未通过，单次 curl 成功不代表长期稳定。
+  输出与预期 `OK` 一致。
+- 并行维护任务投影本机健康探针的显式 User-Agent 后，再运行
+  `CPA_HEALTH_NO_OAUTH=1 python3 -u /opt/cliproxyapi/cpa-health.py quality-eval`。
+  预算为 4 模型各 4 项，包含 OpenCode，结果 `HEALTH_OK`、退出码 0。
+  此后 strict doctor 退出码 0，健康脚本和路由清单均 `MATCH`。
+- 限制：该矩阵排除 OAuth，受控结果不证明长期稳定。

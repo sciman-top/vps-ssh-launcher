@@ -462,7 +462,8 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 OpenCode 的 `403` 需同时核对响应 `message`。2026-11-18 的 Python 健康探针
 收到 `error code: 1010`，CPA 包装码为 `insufficient_quota`，不能仅凭该包装码
 判定 Go 订阅额度耗尽。该次冷却自然结束后，同一单宿路由经 curl 单次请求返回
-HTTP 200；不要反复运行 Python 矩阵探针验证该 1010。
+HTTP 200。探针显式设置 User-Agent 并投影后，非 OAuth 质量矩阵通过；若再次
+出现 1010，停止重复探测并核对响应及冷却状态。
 
 每次运行会输出一行 `PROBE_BUDGET`，给出 `models=`、`cases_per_model=`、
 `planned_generation_requests=` 与 `oauth_lane=excluded:<原因>`，用来在执行前
