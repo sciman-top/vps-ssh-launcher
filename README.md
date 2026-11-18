@@ -802,7 +802,9 @@ $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          # 只读
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 
-# b. REALITY shortId：剥离服务端空 shortId（订阅只用非空 id，零断连）
+# b. REALITY shortId：剥离服务端空 shortId（订阅只用非空 id，零断连）；漂移门禁同时把短于 16 个十六进制
+#    字符的 shortId（上游按 8 字节零填充，等价于 `id` == `id + 000...`，无熵），以及已设置的 minClientVer /
+#    maxTimeDiff（只在 AEAD 之后生效，拦不住探测，只会扩大回落到用户证书的 ClientHello 集合）报为 reality-shortid
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz           # 只读（按主机现存核心树逐树处理；bwg 双核，zz sing-box）
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz -Apply
 

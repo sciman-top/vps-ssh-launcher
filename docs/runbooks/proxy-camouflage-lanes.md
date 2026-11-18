@@ -329,6 +329,28 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
 作为 serverNames 会在 ClientHello 阶段就被 RST）、支持 OCSP；注意 mldsa65 需要
 回落目标证书 >3500 字节。改 dest 属双核联动写操作，须走单机 apply + 验收批次。
 
+### REALITY 参数面复核（2026-11-18）
+
+- **shortId 长度才是熵，不是“非空”**：上游 JSON 构建器把任意偶数长度的 hexadecimal
+  shortId 写入零填充的 8 字节槽，所以 `17` 与 `1700000000000000` 是同一个 id。现网两机
+  均为 16 字符（`6ba85179e30d4fc2`），因为短值等价于“所有用同一模板的客户端共享同一个
+  shortId”。漂移门禁新增 `reality_shortid_short=` 输出，双核（xray `shortIds`、
+  sing-box `short_id` 字符串或列表）任一出现短值即报 `reality-shortid`；恢复用
+  `reality_shortid_harden.ps1` 或直接改成 16 字符并 `xray run -test`。
+- **`minClientVer` / `maxTimeDiff` 不是安全参数**：二者只在 AEAD 认证通过后参与判定，
+  主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
+  的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
+  `maxTimeDiff=70000`（vasma 的 2021 年遗留值），漂移门禁把它们报为
+  `reality_minclientver=` / `reality_maxtimediff=`，与 `reality-shortid` 同车道。
+  2026-11-18 已用 `xray run -test` 在临时 confdir 验证置空/删除这两个字段与 16 字符
+  shortId 都能通过配置检查；置空需与订阅渲染同步（订阅只发布 shortId，不发布这两个
+  字段，故置空不影响已发布节点），属受控单机写操作，未在本次批次自动执行。
+- **纯 HTTP 探测面已收敛**：TCP 443 / 21470 收到明文 HTTP 时返回 `400 Bad Request` +
+  `Server: nginx` + `248` 字节的居中 `nginx` 页面（两机逐字节一致）。该指纹是判“是否
+  nginx 前置”的常用特征。只在 `Server` 版本号已由全局 `server_tokens off` 收敛的层面做了
+  补强检查（漂移输出 `camouflage=server-tokens-off|on|unknown`）；把该响应整体改写成
+  站点体属于 `ngx_lua` 级改写，现网 nginx 未编译 lua 模块，本轮不做，也不引入新依赖。
+
 ## UDP/QUIC 阻断预案
 
 两条 Hysteria2 车道（UDP 443 base + UDP 8444 obfs）对“UDP 被区域性封锁/限速”的

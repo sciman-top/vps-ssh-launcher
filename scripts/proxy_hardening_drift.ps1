@@ -264,6 +264,18 @@ else
     echo 'camouflage=404-stock-tell'
     cam_state=drift
 fi
+# A version string is the one byte-level tell that needs no request craft: TLS
+# and every nginx listener answer `Server: nginx` without a version only when
+# the http-level server_tokens override is loaded. vasma rewrites or a lane
+# re-render can drop it, and the TLS lanes keep answering 200s meanwhile.
+if nginx -T 2>/dev/null | grep -Eiq '^[[:space:]]*server_tokens[[:space:]]+off[[:space:]]*;'; then
+    echo 'camouflage=server-tokens-off'
+elif nginx -T 2>/dev/null | grep -Eiq '^[[:space:]]*server_tokens[[:space:]]+on[[:space:]]*;'; then
+    echo 'camouflage=server-tokens-on'
+    cam_state=drift
+else
+    echo 'camouflage=server-tokens-unknown'
+fi
 if [ "$cam_state" = 'drift' ]; then
     drift+=('camouflage')
 fi
@@ -311,7 +323,94 @@ PY
 )" || empty_sb=error
 echo "xray_empty_short_id=${empty_xray}"
 echo "singbox_empty_short_id=${empty_sb}"
-if [ "$empty_xray" != '0' ] || [ "$empty_sb" != '0' ]; then
+# Upstream's JSON builder writes every shortId into a zero-filled 8-byte id, so
+# "17" and "1700000000000000" ARE THE SAME id: a 2-hex or 14-hex value left by a
+# menu edit or a template swap is invisible to the empty-shortId check above,
+# yet it carries no more entropy than the client at the other end can guess:
+# every client that ships the same template offers the same short id. vasma and
+# this repo emit 16, so anything shorter is drift. The same pass reads the two knobs upstream comments out of
+# any recommended use: minClientVer and maxTimeDiff are evaluated only AFTER the
+# AEAD handshake, so they cannot stop a probe; when set, they only widen the set
+# of ClientHellos that get relayed into the fallback path. Absent/zero is the
+# posture this fleet keeps (2026-11-18), so a set value is drift, not a typo.
+reality_params="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY_REALITY_PARAMS'
+import glob
+import json
+import os
+import sys
+
+xray_dir, sb_dir = sys.argv[1:3]
+short_len, minver, maxdiff, invalid = [], [], [], False
+
+
+def ids_of(value):
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def short_id_problems(ids):
+    bad = []
+    for value in ids:
+        if not isinstance(value, str) or not value:
+            continue
+        if not all(ch in "0123456789abcdefABCDEF" for ch in value) or len(value) % 2:
+            bad.append("hex")
+        elif len(value) < 16:
+            bad.append("short")
+    return bad
+
+
+for path in glob.glob(os.path.join(xray_dir, '*.json')):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if not rs:
+            continue
+        port = str(ib.get('port'))
+        ids = ids_of(rs.get('shortIds'))
+        if 'short' in short_id_problems(ids):
+            short_len.append(port)
+        if str(rs.get('minClientVer') or '').strip():
+            minver.append(port)
+        try:
+            diff = int(rs.get('maxTimeDiff') or 0)
+        except (TypeError, ValueError):
+            diff = 1
+        if diff > 0:
+            maxdiff.append(port)
+
+for path in glob.glob(os.path.join(sb_dir, '*.json')):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        reality = (ib.get('tls') or {}).get('reality') or {}
+        if not reality:
+            continue
+        if 'short' in short_id_problems(ids_of(reality.get('short_id'))):
+            short_len.append(str(ib.get('listen_port')))
+
+print('short=' + ','.join(short_len))
+print('minver=' + ','.join(minver))
+print('maxdiff=' + ','.join(maxdiff))
+raise SystemExit(2 if invalid else 0)
+PY_REALITY_PARAMS
+)" || reality_params='invalid'
+reality_param() {
+    printf '%s
+' "$reality_params" | sed -n "s/^$1=//p"
+}
+echo "reality_shortid_short=$(reality_param short)"
+echo "reality_minclientver=$(reality_param minver)"
+echo "reality_maxtimediff=$(reality_param maxdiff)"
+if [ -n "$(reality_param short)" ] || [ -n "$(reality_param minver)" ] || [ -n "$(reality_param maxdiff)" ]; then
     drift+=('reality-shortid')
 fi
 

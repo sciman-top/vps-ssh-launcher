@@ -427,6 +427,17 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("camouflage=404-branded", text)
         self.assertIn("camouflage=404-stock-tell", text)
         self.assertIn("vps-launcher-camouflage-errors.conf", text)
+
+    def test_server_tokens_off_is_audited(self) -> None:
+        # `Server: nginx/<version>` is a one-request tell (the same binary on a
+        # bare install gives the same answer); `off` is the only acceptable
+        # posture. An explicit `on` is drift; an unreadable config is reported
+        # but stays distinct from a healthy `off`.
+        text = self.text
+        self.assertIn("camouflage=server-tokens-off", text)
+        self.assertIn("camouflage=server-tokens-on", text)
+        self.assertIn("camouflage=server-tokens-unknown", text)
+        self.assertIn("server_tokens[[:space:]]+off", text)
         self.assertIn(
             "error_page[[:space:]]+404([[:space:]]+=[0-9]+)?[[:space:]]+/404\\.html",
             text,
@@ -634,6 +645,20 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("reality_target=not-applicable", text)
         # `dest` remains a supported alias of `target` in Xray.
         self.assertIn("rs.get('target') or rs.get('dest')", text)
+
+    def test_reality_parameters_are_drift_checked(self) -> None:
+        # Upstream zero-pads a raw shortId into its 8-byte id, so a 2- or 14-hex
+        # value is a shippable id with no entropy: every client running the same
+        # template offers the same one. minClientVer/maxTimeDiff run only after
+        # the AEAD handshake, so set values cannot stop a probe and only widen
+        # what gets relayed. Both must surface as reality-shortid drift.
+        text = self.text
+        self.assertIn("PY_REALITY_PARAMS", text)
+        self.assertIn("reality_shortid_short=", text)
+        self.assertIn("reality_minclientver=", text)
+        self.assertIn("reality_maxtimediff=", text)
+        self.assertIn("len(value) < 16", text)
+        self.assertIn("drift+=('reality-shortid')", text)
 
     def test_reality_flow_is_drift_checked(self) -> None:
         text = self.text
