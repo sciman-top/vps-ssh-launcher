@@ -57,8 +57,34 @@
 
 - lane 维持 `account_restricted` hold（自保护：本地拒绝、零上游触碰），
   其余 lane 与其余 7 份凭据不受影响。
-- 申诉为用户本人动作（"解封后再犯=永久"纪律）；"隔离该号 + 释放 hold 用
-  其余 7 号"属 runbook 明文需用户明示指令的例外，未执行。
+- 申诉为用户本人动作（"解封后再犯=永久"纪律）；用户其后明示指令并手动
+  删除该凭据（等效隔离+出池），lane 于同日恢复服务（见下节终态补录）。
+
+## 终态补录（用户删除凭据后收口）
+
+- 用户手动删除 `adc349fc` 凭据文件（auth 目录池=7），CPA 05:54:47Z 热加载
+  `auth file changed (REMOVE)`；删除前备份在位
+  `/root/auth-backups/antigravity-adc349fc-backup-20261118.json`（可恢复）。
+- 本会话释放 hold（备份
+  `/root/antigravity-risk.before-release2-*.json`）。删除后模型面复核
+  （`/v1/models`，17 模型）：唯 `gemini-4-carbon-high` 消失——该凭据为池内
+  唯一 carbon 档承继者（与 doctor substitution 观察"16 次替换集中于单凭据
+  e7926a37c0760544"互证）；argon / hydrogen / sonnet / opus / flash /
+  astra 均在。**客户端请求 carbon-high 现为 CPA 本地
+  `unknown provider` 400**（未触上游），需切换模型或补入带 carbon 档的新号。
+- 第二轮池停揭示（机制补全）：04:16 的 kv 条目（TTL 2h，至 06:16:19Z）在
+  knob 翻回 `"2h"` 后**恢复执法**——翻 `"0"` 只是抑制执法、不删除条目
+  （"重启容器不清"实证）；其 503 响应体把 hold 再 latch 一轮
+  （runbook 陷阱第二次实证）。
+- 修正释放（事务 C，严格按 runbook 顺序）：备份
+  `/root/cpa-config-backup-unpause-round2-*.yaml` → 保 inode 翻 `"0"`
+  （inode 525632 不变）→ 清 hold → 单发探针 **`gemini-3.8-flash-high` 200
+  （2.0s）/ `gemini-4-argon-high` 200（5.1s）**，hold 保持 null。
+  保持 `"0"` 至 kv 条目自然过期（06:16:19Z），后台任务 06:17:50Z 翻回
+  `"2h"` 并复核运行时读数（同事件内翻回契约；偏差与理由=翻回即重新压住
+  lane 至 06:16 且 503 体反复再 latch hold，需再一轮手动释放）。
+- doctor 终验在翻回 `"2h"` 后执行（钉定契约：knob 清零态下语义复验
+  fail-closed，doctor 必须在 `"2h"` 态运行）。
 - 本次对禁用账号的上游触靶仅第 3 步单发探针一发，验证目标即重登凭据本身。
 - 双层锁释放顺序、事故指纹判别、重登不解禁三条已固化进
   `docs/runbooks/cpa-ban-throttle-incident-response.md`（同提交）。
