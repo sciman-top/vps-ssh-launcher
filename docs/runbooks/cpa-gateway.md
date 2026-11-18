@@ -899,6 +899,10 @@ desktop 原样 165KB 请求体 200/completed。残余暴露面：model 历史轮
 `gemini-4-carbon-high`（池内凭据目录扩张，`ids-allowed` 非空两次拒跑
 `cpa_model_catalog_contract`）：按墓碑三登记（static 宇宙 + antigravity 排除
 + codex API-key 墓碑）收编，未开放；是否开放属用户决定的目录变更。
+随后按用户指令将静态上游目录已有的 `claude-opus-5-5-high` 加入
+`antigravity-oauth` 路由，配置 1,000,000 上下文窗口；从
+`antigravity_oauth_exclusions` 移除并加入 `codex_api_key_exclusions` 防抢注，
+同步准入与 doctor 契约。此处记录仓库声明，不代表已投影或已验证账号可用。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
