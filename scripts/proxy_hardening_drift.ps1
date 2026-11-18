@@ -404,14 +404,19 @@ raise SystemExit(2 if invalid else 0)
 PY_REALITY_PARAMS
 )" || reality_params='invalid'
 reality_param() {
-    printf '%s
-' "$reality_params" | sed -n "s/^$1=//p"
+    printf '%s\n' "$reality_params" | sed -n "s/^$1=//p"
 }
 echo "reality_shortid_short=$(reality_param short)"
 echo "reality_minclientver=$(reality_param minver)"
 echo "reality_maxtimediff=$(reality_param maxdiff)"
-if [ -n "$(reality_param short)" ] || [ -n "$(reality_param minver)" ] || [ -n "$(reality_param maxdiff)" ]; then
+if [ -n "$(reality_param short)" ]; then
     drift+=('reality-shortid')
+fi
+# minClientVer / maxTimeDiff have their own lane: they are cleared by
+# reality_params_harden.ps1, while shortIds stay in the subscription and need
+# a coordinated republish, so the two must not collapse into one verdict.
+if [ -n "$(reality_param minver)" ] || [ -n "$(reality_param maxdiff)" ]; then
+    drift+=('reality-params')
 fi
 
 echo '==reality-target=='

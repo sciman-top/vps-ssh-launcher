@@ -16,6 +16,11 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
 - `scripts/reality_shortid_harden.ps1`：从 Xray 和 sing-box 的源配置中移除空
   REALITY shortId，保留至少一个非空 shortId；Apply 后执行配置检查、重载服务并
   复验源配置。vasma 重新生成配置后需要重新读取该状态。
+- `scripts/reality_params_harden.ps1`：把每个 REALITY 入站的 `minClientVer` 置空、
+  `maxTimeDiff` 归零。这两个字段只在 AEAD 之后生效，拦不住探测，却会把合成
+  ClientHello 送进回落路径；vasma 每次重装写回 `1.8.2/70000`。默认只读；`-Apply`
+  备份整份 `xray/conf`、整目录 `xray run -test`、重启 xray 并回读复核，失败回滚。
+  不碰 shortIds（订阅里已发布，换值须与订阅重发同批）。
 - `scripts/reality_alt_sni_lane.ps1`：给在线 REALITY 入站追加第二个 `serverNames`
   主机名（默认 bwg `static.sciman.top`），并由 conf.d 的独立 vhost 用同一张通配符
   证书终止 TLS。主 SNI 仍排第一，已发布的节点和客户端不受影响。前提是该名字已有
@@ -254,7 +259,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-flow,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,host-security`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-params,reality-target,reality-flow,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,host-security`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -341,10 +346,20 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
   主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
   的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
   `maxTimeDiff=70000`（vasma 的 2021 年遗留值），漂移门禁把它们报为
-  `reality_minclientver=` / `reality_maxtimediff=`，与 `reality-shortid` 同车道。
-  2026-11-18 已用 `xray run -test` 在临时 confdir 验证置空/删除这两个字段与 16 字符
-  shortId 都能通过配置检查；置空需与订阅渲染同步（订阅只发布 shortId，不发布这两个
-  字段，故置空不影响已发布节点），属受控单机写操作，未在本次批次自动执行。
+  `reality_minclientver=` / `reality_maxtimediff=`，且**单独成车道** `reality-params`
+  （2026-11-18 起）。
+  - 恢复入口是 `scripts/reality_params_harden.ps1`（默认只读；`-Apply` 备份整份
+    `xray/conf` → 置空两个字段 → 整目录 `xray run -test` → `systemctl restart xray` →
+    回读复核，失败 `ROLLBACK_VERIFIED`）。`proxy_hardening_lane_recover.ps1` 的 zz 自动
+    恢复已把它映射到 `reality-params`，实测 `RECOVERY_RESULT=RECOVERED lanes=reality-params`。
+  - 它不碰 shortIds：shortIds 发布在订阅里，换值必须与 `merged_subscription_lane.ps1`
+    重发同批，所以短 shortId 仍留在 `reality-shortid` 车道里等人工/协调处理。
+  - 2026-11-18 已对两机 `-Apply`：bwg `07_VLESS_vision_reality_inbounds.json` +
+    `12_VLESS_XHTTP_inbounds.json`，zz `07_zz_reality_vision.json` +
+    `12_zz_xhttp_reality.json`；两台 `proxy_lane_acceptance.ps1` 均 `ACCEPTANCE_RESULT=PASS`
+    （含公网 REALITY、XHTTP 21470/10094、CDN、Hysteria2 base/obfs/跳跃）。
+  - **vasma 重装或 sing-box 重装会把它写回 `1.8.2/70000`**，漂移门禁会报
+    `HARDENING_DRIFT=reality-params`，重跑上面的 `-Apply` 即可。
 - **纯 HTTP 探测面已收敛**：TCP 443 / 21470 收到明文 HTTP 时返回 `400 Bad Request` +
   `Server: nginx` + `248` 字节的居中 `nginx` 页面（两机逐字节一致）。该指纹是判“是否
   nginx 前置”的常用特征。只在 `Server` 版本号已由全局 `server_tokens off` 收敛的层面做了
@@ -404,6 +419,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_camouflage_site.ps
   -Config $target -Profile bwg
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.ps1 `
   -Config $target -Profile bwg
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_params_harden.ps1 `
+  -Config $target -Profile bwg
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_obfs_lane.ps1 `
   -Config $target -Profile zz
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
@@ -418,7 +435,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\firewall_baseline.ps1 `
   -Config $target -Profile bwg
 ```
 
-预演应显示 `camouflage=applied`、`shortid_hardening=clean` 和
+预演应显示 `camouflage=applied`、`shortid_hardening=clean`、`reality_params=hardened` 和
 `obfs_lane=already_configured`、`stealth=applied`、`xhttp_front=applied`；若状态不同，
 先记录输出和备份路径，再单机 Apply。
 

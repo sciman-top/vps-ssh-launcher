@@ -651,7 +651,9 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # value is a shippable id with no entropy: every client running the same
         # template offers the same one. minClientVer/maxTimeDiff run only after
         # the AEAD handshake, so set values cannot stop a probe and only widen
-        # what gets relayed. Both must surface as reality-shortid drift.
+        # what gets relayed. The parameter pair has its own blank-only lane
+        # (reality-params); shortIds need a subscription republish, so they
+        # stay on the lane that documents that cost (reality-shortid).
         text = self.text
         self.assertIn("PY_REALITY_PARAMS", text)
         self.assertIn("reality_shortid_short=", text)
@@ -659,6 +661,26 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("reality_maxtimediff=", text)
         self.assertIn("len(value) < 16", text)
         self.assertIn("drift+=('reality-shortid')", text)
+        # Both findings were reported as reality-shortid, which routed a
+        # blankable parameter through the lane that needs a subscription
+        # republish. They now have separate verdicts.
+        self.assertIn("drift+=('reality-params')", text)
+        recover = (
+            Path(__file__)
+            .resolve()
+            .parents[1]
+            .joinpath("scripts", "proxy_hardening_lane_recover.ps1")
+            .read_text(encoding="utf-8")
+        )
+        # Match the mapping, not the alias column: ruff keeps the dictionary
+        # aligned, so pinning the padding would fail on a formatting change.
+        self.assertRegex(
+            recover, r'"reality-params"\s*=\s*@\("reality_params_harden\.ps1"\)'
+        )
+        self.assertRegex(
+            recover,
+            r'"reality-shortid"\s*=\s*@\("reality_shortid_harden\.ps1"\)',
+        )
 
     def test_reality_flow_is_drift_checked(self) -> None:
         text = self.text

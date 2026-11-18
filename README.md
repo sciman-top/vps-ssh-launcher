@@ -803,10 +803,14 @@ pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 
 # b. REALITY shortId：剥离服务端空 shortId（订阅只用非空 id，零断连）；漂移门禁同时把短于 16 个十六进制
-#    字符的 shortId（上游按 8 字节零填充，等价于 `id` == `id + 000...`，无熵），以及已设置的 minClientVer /
-#    maxTimeDiff（只在 AEAD 之后生效，拦不住探测，只会扩大回落到用户证书的 ClientHello 集合）报为 reality-shortid
+#    字符的 shortId（上游按 8 字节零填充，等价于 `id` == `id + 000...`，无熵）报为 reality-shortid
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz           # 只读（按主机现存核心树逐树处理；bwg 双核，zz sing-box）
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz -Apply
+
+# b2. REALITY 参数：minClientVer / maxTimeDiff 只在 AEAD 之后生效，拦不住探测，只会把合成
+#     ClientHello 送进回落；vasma 重装会写回 1.8.2/70000，漂移门禁报 reality-params
+pwsh -NoProfile -File .\scripts\reality_params_harden.ps1 -Profile bwg           # 只读：reality_params=hardened|needs_clear
+pwsh -NoProfile -File .\scripts\reality_params_harden.ps1 -Profile bwg -Apply
 
 # c. Hysteria2 obfs 备用车道：认证沿用 base 口令，obfs 使用独立 CSPRNG v2 口令
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444
