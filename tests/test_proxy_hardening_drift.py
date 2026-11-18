@@ -776,6 +776,36 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("runtime-password-drift", text)
         self.assertIn('runtime_config="${VPS_DRIFT_SB_CONF_DIR:', text)
 
+    def test_published_shortid_parity_is_drift_checked(self) -> None:
+        # The 2026-11-18 rotation incident: the REALITY shortId changed on the
+        # hosts while the published lists kept the previous id, every client
+        # failed the handshake as "invalid connection", and this gate still
+        # reported NONE because UUID/flow parity had no shortId counterpart.
+        # Both published faces (the merged list and vasma's served copy) must
+        # now be compared against the inbounds' non-empty id set, with the
+        # zero-filled normalization the reality-shortid section documents, and
+        # without ever printing the id values themselves.
+        text = self.text
+        self.assertIn("==reality-shortid-live==", text)
+        self.assertIn("PY_SHORTIDS_LIVE", text)
+        # Zero-padded equivalence: "17" and "1700000000000000" are one id.
+        self.assertIn("zfill(16)", text)
+        # The published faces are parsed from the wire parameter, not from a
+        # field name that only one renderer emits.
+        self.assertIn("r'[?&]sid=([0-9a-f]{1,16})'", text)
+        self.assertIn("merged_sub_shortid=$merged_shortid_state", text)
+        self.assertIn("vasma_sub_shortid=$served_shortid_state", text)
+        # The verdict is a state word, never the credential itself.
+        self.assertNotIn("shortid_published", text)
+        # live_shortids=error is fail-closed: an unreadable live set must read
+        # as mismatch, not silently pass.
+        self.assertIn("[ \"$live_shortids\" = 'error' ]", text)
+        # Recovery wiring stays on the existing lanes: the merged face is
+        # republished by the merged-sub lane entry, the vasma face by
+        # vasma-sub's republish projector.
+        self.assertIn("drift+=('merged-sub')", text)
+        self.assertIn("drift+=('vasma-sub')", text)
+
     def test_embedded_payload_is_bash_syntax(self) -> None:
         text = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
         payload = text.replace("\r\n", "\n").replace("\r", "\n")

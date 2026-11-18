@@ -1398,6 +1398,56 @@ PY_CDN_DNS
     fi
 fi
 
+echo '==reality-shortid-live=='
+# The non-empty shortIds the inbounds actually accept, normalized the way the
+# zero-filled 8-byte slot reads them (see the reality-shortid section above):
+# a subscription may spell the same id in its padded form, so both sides go
+# through the same zfill before the set comparison below. Live ids are
+# computed once here and consumed by both the merged-sub and the vasma-sub
+# checks; the value itself is never printed (2026-11-18 redaction contract).
+live_shortids="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY_SHORTIDS_LIVE'
+import glob
+import json
+import os
+import sys
+
+
+def norm(value):
+    text = str(value or '').strip().lower()
+    return text.zfill(16) if text else ''
+
+
+sids = set()
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for entry in data.get('inbounds', []) or []:
+        reality = (entry.get('streamSettings') or {}).get('realitySettings') or {}
+        for value in reality.get('shortIds') or []:
+            normed = norm(value)
+            if normed:
+                sids.add(normed)
+sb_dir = sys.argv[2] if len(sys.argv) > 2 else ''
+if sb_dir and os.path.isdir(sb_dir):
+    for path in sorted(glob.glob(os.path.join(sb_dir, '*.json'))):
+        try:
+            data = json.load(open(path, encoding='utf-8'))
+        except Exception:
+            continue
+        for entry in data.get('inbounds', []) or []:
+            reality = (entry.get('tls') or {}).get('reality') or {}
+            raw = reality.get('short_id')
+            for value in (raw if isinstance(raw, list) else [raw]):
+                normed = norm(value)
+                if normed:
+                    sids.add(normed)
+print(','.join(sorted(sids)))
+PY_SHORTIDS_LIVE
+)" || live_shortids='error'
+echo "live_shortid_count=$(printf '%s' "$live_shortids" | awk -F, '{print NF}')"
+
 echo '==merged-sub=='
 if [ -z "$MERGED_SUB" ]; then
     echo 'merged_sub=not-applicable'
@@ -1547,16 +1597,42 @@ print('absent')
 PY_FLOW
 )"
     fi
-    if [ "$nodes" = "$expected_nodes" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ] && [ "$flow_published" = "$flow_expected" ]; then
+    # UUID and flow parity were audited here before, but the 2026-11-18
+    # rotation incident showed the remaining blind spot: a vasma menu rewrite
+    # (or an unre-published rotation) changes the REALITY shortId while the
+    # published list keeps handing out the previous one. Clients then fail the
+    # handshake as "invalid connection" on both hosts while this gate still
+    # reported NONE, because neither side of this check compared ids. The set
+    # comparison below closes that gap; only match/mismatch is printed, never
+    # the id values themselves.
+    file_shortids="$(python3 -c "
+import base64, re, sys
+raw = sys.stdin.buffer.read()
+try:
+    txt = base64.b64decode(raw + b'=' * (-len(raw) % 4)).decode('utf-8', 'ignore')
+except Exception:
+    txt = ''
+sids = sorted({m.group(1).lower().zfill(16) for m in re.finditer(r'[?&]sid=([0-9a-f]{1,16})', txt)})
+print(','.join(sids))
+" < "$merged_file" 2>/dev/null)" || file_shortids='missing'
+    if [ -z "$file_shortids" ]; then
+        file_shortids='missing'
+    fi
+    if [ "$live_shortids" = 'error' ] || [ "$file_shortids" != "$live_shortids" ]; then
+        merged_shortid_state='mismatch'
+    else
+        merged_shortid_state='match'
+    fi
+    if [ "$nodes" = "$expected_nodes" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ] && [ "$flow_published" = "$flow_expected" ] && [ "$merged_shortid_state" = 'match' ]; then
         merged_state='ok'
     else
-        # A vasma reinstall can rotate the UUID or the Hysteria2 password; the
-        # published list then hands every device credentials that no longer
-        # authenticate, so a mismatch has to surface as drift.
+        # A vasma reinstall can rotate the UUID, the Hysteria2 password or the
+        # shortId; the published list then hands every device credentials that
+        # no longer authenticate, so a mismatch has to surface as drift.
         merged_state='stale'
         merged_ok=0
     fi
-    echo "merged_sub=$merged_state nodes=${nodes:-0} flow_published=${flow_published} flow_live=${flow_expected}"
+    echo "merged_sub=$merged_state nodes=${nodes:-0} flow_published=${flow_published} flow_live=${flow_expected} merged_sub_shortid=$merged_shortid_state"
     if [ "$merged_ok" -ne 1 ]; then
         drift+=('merged-sub')
     fi
@@ -1774,9 +1850,32 @@ else
             printf '%s\n' "$body" |
                 grep -qE '^hysteria2://[^@]+@[^/?#]+:[0-9]+/\?[^#]*mport=20000-20999([&#]|$)|^hysteria2://[^@]+@[^/?#]+:[0-9]+\?[^#]*mport=20000-20999([&#]|$)' || continue
         fi
+        # Same shortId parity as the merged-sub check above: vasma regenerates
+        # this served copy from its own inbounds, so a menu rewrite converges
+        # it, but an unre-published rotation leaves it on the previous id while
+        # the merged list moves. Compare the normalized sets, print only the
+        # verdict.
+        served_shortids="$(python3 -c "
+import base64, re, sys
+raw = sys.stdin.buffer.read()
+try:
+    txt = base64.b64decode(raw + b'=' * (-len(raw) % 4)).decode('utf-8', 'ignore')
+except Exception:
+    txt = ''
+sids = sorted({m.group(1).lower().zfill(16) for m in re.finditer(r'[?&]sid=([0-9a-f]{1,16})', txt)})
+print(','.join(sids))
+" < "$served_file" 2>/dev/null)" || served_shortids='missing'
+        if [ -z "$served_shortids" ]; then
+            served_shortids='missing'
+        fi
+        if [ "$live_shortids" = 'error' ] || [ "$served_shortids" != "$live_shortids" ]; then
+            continue
+        fi
         served_ok=1
     done
-    echo "vasma_sub_served=${served_seen} checked=${served_checked} vision_port=${vision_port:-none} state=$([ "$served_ok" -eq 1 ] && echo ok || echo stale)"
+    served_shortid_state='match'
+    [ "$served_ok" -eq 1 ] || served_shortid_state='mismatch'
+    echo "vasma_sub_served=${served_seen} checked=${served_checked} vision_port=${vision_port:-none} vasma_sub_shortid=$served_shortid_state state=$([ "$served_ok" -eq 1 ] && echo ok || echo stale)"
     if [ "$served_ok" -ne 1 ]; then
         drift+=('vasma-sub')
     fi

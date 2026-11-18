@@ -363,6 +363,11 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
   `HARDENING_DRIFT=NONE`。轮换本身**已明确推迟**：客户端刚拿到重发后的列表，
   同一晚再轮换会造成第二次全量断连，须单独安排窗口并做订阅切换。
   部署侧另有一条硬性要求：**按单台顺序执行**，bwg 验收通过后再动 zz。
+  **2026-11-19 drift 门禁补盲**：当晚暴露的最后一个盲区是 published 与 conf 的
+  shortId 维度没有等价检查（UUID/flow 都有）。门禁现以 `reality-shortid-live` 段
+  归一化（零填充 16 hex）提取 conf 侧非空 id 集，`merged_sub_shortid=` 与
+  `vasma_sub_shortid=` 分别对两份 published 面做集合等价判定，漂移走既有
+  `merged-sub` / `vasma-sub` lane 恢复接线；判据行只报 match/mismatch，不打印值。
 - **`minClientVer` / `maxTimeDiff` 不是安全参数**：二者只在 AEAD 认证通过后参与判定，
   主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
   的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
