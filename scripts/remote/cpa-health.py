@@ -1012,6 +1012,9 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     if not catalog_complete:
         # Cooling credentials can disappear from /models. A valid, non-
         # exposing catalog proves local readiness, not provider availability.
+        if report:
+            missing = ",".join(sorted(required - ids))
+            report(f"CATALOG_INCOMPLETE missing={missing}")
         return 0 if mode == "readiness" else 10
     if mode == "readiness":
         return 0
@@ -1188,7 +1191,9 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     for alias, names in _ANTIGRAVITY_ECHO_MODEL.items():
         expected_models[alias] = names
     if mode == "quality-eval":
-        return _quality_eval(request, generation_targets, expected_models, config)
+        return _quality_eval(
+            request, generation_targets, expected_models, config, report
+        )
     continue_after_failure = mode == "generation-all" and report is not None
     result = 0
     for model in generation_targets:
@@ -1385,10 +1390,14 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     return result
 
 
-def _quality_eval(request, generation_targets, expected_models, config=None):
+def _quality_eval(
+    request, generation_targets, expected_models, config=None, report=None
+):
     try:
         for model in generation_targets:
             for case in _QUALITY_EVAL_CASES:
+                if report:
+                    report(f"QUALITY_CASE_STARTED model={model} case={case['id']}")
                 if model in _CODEX_MODEL_ALIASES:
                     body = _responses_case_body(model, case)
                     data = request("responses", body)
