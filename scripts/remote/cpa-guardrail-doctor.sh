@@ -429,6 +429,7 @@ expected = {
         "gemini-4-hydrogen-xhigh",
         "gemini-4-carbon-high",
         "gemini-4-argon-high",
+        "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
     ],
     "workbuddy-oauth": [

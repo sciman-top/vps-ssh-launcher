@@ -183,7 +183,7 @@ python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash
 模型白名单钉死在非 OAuth lane（`_CACHE_CANARY_MODELS`），OAuth 名与未知名本地
 拒绝（exit 20 `CACHE_CANARY_MODEL_UNSUPPORTED`），保住"默认不消费 Plus 账号"纪律。
 基线：DeepSeek `hit_ratio=0.9579`（2026-10-05 v8.0.15 首测；2026-10-08 v8.0.16 复测同值，稳定）。GLM lane 首测 `hit_ratio=0.9956`（2026-10-08，v8.0.16，`glm-5.3-flash`；首样本冷 miss 属预期）。
-CPA 侧：`session-affinity: true`（`session-affinity-ttl: 1h`、
+CPA 侧：`session-affinity: true`（`session-affinity-ttl: 6h`、
 `session-affinity-rebind-on: quota`、`session-affinity-subagents: false`）由本仓投影钉死
 （`scripts/remote/cpa_policy.py`、`scripts/remote/cpa-guardrail-apply.sh`）。CPA v8.0.45+
 缺省 `session-affinity-rebind-on` 为 `any`，本仓显式改为 `quota`：瞬态失败保留当前凭据，
@@ -412,8 +412,8 @@ reasoning/tool 结构、无可见 `output_text`，2 个为 `stop`。这只说明
 | `local_gate` | **不要调大 `maxAccountConcurrency`**。共享 lane 通常同时饱和，调大只会把"45s 快速失败"变成"120s 排队后失败"。根因是上游 turn 太慢占满槽位 |
 | `admission_queue_timeout` | 上游变慢导致队列排不空。**不要在降级窗口调 admission 参数**——降级期的数据不代表容量 |
 | `admission_fast_reject` | 冷却或队列满的秒拒。看 journal `reason=`：`cooldown` 要等账号恢复（账号侧被外部重置的例外见 §4.1），`busy` 是瞬时削峰，`rate_limited` 是命中 per-lane `requests_per_minute` 请求速率护栏（等 `Retry-After` 即可；若集中在真实单会话说明设定偏紧，应上调 conf 值而非清冷却/换号） |
-| `upstream_capacity` | 上游自己的问题（overloaded / 账号额度）。本机无解；降低请求频率或换 lane |
-| `dead_route` | 已知死路由（工具内 `DEAD_ROUTES`）。**该表当前为空**：历史 5xx 一律归 `upstream_capacity`，否则已恢复的路由会被永久误报为本地路由缺陷（2026-10-04 清空）。有命中才说明真的有一条被证实的死路由 |
+| `upstream_capacity` | 为兼容 JSON 保留的历史桶名：未归因的 500/502/503，不证明上游过载。用网关遥测和结构化错误核对来源，再决定是否有限重试或回退 |
+| `dead_route` | 已知死路由（工具内 `DEAD_ROUTES`）。**该表当前为空**：历史 5xx 不作为死路由的证据（2026-10-04 清空） |
 | `slow_success` | 看第 5 节区分本机 / 上游 |
 | `unclassified` | **先查这个**，不要相信其他计数 |
 

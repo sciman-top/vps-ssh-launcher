@@ -182,7 +182,13 @@ EXPECTED_ROUTING = {
     # credential and Antigravity two, so neither depends on the strategy.
     "strategy": "round-robin",
     "session-affinity": True,
-    "session-affinity-ttl": "1h",
+    # 2026-11-18: 1h -> 6h. Live cache-reset telemetry showed workday coding
+    # sessions pausing >1h (e.g. 1h25m on a 371k-token Antigravity thread) and
+    # hitting a session-affinity miss that rebound to a sibling credential with
+    # usage_cached=0 and a 30.9s cold prefill. 6h preserves same-credential
+    # locality across multi-hour breaks while round-robin still spreads new
+    # sessions and rebind-on=quota still fails over on quota exhaustion.
+    "session-affinity-ttl": "6h",
     # CPA v8.0.45+ defaults this option to "any" when omitted.  Keep an
     # established session on the same credential for transient failures so a
     # short 5xx/empty-stream blip does not fan out across the account pool or

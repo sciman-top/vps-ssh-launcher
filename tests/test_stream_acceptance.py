@@ -9,6 +9,35 @@ from typing import cast
 
 
 class StreamAcceptanceTests(unittest.TestCase):
+    def test_expected_response_model_is_exact_and_redacted(self) -> None:
+        from scripts.cpa_stream_acceptance import StreamResult
+
+        for model, failure in (
+            ("expected", None),
+            ("unexpected-provider-value", "response_model_mismatch"),
+            (None, "missing_response_model"),
+        ):
+            with self.subTest(model=model):
+                result = StreamResult("expected")
+                result.feed(
+                    "", '{"type":"response.output_text.delta","delta":"pong"}', 1
+                )
+                response = {"status": "completed"}
+                if model is not None:
+                    response["model"] = model
+                result.feed(
+                    "",
+                    json.dumps({"type": "response.completed", "response": response}),
+                    2,
+                )
+                report = result.report()
+                self.assertEqual(
+                    report["result"], "PASS" if failure is None else "FAIL"
+                )
+                if failure is not None:
+                    self.assertIn(failure, cast(list[str], report["failures"]))
+                self.assertNotIn("unexpected-provider-value", json.dumps(report))
+
     def test_stream_acceptance_multiline_frames_and_comments(self) -> None:
         import io
         from scripts.cpa_stream_acceptance import sse_frames

@@ -35,16 +35,16 @@ OAUTH_ROUTE_ALIASES = [
     "gpt-6.2-sol",
 ]
 
-# Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,
-# declared 2026-10-14, restricted to the single 3.8-flash tier the same day,
-# widened 2026-11-16 by user decision to three models: gemini-3.8-flash-high
-# is served pool-wide by the 4-credential pool, while gemini-4-hydrogen-xhigh
-# (upstream registers the xhigh tier; 1M unified window) and
-# claude-sonnet-5-5-high (1M window) are available on only one pro
-# credential each — single-source, no failover. Gated by the
-# antigravity-oauth admission lane from day one: cpa_policy.py rejects a
-# shared subscription OAuth route that is missing its reviewed lane (ungated
-# shared credential = ban-shaped).
+# Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order.
+# Declared 2026-10-14 and initially restricted to gemini-3.8-flash-high;
+# widened 2026-11-16 with gemini-4-hydrogen-xhigh and claude-sonnet-5-5-high,
+# then 2026-11-18 with gemini-4-carbon-high, gemini-4-argon-high, and
+# claude-opus-5-5-high by user directive. The 2026-11-16 additions were
+# available on one pro credential each at the time (single-source, no
+# failover); Opus live credential availability is unverified. The model is
+# declared with its 1M context window. Gated by antigravity-oauth admission:
+# cpa_policy.py rejects a shared subscription OAuth route missing its reviewed
+# lane.
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     "gemini-3.8-flash-high",
     "gemini-4-hydrogen-xhigh",
@@ -56,6 +56,7 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     # of the pool schedules only onto those credentials.
     "gemini-4-carbon-high",
     "gemini-4-argon-high",
+    "claude-opus-5-5-high",
     "claude-sonnet-5-5-high",
 ]
 
@@ -70,6 +71,9 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 # lanes can re-register them. Three more tombstones added 2026-10-17
 # (claude-opus-5-5-high, claude-sonnet-5-5-high, gemini-4-argon-high) —
 # kept in manifest order; the manifest remains the enforced source of truth.
+# claude-opus-5-5-high left the exclusion list 2026-11-18 (user directive):
+# it is now a declared antigravity route model, still tombstoned in
+# codex_api_key_exclusions so the API-key lane cannot claim it.
 # claude-sonnet-5-5-high left the exclusion list 2026-11-16 (user decision):
 # it is now a declared antigravity route model, still tombstoned in
 # codex_api_key_exclusions so the API-key lane can never claim it.
@@ -85,7 +89,6 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3.8-flash-tiered",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
-    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium",
 ]

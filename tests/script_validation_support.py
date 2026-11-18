@@ -324,7 +324,7 @@ class ScriptValidationMixin:
                 "routing": {
                     "strategy": "round-robin",
                     "session-affinity": True,
-                    "session-affinity-ttl": "1h",
+                    "session-affinity-ttl": "6h",
                     "session-affinity-rebind-on": "quota",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,

@@ -92,6 +92,12 @@
       "auto_compact_token_limit": 943718
     },
     {
+      "slug": "claude-opus-5-5-high",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
+    },
+    {
       "slug": "claude-sonnet-5-5-high",
       "context_window": 1000000,
       "max_context_window": 1000000,

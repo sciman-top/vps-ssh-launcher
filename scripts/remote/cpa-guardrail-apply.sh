@@ -1101,7 +1101,9 @@ routing_after.update({
     # credential, so prompt-cache locality is unaffected.
     "strategy": "round-robin",
     "session-affinity": True,
-    "session-affinity-ttl": "1h",
+    # 2026-11-18: 1h -> 6h to preserve credential locality and prompt-cache
+    # warmth across >1h workday pauses without altering new-session dispersal.
+    "session-affinity-ttl": "6h",
     # CPA v8.0.45+ defaults an omitted value to "any".  Preserve an
     # established session across transient failures and rebind only for
     # quota/auth/model-support/permanent-unavailability signals.
@@ -1571,12 +1573,17 @@ if not isinstance(antigravity_exclusions, list) or not all(
     raise SystemExit(
         "REFUSE oauth.excluded-models.antigravity must be a list of strings"
     )
-antigravity_exclusions_after = list(antigravity_exclusions)
-for model in route_manifest.get("antigravity_oauth_exclusions", []):
-    if not isinstance(model, str) or not model.strip():
-        raise SystemExit("REFUSE antigravity_oauth_exclusions must be non-empty strings")
-    if model not in {p.strip().lower() for p in antigravity_exclusions_after}:
-        antigravity_exclusions_after.append(model)
+if config_path.with_name("antigravity-quarantine.json").exists():
+    raise SystemExit(
+        "REFUSE OAuth lane quarantine is active; restore its provider explicitly before -Apply"
+    )
+manifest_antigravity_exclusions = route_manifest.get("antigravity_oauth_exclusions")
+if not isinstance(manifest_antigravity_exclusions, list) or not all(
+    isinstance(model, str) and model.strip()
+    for model in manifest_antigravity_exclusions
+):
+    raise SystemExit("REFUSE antigravity_oauth_exclusions must be non-empty strings")
+antigravity_exclusions_after = list(manifest_antigravity_exclusions)
 if antigravity_oauth_aliases & {p.strip().lower() for p in antigravity_exclusions_after}:
     raise SystemExit("REFUSE antigravity exclusion blocks a declared antigravity alias")
 oauth_exclusions["antigravity"] = antigravity_exclusions_after
@@ -2384,6 +2391,7 @@ expected = {
         "gemini-4-hydrogen-xhigh",
         "gemini-4-carbon-high",
         "gemini-4-argon-high",
+        "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
     ],
     "workbuddy-oauth": [

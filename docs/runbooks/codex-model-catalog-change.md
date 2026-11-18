@@ -28,14 +28,14 @@
 
 `config/codex-model-context-overrides.json` 与
 `scripts/remote/cpa_provider_routes.json` 的 provider/`oauth_settings`
-上下文值保持一致。当前桌面受管目录可见的 16 个 CPA 模型（包含
+上下文值保持一致。当前桌面受管目录可见的 17 个 CPA 模型（包含
 `deepseek-v4.1-flash-oc` 这个 provider alias）按下列窗口钉定：
 
 | 窗口 | 模型 |
 | ---: | --- |
 | 272000 | `gpt-6-astra`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra` |
 | 500000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc`, `claude-sonnet-5-5-high` |
+| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc`, `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
 | 1048576 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-carbon-high`, `gemini-4-argon-high` |
 
 两个在役 DeepSeek 名称（`deepseek-v4.1-flash` 与 provider alias

@@ -14,6 +14,8 @@ obvious candidates pull in opposite directions:
 
 * the gateway session-affinity-ttl (1h) expiring and re-picking a credential;
   the new backend does not share the old backend cache;
+* (updated 2026-11-18 to session-affinity-ttl: 6h after isolating >1h workday
+  pause rebinds);
 * the client switching models inside the same conversation;
 * the provider evicting its own prompt cache.
 

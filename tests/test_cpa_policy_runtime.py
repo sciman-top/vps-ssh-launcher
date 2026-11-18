@@ -40,6 +40,87 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('retry_after["max-retry-credentials"] = 3', apply_source)
 
+    def test_session_affinity_ttl_preserves_workday_cache_locality(self) -> None:
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
+        self.assertEqual(policy["EXPECTED_ROUTING"]["session-affinity-ttl"], "6h")
+        self.assertEqual(
+            policy["EXPECTED_ROUTING"]["session-affinity-rebind-on"], "quota"
+        )
+        apply_source = (
+            repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"session-affinity-ttl": "6h"', apply_source)
+
+    def test_apply_replaces_antigravity_exclusions_from_manifest(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        apply_source = (
+            repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        start = apply_source.index("antigravity_oauth_aliases = {")
+        end = apply_source.index(
+            'oauth_block_after["excluded-models"] = oauth_exclusions'
+        )
+        snippet = apply_source[start:end]
+        manifest = json.loads(
+            (repo_root / "scripts" / "remote" / "cpa_provider_routes.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            oauth_exclusions: dict[str, Any] = {
+                "antigravity": [
+                    *manifest["antigravity_oauth_exclusions"],
+                    "claude-opus-5-5-high",
+                ]
+            }
+            scope: dict[str, Any] = {
+                "route_manifest": manifest,
+                "oauth_exclusions": oauth_exclusions,
+                "config_path": config_path,
+            }
+            exec(snippet, scope)
+            self.assertEqual(
+                oauth_exclusions["antigravity"],
+                manifest["antigravity_oauth_exclusions"],
+            )
+            self.assertNotIn("claude-opus-5-5-high", oauth_exclusions["antigravity"])
+
+            clashing_manifest = json.loads(json.dumps(manifest))
+            clashing_manifest["antigravity_oauth_exclusions"].append(
+                "claude-opus-5-5-high"
+            )
+            with self.assertRaises(SystemExit) as clash_exc:
+                exec(
+                    snippet,
+                    {
+                        "route_manifest": clashing_manifest,
+                        "oauth_exclusions": {"antigravity": []},
+                        "config_path": config_path,
+                    },
+                )
+            self.assertIn(
+                "REFUSE antigravity exclusion blocks a declared antigravity alias",
+                str(clash_exc.exception),
+            )
+
+            (Path(directory) / "antigravity-quarantine.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            with self.assertRaises(SystemExit) as quarantine_exc:
+                exec(
+                    snippet,
+                    {
+                        "route_manifest": manifest,
+                        "oauth_exclusions": {"antigravity": []},
+                        "config_path": config_path,
+                    },
+                )
+            self.assertIn("quarantine is active", str(quarantine_exc.exception))
+
     def test_safe_bootstrap_retry_is_pinned_once(self) -> None:
         """A dead pre-first-byte stream must be retried once, not by the client.
 

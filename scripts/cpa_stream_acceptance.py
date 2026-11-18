@@ -67,7 +67,8 @@ def sse_frames(stream: BinaryIO) -> Iterator[tuple[str, str]]:
 
 
 class StreamResult:
-    def __init__(self) -> None:
+    def __init__(self, expected_response_model: str | None = None) -> None:
+        self.expected_response_model = expected_response_model
         self.failures: set[str] = set()
         self.first_event_ms: float | None = None
         self.text_times: list[float] = []
@@ -119,6 +120,12 @@ class StreamResult:
                 raise AcceptanceError("invalid_completion")
             if response.get("status") != "completed" or response.get("error"):
                 self.failures.add("invalid_completion")
+            if self.expected_response_model is not None:
+                model = response.get("model")
+                if not isinstance(model, str) or not model.strip():
+                    self.failures.add("missing_response_model")
+                elif model != self.expected_response_model:
+                    self.failures.add("response_model_mismatch")
             if self.completed_ms is not None:
                 self.failures.add("duplicate_completion")
             self.completed_ms = elapsed_ms
@@ -209,9 +216,10 @@ def probe(
     timeout: float,
     *,
     codex_config: Path | None = None,
+    expected_response_model: str | None = None,
 ) -> dict[str, object]:
     started = time.monotonic()
-    result = StreamResult()
+    result = StreamResult(expected_response_model)
     metadata: dict[str, object] = {
         "model": model,
         "transport": "codex_public_gateway" if port is None else "sidecar",
@@ -368,7 +376,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, choices=(10909, 14185))
     parser.add_argument("--codex-config", type=Path, default=DEFAULT_CODEX_CONFIG)
     parser.add_argument("--timeout", type=float, default=240)
+    parser.add_argument(
+        "--expect-response-model",
+        help="Require this exact response.completed model (not proof of upstream identity).",
+    )
     args = parser.parse_args(argv)
+    if (
+        args.expect_response_model is not None
+        and not args.expect_response_model.strip()
+    ):
+        parser.error("--expect-response-model must not be blank")
     if (args.port is None) == (args.manifest is not None):
         parser.error("exactly one of --manifest or --port is required")
     if not 0 < args.timeout <= 300:
@@ -379,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         args.port,
         args.timeout,
         codex_config=args.codex_config,
+        expected_response_model=args.expect_response_model,
     )
     print("STREAM_ACCEPTANCE=" + json.dumps(report, sort_keys=True), flush=True)
     return 0 if report["result"] == "PASS" else 1

@@ -179,6 +179,10 @@
           "alias": "gemini-4-argon-high"
         },
         {
+          "name": "claude-opus-5-5-high",
+          "alias": "claude-opus-5-5-high"
+        },
+        {
           "name": "claude-sonnet-5-5-high",
           "alias": "claude-sonnet-5-5-high"
         }
@@ -226,6 +230,10 @@
         "max-context-length": 1048576
       },
       {
+        "name": "claude-opus-5-5-high",
+        "max-context-length": 1000000
+      },
+      {
         "name": "claude-sonnet-5-5-high",
         "max-context-length": 1000000
       }
@@ -261,7 +269,6 @@
     "gemini-3.8-flash-tiered",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
-    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium"
   ],
@@ -343,6 +350,7 @@
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium",
     "claude-opus-5-5",
+    "claude-opus-5-5-high",
     "claude-sonnet-5-5",
     "claude-sonnet-5-5-high",
     "claude-haiku-5-5"

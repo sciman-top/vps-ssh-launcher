@@ -386,6 +386,16 @@ class RenderTests(unittest.TestCase):
         self.assertIn("2026-10-02T15 total=12 429=2", text)
         self.assertNotIn("limit_markers", text)
 
+    def test_ambiguous_failures_do_not_recommend_switching_lanes(self) -> None:
+        reports = {name: LayerReport(name) for name in LAYER_ORDER}
+        for name in (UPSTREAM_CAPACITY, ADMISSION_FAST, CLIENT_ERROR):
+            reports[name].count = 1
+            reports[name].latency_ms.append(10)
+        text = cast(str, render(reports, {}, BUDGETS, 1))
+        self.assertIn("does not establish upstream overload", text)
+        self.assertIn("cannot distinguish local admission", text)
+        self.assertIn("do not rotate credentials", text)
+
     def test_empty_facts_render_without_a_remote_section(self) -> None:
         reports = {name: LayerReport(name) for name in LAYER_ORDER}
         text = cast(str, render(reports, {}, BUDGETS, 1))
