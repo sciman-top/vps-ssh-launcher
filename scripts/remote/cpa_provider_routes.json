@@ -29,7 +29,6 @@
     "models": [
       "gemini-3.8-flash-high",
       "gemini-4-hydrogen-xhigh",
-      "gemini-4-carbon-high",
       "gemini-4-argon-high"
     ],
     "replacements": [
@@ -52,21 +51,15 @@
       "path": "/v1",
       "models": [
         {
-          "name": "gpt-6-astra",
-          "alias": "gpt-6-astra",
-          "max-context-length": 272000
-        },
-        {
           "name": "gpt-6.2-astra",
           "alias": "gpt-6.2-astra",
           "max-context-length": 272000
         }
       ],
-      "optional_models": [
-        "gpt-6.2-astra"
-      ],
+      "optional_models": [],
       "retired_models": [
-        "gpt-6.1-sol-input"
+        "gpt-6.1-sol-input",
+        "gpt-6-astra"
       ]
     },
     {
@@ -82,23 +75,6 @@
           "name": "deepseek-v4.1-flash",
           "alias": "deepseek-v4.1-flash-oc",
           "max-context-length": 1000000
-        }
-      ],
-      "optional_models": []
-    },
-    {
-      "slot": 3,
-      "name": "http-bridge-8003",
-      "host": "35.213.82.91",
-      "scheme": "http",
-      "port": 8003,
-      "allow_insecure_http": true,
-      "path": "/v1",
-      "models": [
-        {
-          "name": "gpt-5.6-terra",
-          "alias": "gpt-5.6-terra",
-          "max-context-length": 272000
         }
       ],
       "optional_models": []
@@ -171,10 +147,6 @@
           "alias": "gemini-4-hydrogen-xhigh"
         },
         {
-          "name": "gemini-4-carbon-high",
-          "alias": "gemini-4-carbon-high"
-        },
-        {
           "name": "gemini-4-argon-high",
           "alias": "gemini-4-argon-high"
         },
@@ -222,10 +194,6 @@
         "max-context-length": 1048576
       },
       {
-        "name": "gemini-4-carbon-high",
-        "max-context-length": 1048576
-      },
-      {
         "name": "gemini-4-argon-high",
         "max-context-length": 1048576
       },
@@ -259,7 +227,8 @@
   "retired_hosts": [
     "codex.ciii.club",
     "api.deepseek.com",
-    "ai.input.im"
+    "ai.input.im",
+    "35.213.82.91"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",
@@ -270,7 +239,8 @@
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
-    "gpt-oss-120b-medium"
+    "gpt-oss-120b-medium",
+    "gemini-4-carbon-high"
   ],
   "antigravity_upstream_static_models": [
     "claude-opus-4-6-thinking",

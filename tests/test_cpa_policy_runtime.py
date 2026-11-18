@@ -255,7 +255,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             set(OAUTH_ROUTE_ALIASES),
         )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
-        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-astra"
+        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6.2-astra"
         self.assertTrue(
             any(
                 "assigned more than once" in issue
@@ -291,7 +291,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
         duplicate_route_manifest["oauth_routes"][0]["models"][0]["alias"] = (
-            "gpt-6-astra"
+            "gpt-6.2-astra"
         )
         self.assertTrue(
             any(
@@ -305,20 +305,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             for index, provider in enumerate(route_manifest["providers"])
             if provider["host"] == "input.codes"
         )
-        http_relay_index = next(
-            index
-            for index, provider in enumerate(route_manifest["providers"])
-            if provider["host"] == "35.213.82.91"
-        )
         self.assertEqual(policy["validate_config"](config), [])
-        config["api-keys"]["openai-compatibility"][http_relay_index]["base-url"] = (
-            "https://35.213.82.91:8003/v1"
-        )
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("35.213.82.91.base-url" in issue for issue in issues))
-        config["api-keys"]["openai-compatibility"][http_relay_index]["base-url"] = (
-            "http://35.213.82.91:8003/v1"
-        )
         self.assertEqual(policy["validate_config"](config), [])
         # The muse-spark managed route retired 2026-10-18 with its channel, so
         # the production manifest has no managed codex route. The managed-group
@@ -373,7 +360,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         ai_models = config["api-keys"]["openai-compatibility"][ai_input_index]["models"]
         ai_astra = next(
-            model for model in ai_models if model.get("name") == "gpt-6-astra"
+            model for model in ai_models if model.get("name") == "gpt-6.2-astra"
         )
         ai_models.remove(ai_astra)
         issues = policy["validate_config"](config)
@@ -490,13 +477,13 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config["api-keys"]["openai-compatibility"][ai_input_index].pop("headers")
         ai_models = config["api-keys"]["openai-compatibility"][ai_input_index]["models"]
         ai_astra = next(
-            model for model in ai_models if model.get("name") == "gpt-6-astra"
+            model for model in ai_models if model.get("name") == "gpt-6.2-astra"
         )
         ai_astra["name"] = "different-upstream-model"
         self.assertTrue(
             any("models=" in issue for issue in policy["validate_config"](config))
         )
-        ai_astra["name"] = "gpt-6-astra"
+        ai_astra["name"] = "gpt-6.2-astra"
         ai_astra["max-context-length"] = 500001
         self.assertTrue(
             any(
@@ -507,7 +494,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ai_astra["max-context-length"] = next(
             model["max-context-length"]
             for model in route_manifest["providers"][0]["models"]
-            if model["name"] == "gpt-6-astra"
+            if model["name"] == "gpt-6.2-astra"
         )
         config["oauth"]["settings"]["codex"][0]["max-context-length"] = 300000
         self.assertTrue(

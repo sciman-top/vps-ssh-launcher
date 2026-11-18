@@ -1785,20 +1785,12 @@ except Exception as exc:
         )
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
-            # Slot 2 (opencode) re-admitted 2026-11-14 after the OpenCode Go
-            # subscription renewal, single-homing the deepseek-v4.1-flash-oc
-            # alias only (user directive); the providers.env BASE_URL_2/
-            # API_KEY_2 mapping was kept unused across both retirements.
-            [1, 2, 3, 4],
+            # Slot 3 (http-bridge-8003) deleted 2026-11-18 (user directive).
+            [1, 2, 4],
         )
         self.assertEqual(
             route_manifest["retired_hosts"],
-            # opencode.ai joined 2026-11-11 with the slot-2 retirement and
-            # left 2026-11-14 with the renewal re-add: while listed, the entry
-            # makes the apply prune the live openai-compatibility provider
-            # instead of preserving it as unmanaged leftover, so it must be
-            # removed for the slot to project again.
-            ["codex.ciii.club", "api.deepseek.com", "ai.input.im"],
+            ["codex.ciii.club", "api.deepseek.com", "ai.input.im", "35.213.82.91"],
         )
         retired_aliases = {
             "codex-auto-review",
@@ -1851,14 +1843,14 @@ except Exception as exc:
         self.assertEqual(
             [model["alias"] for model in slot1_route["models"]],
             [
-                "gpt-6-astra",
-                # gpt-6.2-astra pre-opened 2026-11-18 (user directive) ahead of
-                # the upstream serving it; optional until confirmed live.
                 "gpt-6.2-astra",
             ],
         )
-        self.assertEqual(slot1_route["optional_models"], ["gpt-6.2-astra"])
-        self.assertEqual(slot1_route["retired_models"], ["gpt-6.1-sol-input"])
+        self.assertEqual(slot1_route["optional_models"], [])
+        self.assertEqual(
+            slot1_route["retired_models"],
+            ["gpt-6.1-sol-input", "gpt-6-astra"],
+        )
         # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)
@@ -1936,26 +1928,9 @@ except Exception as exc:
                     "max-context-length": 1000000,
                 },
             )
-        http_route = next(
-            provider
-            for provider in route_manifest["providers"]
-            if provider["slot"] == 3
+        self.assertFalse(
+            any(provider["slot"] == 3 for provider in route_manifest["providers"])
         )
-        self.assertEqual(
-            (http_route["scheme"], http_route["host"], http_route["port"]),
-            ("http", "35.213.82.91", 8003),
-        )
-        self.assertEqual(
-            http_route["models"],
-            [
-                {
-                    "name": "gpt-5.6-terra",
-                    "alias": "gpt-5.6-terra",
-                    "max-context-length": 272000,
-                },
-            ],
-        )
-        self.assertIs(http_route["allow_insecure_http"], True)
         self.assertIn(
             'legacy_hosts = set(route_manifest.get("retired_hosts", []))',
             text,

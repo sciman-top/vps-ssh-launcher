@@ -48,13 +48,10 @@ OAUTH_ROUTE_ALIASES = [
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     "gemini-3.8-flash-high",
     "gemini-4-hydrogen-xhigh",
-    # gemini-4-carbon-high surfaced in the upstream catalog 2026-11-17 and was
-    # tombstoned the same day; opened 2026-11-18 (user directive).
     # gemini-4-argon-high left the exclusion list 2026-11-18 (user directive).
     # Per-credential availability differs across the pooled accounts; CPA
     # registers each credential's own catalog, so an alias served by a subset
     # of the pool schedules only onto those credentials.
-    "gemini-4-carbon-high",
     "gemini-4-argon-high",
     "claude-opus-5-5-high",
     "claude-sonnet-5-5-high",
@@ -152,9 +149,8 @@ ADMISSION_MODEL_LANES = frozenset().union(*ADMISSION_LANE_MODELS.values())
 # after the OAuth block: slot-1 channel aliases, the scheduled-gate baseline,
 # then remaining provider aliases in manifest order.
 PROVIDER_MATRIX_TAIL = [
-    "gpt-6-astra",
-    # gpt-6.2-astra pre-opened 2026-11-18 (user directive) ahead of the
-    # upstream serving it on the channel; optional until confirmed live.
+    # gpt-6.2-astra promoted to active 2026-11-18 (user directive);
+    # gpt-6-astra and gpt-5.6-terra retired 2026-11-18.
     "gpt-6.2-astra",
     # gpt-6.1-sol-input retired 2026-11-11 (user directive). The bare name
     # stays in oauth_exclusions and codex_api_key_exclusions as a tombstone,
@@ -166,7 +162,6 @@ PROVIDER_MATRIX_TAIL = [
     # matrix: it rides the workbuddy plugin lane (shared-subscription
     # policy, matrix probes forbidden; cpa-health.py skips it explicitly).
     "deepseek-v4.1-flash-oc",
-    "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.
     # muse-spark-1.3-contributor retired 2026-10-18 with the slot-2 channel

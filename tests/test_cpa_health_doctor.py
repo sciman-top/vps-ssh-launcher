@@ -356,7 +356,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(script["_EXIT_LABELS"][13], "RELAY_DISABLED")
         catalog = {"data": [{"id": m} for m in HEALTH_FIXTURE_CATALOG_IDS]}
         ok_astra = {
-            "model": "gpt-6-astra",
+            "model": "gpt-6.2-astra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         request = mock.Mock(side_effect=[catalog, ok_astra])
@@ -633,7 +633,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "gpt-5.6-terra"
+            if model == "glm-5.3"
             else cpa_test_generation_response({"model": model})
             for model in models
         )
@@ -673,7 +673,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     for line in lines
                 )
             )
-        for model in ("gpt-6-astra",):
+        for model in ("gpt-6.2-astra",):
             self.assertTrue(
                 any(
                     line.startswith(f"GENERATION model={model} status=200 ")
@@ -682,7 +682,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             )
         self.assertTrue(
             any(
-                line.startswith("GENERATION model=gpt-5.6-terra status=502 latency_ms=")
+                line.startswith("GENERATION model=glm-5.3 status=502 latency_ms=")
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
             )
