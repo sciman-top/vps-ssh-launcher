@@ -28,7 +28,9 @@
     "from_protocol": "responses",
     "models": [
       "gemini-3.8-flash-high",
-      "gemini-4-hydrogen-xhigh"
+      "gemini-4-hydrogen-xhigh",
+      "gemini-4-carbon-high",
+      "gemini-4-argon-high"
     ],
     "replacements": [
       ["ChatGPT", "Chatservice"],
