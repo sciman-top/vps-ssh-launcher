@@ -255,6 +255,23 @@ def test_context_overrides_must_match_live_manifest_windows(
         for error in errors
     ), errors
 
+    missing_astra = json.loads(
+        cpa_catalog_check.CONTEXT_OVERRIDES.read_text(encoding="utf-8")
+    )
+    missing_astra["models"] = [
+        entry
+        for entry in missing_astra["models"]
+        if entry.get("slug") != "gpt-6.2-astra"
+    ]
+    overrides.write_text(json.dumps(missing_astra), encoding="utf-8")
+    monkeypatch.undo()
+    monkeypatch.setattr(cpa_catalog_check, "CONTEXT_OVERRIDES", overrides)
+    errors = cpa_catalog_check.check()
+    assert any(
+        "gpt-6.2-astra" in error and "missing from desktop context overrides" in error
+        for error in errors
+    ), errors
+
 
 def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

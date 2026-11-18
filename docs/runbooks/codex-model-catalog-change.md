@@ -24,16 +24,17 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 `max_context_window`。`auto_compact_token_limit` 由客户端清单单独钉定，目录门禁要求
 阈值为正整数且不超过容量的 90%。以实际路由和客户端目录为准。
 
-### CPA 在役模型上下文契约（2026-11-18）
+### CPA 在役模型上下文契约（2026-11-19）
 
 | 容量 | 日常自动压缩 | 模型 |
 | ---: | ---: | --- |
-| 272000 | 244800 | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
+| 272000 | 200000 | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
 | 500000 | 256000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | 256000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc`, `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
+| 1000000 | 200000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
+| 1000000 | 256000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc` |
 | 1048576 | 256000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high` |
 
-256000 是试用阈值。`gpt-6.2-astra` 由 `ai.input.im` 提供，使用默认生成值。
+200000（272K 档与 Antigravity Claude 档）与 256000（500K/1M 档）为按通道特性分层的自动压缩阈值：`gpt-6.2-astra` 已纳入 `config/codex-model-context-overrides.json` 显式钉定（消除默认生成时 `max_context_window=872000` 的漂移），`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
 两条 DeepSeek 分别使用 WorkBuddy 与 OpenCode Go，按入口验证实际输入与配额。
 
 2026-11-18 BWG 观测中，WorkBuddy `deepseek-v4.1-flash` 在 200–272K 和
@@ -98,7 +99,7 @@ experimental context management."）+「模型管理」实例自管目录后，�
 
 ### gpt-6.1-terra 上下文定案（2026-10-27）
 
-**采纳窗口为 272000，压缩阈值为 244800。** 这组数据用于 OAuth 线路的容量兼容，实际任务的最佳压缩点需要长度对照。
+**采纳窗口为 272000，日常自动压缩阈值自 2026-11-19 起由 244800 收紧为 200000。** 272000 用于 OAuth 线路的硬容量兼容，200000 预留单轮长工具输出余量并降低 200K+ 区间首字延迟。
 依据三方一致：CPA 网关 OAuth 通道 clamp `max-context-length=272000`
 （采纳日 manifest）；codex 官方内置目录 ctx=272000/max=872000；采纳决策
 （20261027-bwg-cpa-gpt-6.1-terra-adoption.md）=上游未公布新名字的窗口，

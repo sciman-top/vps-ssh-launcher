@@ -503,11 +503,13 @@ def check() -> list[str]:
                     manifest_contexts[alias] = window
     overrides = _load_json(CONTEXT_OVERRIDES, errors)
     override_models = overrides.get("models")
+    override_slugs: set[str] = set()
     if isinstance(override_models, list):
         for entry in override_models:
             if not isinstance(entry, dict) or not isinstance(entry.get("slug"), str):
                 continue
             slug = entry["slug"]
+            override_slugs.add(slug)
             if slug not in live:
                 errors.append(
                     f"{_relative(CONTEXT_OVERRIDES)}: {slug!r} is not a live "
@@ -538,6 +540,12 @@ def check() -> list[str]:
                     f"auto_compact_token_limit={compact!r} must be an integer "
                     f"between 1 and {compact_ceiling}"
                 )
+        for slug in sorted((set(manifest_contexts) & live) - override_slugs):
+            errors.append(
+                f"{_relative(CONTEXT_OVERRIDES)}: live manifest model {slug!r} "
+                f"(max-context-length={manifest_contexts[slug]}) is missing "
+                "from desktop context overrides"
+            )
     return errors
 
 

@@ -174,10 +174,14 @@ def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
             Path(__file__).parents[1] / "scripts/cockpit_local_provider_policy.json"
         ).read_text(encoding="utf-8")
     )
+    assert {"codex.ciii.club", "35.213.82.91"} <= set(policy["retired_hosts"])
     retired = set(policy["retired_models"])
     assert {
         "gpt-reserve",
         "gpt-6.1-sol-input",
+        "gpt-6-astra",
+        "gpt-5.6-terra",
+        "gemini-4-carbon-high",
         "hy4free",
         "hy4flash-free",
     } <= retired
