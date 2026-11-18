@@ -323,12 +323,13 @@ PY
 )" || empty_sb=error
 echo "xray_empty_short_id=${empty_xray}"
 echo "singbox_empty_short_id=${empty_sb}"
-# Upstream's JSON builder writes every shortId into a zero-filled 8-byte id, so
-# "17" and "1700000000000000" ARE THE SAME id: a 2-hex or 14-hex value left by a
-# menu edit or a template swap is invisible to the empty-shortId check above,
-# yet it carries no more entropy than the client at the other end can guess:
-# every client that ships the same template offers the same short id. vasma and
-# this repo emit 16, so anything shorter is drift. The same pass reads the two knobs upstream comments out of
+# Upstream hex-decodes every shortId into a zeroed 8-byte id, padding the
+# RIGHT side, so a short value is a complete id padded with zeros: "17" IS
+# "17000000000000" + "00" (the same 8 bytes), not a distinct longer id. A
+# 2-, 4- or 14-hex value left by a menu edit or a template swap is therefore
+# invisible to the empty-shortId check above while carrying a handful of
+# bits at most. vasma and this repo emit 16, so anything shorter is drift.
+# The same pass reads the two knobs upstream comments out of
 # any recommended use: minClientVer and maxTimeDiff are evaluated only AFTER the
 # AEAD handshake, so they cannot stop a probe; when set, they only widen the set
 # of ClientHellos that get relayed into the fallback path. Absent/zero is the
@@ -1399,12 +1400,13 @@ PY_CDN_DNS
 fi
 
 echo '==reality-shortid-live=='
-# The non-empty shortIds the inbounds actually accept, normalized the way the
-# zero-filled 8-byte slot reads them (see the reality-shortid section above):
-# a subscription may spell the same id in its padded form, so both sides go
-# through the same zfill before the set comparison below. Live ids are
-# computed once here and consumed by both the merged-sub and the vasma-sub
-# checks; the value itself is never printed (2026-11-18 redaction contract).
+# The non-empty shortIds the inbounds actually accept. Both sides are
+# normalized with norm() before the set comparison below: upstream pads a
+# short id on the RIGHT into its 8 bytes (aa1234 == aa12340000000000, see
+# the reality-shortid section above), so the shortest spelling canonicalises
+# to itself and only genuinely different ids can compare unequal. Live ids
+# are computed once here and consumed by both the merged-sub and the
+# vasma-sub checks; the value itself is never printed (redaction contract).
 live_shortids="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY_SHORTIDS_LIVE'
 import glob
 import json
@@ -1414,7 +1416,9 @@ import sys
 
 def norm(value):
     text = str(value or '').strip().lower()
-    return text.zfill(16) if text else ''
+    # Upstream decodes the hex into a zeroed 8-byte buffer, so a short id is
+    # PADDED ON THE RIGHT (aa1234 == aa12340000000000), never on the left.
+    return text.ljust(16, '0') if text else ''
 
 
 sids = set()
@@ -1612,7 +1616,7 @@ try:
     txt = base64.b64decode(raw + b'=' * (-len(raw) % 4)).decode('utf-8', 'ignore')
 except Exception:
     txt = ''
-sids = sorted({m.group(1).lower().zfill(16) for m in re.finditer(r'[?&]sid=([0-9a-f]{1,16})', txt)})
+sids = sorted({m.group(1).lower().ljust(16, '0') for m in re.finditer(r'[?&]sid=([0-9a-f]{1,16})', txt)})
 print(','.join(sids))
 " < "$merged_file" 2>/dev/null)" || file_shortids='missing'
     if [ -z "$file_shortids" ]; then
@@ -1862,7 +1866,7 @@ try:
     txt = base64.b64decode(raw + b'=' * (-len(raw) % 4)).decode('utf-8', 'ignore')
 except Exception:
     txt = ''
-sids = sorted({m.group(1).lower().zfill(16) for m in re.finditer(r'[?&]sid=([0-9a-f]{1,16})', txt)})
+sids = sorted({m.group(1).lower().ljust(16, '0') for m in re.finditer(r'[?&]sid=([0-9a-f]{1,16})', txt)})
 print(','.join(sids))
 " < "$served_file" 2>/dev/null)" || served_shortids='missing'
         if [ -z "$served_shortids" ]; then

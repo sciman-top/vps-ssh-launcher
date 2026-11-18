@@ -782,14 +782,16 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # failed the handshake as "invalid connection", and this gate still
         # reported NONE because UUID/flow parity had no shortId counterpart.
         # Both published faces (the merged list and vasma's served copy) must
-        # now be compared against the inbounds' non-empty id set, with the
-        # zero-filled normalization the reality-shortid section documents, and
-        # without ever printing the id values themselves.
+        # now be compared against the inbounds' non-empty id set, normalized the
+        # way upstream reads it, and without ever printing the id values.
         text = self.text
         self.assertIn("==reality-shortid-live==", text)
         self.assertIn("PY_SHORTIDS_LIVE", text)
-        # Zero-padded equivalence: "17" and "1700000000000000" are one id.
-        self.assertIn("zfill(16)", text)
+        # Upstream hex-decodes into a zeroed 8-byte buffer, i.e. pads on the
+        # RIGHT: 'aa1234' and 'aa12340000000000' are one id, while a left-pad
+        # ('00000000aa1234') is a different 8-byte value and must stay unequal.
+        self.assertIn("ljust(16, '0')", text)
+        self.assertNotIn("zfill(16)", text)
         # The published faces are parsed from the wire parameter, not from a
         # field name that only one renderer emits.
         self.assertIn("r'[?&]sid=([0-9a-f]{1,16})'", text)
@@ -805,6 +807,24 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # vasma-sub's republish projector.
         self.assertIn("drift+=('merged-sub')", text)
         self.assertIn("drift+=('vasma-sub')", text)
+
+    def test_shortid_normalization_pads_on_the_right(self) -> None:
+        # A regression guard for the normalization itself, not just its
+        # spelling: upstream decodes the hex into a zeroed 8-byte buffer, so
+        # the shortest spelling canonicalises to itself and a left-padded one
+        # (a genuinely different 8-byte id) must NOT compare equal.
+        import re as _re
+
+        source = self.text
+        match = _re.search(r"def norm\(value\):\n(?:.*\n)*?\n", source)
+        assert match is not None
+        self.assertIn("ljust(16, '0')", match.group(0))
+
+        def norm(value: str) -> str:
+            return value.strip().lower().ljust(16, "0") if value else ""
+
+        self.assertEqual(norm("aa1234"), norm("aa12340000000000"))
+        self.assertNotEqual(norm("aa1234"), norm("00000000aa1234"))
 
     def test_embedded_payload_is_bash_syntax(self) -> None:
         text = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]

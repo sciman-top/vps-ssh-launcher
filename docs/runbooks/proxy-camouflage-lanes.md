@@ -339,20 +339,23 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
 
 ### REALITY 参数面复核（2026-11-18）
 
-- **shortId 长度才是熵，不是“非空”**：上游 JSON 构建器把任意偶数长度的 hexadecimal
-  shortId 写入零填充的 8 字节槽，所以 `17` 与 `1700000000000000` 是同一个 id。现网两机
-  均为 16 字符，因为短值等价于“所有用同一模板的客户端共享同一个
-  shortId”。漂移门禁新增 `reality_shortid_short=` 输出，双核（xray `shortIds`、
+- **shortId 长度才是熵，不是“非空”**：上游把 hexadecimal shortId 解码进一只零初始化的
+  8 字节缓冲，也就是**在右侧补零**（官方文档举例 `aa1234` ≡ `aa12340000000000`），所以
+  “短值”并不是另一种 id，而是高位很少的几个字节加一串零的可枚举值。现网两机均为 16
+  字符；任何短于 16 的值都等价于“所有用同一模板的客户端共享同一个 shortId”。
+  （注：早期本节曾写成 `17` ≡ `1700000000000000`，那是错的——右补齐才是上游语义。）
+  漂移门禁新增 `reality_shortid_short=` 输出，双核（xray `shortIds`、
   sing-box `short_id` 字符串或列表）任一出现短值即报 `reality-shortid`；恢复用
   `reality_shortid_harden.ps1` 或直接改成 16 字符并 `xray run -test`。
-  **2026-11-18 已执行 shortId 轮换。** 两台原先共用同一个 16 字符 id（sha256 前缀 `2a7dc072`），
-  等于两台互为同一把共享钥匙，且该值已出现在验收判据行里。轮换后两台各用独立随机 id
-  （指纹 `152e768c…` / `6564c544…`，旧值在两台配置与四份订阅里均已不存在）。
-  执行顺序（已验证）：备份 → 改服务端 → 发布 vasma 订阅 → 发布合并订阅 → 重启 xray →
-  验收。两端 `ACCEPTANCE_RESULT=PASS`。备份在 `/var/backups/reality-shortid-roll-*`。
-  验收判据行不再打印 `sid=`，只报端口。
-  再轮换时的顺序：两台同时改 → 立即 `zz_subscription_republish.ps1 -Apply` →
-  `merged_subscription_lane.ps1 -Apply` → 重启 → 验收。
+  **2026-11-18 shortId 轮换：已执行，但当晚被回滚，当前状态是“两台共享同一把钥匙”。**
+  轮换曾把两台改成独立随机 id（指纹 `152e768c…` / `6564c544…`），随后同一晚的一次
+  vasma 菜单重配与人工修复把配置写回原值（sha256 前缀 `2a7dc072`），订阅也按现值重发，
+  因此**现在两台共用的仍是同一个 16 字符 id**。这是已知的剩余风险，不是已完成项；
+  待单独窗口处理（见下）。
+  验收判据行不再打印 `sid=`，只报端口。轮换用备份在 `/var/backups/reality-shortid-roll-*`。
+  再轮换时的唯一正确顺序（每步后都要回读比对 SERVER 与 published）：两台同时改服务端 →
+  立即 `zz_subscription_republish.ps1 -Apply` → `merged_subscription_lane.ps1 -Apply` →
+  重启 xray → 跑 `proxy_lane_acceptance.ps1` 与漂移门禁。
   **2026-11-18 收尾（重要）**：当晚一次 vasma 菜单重配（07/12 两个 REALITY 入站）
   静默把 shortId 换成新值，随后的人工修复又把它写回原来那个两台共用的旧值
   （sha256 前缀 `2a7dc072`）；期间车道内一次 `reality_shortid_harden` 再覆盖过一次。
@@ -365,9 +368,18 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
   部署侧另有一条硬性要求：**按单台顺序执行**，bwg 验收通过后再动 zz。
   **2026-11-19 drift 门禁补盲**：当晚暴露的最后一个盲区是 published 与 conf 的
   shortId 维度没有等价检查（UUID/flow 都有）。门禁现以 `reality-shortid-live` 段
-  归一化（零填充 16 hex）提取 conf 侧非空 id 集，`merged_sub_shortid=` 与
+  （按上游右补齐到 16 hex）提取 conf 侧非空 id 集，`merged_sub_shortid=` 与
   `vasma_sub_shortid=` 分别对两份 published 面做集合等价判定，漂移走既有
   `merged-sub` / `vasma-sub` lane 恢复接线；判据行只报 match/mismatch，不打印值。
+  **2026-11-19 二次轮换已执行（终态）**：用户裁决当场执行。两台 conf 各自生成独立随机
+  16 hex（服务器端 openssl，值不落任何文档/判据行/记忆），四路订阅面重发，双机回环真
+  握手、URL 实拉、`merged_sub_shortid=match`/`vasma_sub_shortid=match` 全 PASS。执行
+  序列即轮换清单：rotate（备份→sed→restart→443 校验）→ 回环握手 →
+  `zz_subscription_republish.ps1 -Apply` ×2 → `merged_subscription_lane.ps1 -Apply` ×2 →
+  drift+URL 终验 → 客户端刷订阅。**vasma 会在 xray restart 后自动把其订阅面收敛到新
+  conf**（lane 报 applied=no-op 即此信号），merged 静态面必须显式 -Apply；未随订阅走的
+  Office clone 节点（bwg-reality-vision 仅改 addr/port）须手动同步新 ShortId。
+  备份：`conf/backup-shortid-roll2-*`。至此两台不再共享任何 REALITY 标识符。
 - **`minClientVer` / `maxTimeDiff` 不是安全参数**：二者只在 AEAD 认证通过后参与判定，
   主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
   的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
