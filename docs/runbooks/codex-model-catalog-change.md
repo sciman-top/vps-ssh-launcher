@@ -45,6 +45,21 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 输入 token 时均找回三项指定记录。该对照复用了部分前缀，未测自动压缩后的
 需求保留、代码通过率或订阅扣额。当前试用阈值仍待这些指标验证。
 
+2026-11-19 8318 回环单发补充对照（中位 needle + 均质重复填充，
+chat wire，`max_tokens=1024`；64 会被思考预算吞掉返回空 content，
+判读必须带 `finish_reason`）：
+
+| 档位 | 模型 | prompt_tokens | 耗时 | needle |
+| ---: | --- | ---: | ---: | --- |
+| ~240K | `glm-5.3-flash` | 223470 | 4s | OK |
+| ~240K | `gemini-3.8-flash-high` | 215186 | 6s | OK |
+| ~800K | `glm-5.3-flash` | 744867 | 48s | OK |
+| ~800K | `gemini-3.8-flash-high` | 717272 | 23s | OK |
+
+单 needle + 均质填充是召回下限题（context rot 研究中退化先出现在聚合/推理
+任务），本表只证明订阅车道接受 >700K 输入且机械召回不掉，不构成 200000/
+256000 试用档相对 90% 档的质量终审；真实任务对照仍按上文判据执行。
+
 ## 增加模型（desktop 要看到新名）
 
 1. ①服务端（若是新模型）：按 checklist 完成 `-Apply`+doctor。
