@@ -902,7 +902,16 @@ desktop 原样 165KB 请求体 200/completed。残余暴露面：model 历史轮
 随后按用户指令将静态上游目录已有的 `claude-opus-5-5-high` 加入
 `antigravity-oauth` 路由，配置 1,000,000 上下文窗口；从
 `antigravity_oauth_exclusions` 移除并加入 `codex_api_key_exclusions` 防抢注，
-同步准入与 doctor 契约。此处记录仓库声明，不代表已投影或已验证账号可用。
+同步准入与 doctor 契约。2026-11-18 04:26Z 由提交 `1287209` 投影到 BWG：
+doctor 读到 `claude-opus-5-5-high`，上下文为 `1000000`，`MODEL_IDS_UNKNOWN=none`、
+`catalog_oauth_missing=none`，投影文件全 `MATCH`。但 strict doctor 以
+`DOCTOR_CONTRACT_FAILED` 结束：运行二进制哈希与该投影提交台账不符，且
+`antigravity-oauth` 的持久风险状态为 `account_restricted` /
+`operator_review_required`。本次没有发送 Opus 5.5 生成请求；路由目前仅证明已投影
+并被服务目录加载，尚未 `LIVE_ACCEPTED`。按 Antigravity 风险 runbook，先完成人工账号
+状态复核与获准恢复，再考虑至多一次受控请求。当前 `main` 的提交 `3555bfb` 已记录
+运行中 v8.0.77 的二进制台账，但还包含未随本次投影部署的其他改动；本次验收结论仅
+对应实际投影源 `1287209`。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
