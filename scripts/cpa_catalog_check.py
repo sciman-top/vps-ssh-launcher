@@ -521,17 +521,22 @@ def check() -> list[str]:
                     "max-context-length in the manifest"
                 )
                 continue
-            expected_compact = (expected_window * 9) // 10
+            compact_ceiling = (expected_window * 9) // 10
+            compact = entry.get("auto_compact_token_limit")
             if (
                 entry.get("context_window") != expected_window
                 or entry.get("max_context_window") != expected_window
-                or entry.get("auto_compact_token_limit") != expected_compact
             ):
                 errors.append(
                     f"{_relative(CONTEXT_OVERRIDES)}: {slug!r} window "
-                    f"({entry.get('context_window')}/{entry.get('max_context_window')}/"
-                    f"{entry.get('auto_compact_token_limit')}) != manifest "
-                    f"({expected_window}/{expected_window}/{expected_compact})"
+                    f"({entry.get('context_window')}/{entry.get('max_context_window')}) "
+                    f"!= manifest ({expected_window}/{expected_window})"
+                )
+            if type(compact) is not int or not 0 < compact <= compact_ceiling:
+                errors.append(
+                    f"{_relative(CONTEXT_OVERRIDES)}: {slug!r} "
+                    f"auto_compact_token_limit={compact!r} must be an integer "
+                    f"between 1 and {compact_ceiling}"
                 )
     return errors
 

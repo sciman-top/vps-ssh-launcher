@@ -20,31 +20,29 @@
 | ③ cockpit 上下文钉值 | 供应商记录 `modelContextWindows`（账户侧同名字段 `api_model_context_windows`） | 改 `config/codex-model-context-overrides.json` 后同值写入 cockpit |
 | ④ desktop 加载 | cockpit 受管 `cockpit-model-catalog.json`（指针由 cockpit 写） | 目录文件缺失 → codex 内置账号清单；文件在时（2026-10-28 实测 OAuth 账户 lane 亦由 cockpit 生成，generator 7）按清单加载，verify 报 cockpit-managed |
 
-上下文三字段（`context_window`/`max_context_window`/`auto_compact_token_limit`）
-由 cockpit 按窗口值统一生成，compact=90%（272000→244800、1000000→900000、
-1048576→943718），与 manifest 语义一致。
+CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
+`max_context_window`。`auto_compact_token_limit` 由客户端清单单独钉定，目录门禁要求
+阈值为正整数且不超过容量的 90%。以实际路由和客户端目录为准。
 
 ### CPA 在役模型上下文契约（2026-11-18）
 
-`config/codex-model-context-overrides.json` 与
-`scripts/remote/cpa_provider_routes.json` 的 provider/`oauth_settings`
-上下文值保持一致。当前桌面受管目录可见的 17 个 CPA 模型（包含
-`deepseek-v4.1-flash-oc` 这个 provider alias）按下列窗口钉定：
+| 容量 | 日常自动压缩 | 模型 |
+| ---: | ---: | --- |
+| 272000 | 244800 | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
+| 500000 | 256000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
+| 1000000 | 256000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc`, `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
+| 1048576 | 256000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high` |
 
-| 窗口 | 模型 |
-| ---: | --- |
-| 272000 | `gpt-6-astra`, `gpt-5.6-terra`, `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra` |
-| 500000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc`, `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
-| 1048576 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-carbon-high`, `gemini-4-argon-high` |
+256000 是试用阈值。`gpt-6.2-astra` 由 `ai.input.im` 提供，使用默认生成值。
+两条 DeepSeek 分别使用 WorkBuddy 与 OpenCode Go，按入口验证实际输入与配额。
 
-两个在役 DeepSeek 名称（`deepseek-v4.1-flash` 与 provider alias
-`deepseek-v4.1-flash-oc`）指向同一真实模型窗口；WorkBuddy INTL 的
-`deepseek-v4.1-flash-sg` / `deepseek-v4.1-flash-intl` 于 2026-11-17 关闭暗置
-（不在客户端目录宣告），`hy4flash-free`（更名前 `hy4free`）已同日退役删除；
-`gpt-6.2-astra`（272000）在 `ai.input.im` 通道预开放（optional）。WorkBuddy 的
-输入上限为 960K，故客户端总上下文 pin 保持 1000000。Cockpit 内置
-`codex-auto-review` 和编辑器里的 `gpt-reserve` 不属于 CPA 在役模型。
+2026-11-18 BWG 观测中，WorkBuddy `deepseek-v4.1-flash` 在 200–272K 和
+400–500K 的缓存 token 占比分别为 99.3%（261 次）和 99.6%（297 次）。
+`gemini-4-argon-high` 对应为 98.0%（54 次）和 83.4%（7 次）。样本来自
+72 小时自然流量，按请求实际输入分桶，缓存比例按 token 加权。
+智谱 Coding Plan 的 `glm-5.3-flash` 单次合成对照在 236564 和 471269
+输入 token 时均找回三项指定记录。该对照复用了部分前缀，未测自动压缩后的
+需求保留、代码通过率或订阅扣额。当前试用阈值仍待这些指标验证。
 
 ## 增加模型（desktop 要看到新名）
 
@@ -68,8 +66,9 @@
 experimental context management."）+「模型管理」实例自管目录后，每模型
 「上下文与压缩」列即唯一编辑入口；account 同步后
 `enforce_experimental_model_policy_for_dir` 自动重套——**切号/重建自愈，
-不需要任何外部补丁**。实例缺省窗口由「上下文管理」下拉给出
-（落 `config.toml` `model_context_window`，现为 1M/900K，勿删）。
+不需要任何外部补丁**。使用模型目录控制容量和压缩时，`config.toml` 顶层
+须省略 `model_context_window` 和 `model_auto_compact_token_limit`。Codex 会优先
+应用这两个全局值，目录校验通过时也可能发生覆盖。
 
 - 改值：该弹层模型列表（「管理」按钮加/删行）直接填；保存后
   `CONTEXT_VERIFY=PASS` 即生效（desktop 重启加载）。
@@ -99,7 +98,7 @@ experimental context management."）+「模型管理」实例自管目录后，�
 
 ### gpt-6.1-terra 上下文定案（2026-10-27）
 
-**272000 输入窗口 / 244,800 压缩阈值（90%）= 当前最优配置，保持不动。**
+**采纳窗口为 272000，压缩阈值为 244800。** 这组数据用于 OAuth 线路的容量兼容，实际任务的最佳压缩点需要长度对照。
 依据三方一致：CPA 网关 OAuth 通道 clamp `max-context-length=272000`
 （采纳日 manifest）；codex 官方内置目录 ctx=272000/max=872000；采纳决策
 （20261027-bwg-cpa-gpt-6.1-terra-adoption.md）=上游未公布新名字的窗口，
@@ -151,6 +150,5 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   的 catalogHash（版本戳滞后），按上行机制会在启动期触发无窗口重建——实验
   模式开启时精确钉值靠策略重套自愈；**关闭状态下无自愈**（2026-10-28 实况），
   修复=重开实验模式重录，或从 git 16e547f 找回 -Apply 直修。
-  `config.toml model_context_window` 只托底，勿手改 meta，常规收敛入口是
-  cockpit 侧一次保存/切 lane 重建。
+  保存或切换 lane 后应同时检查目录钉值和 `config.toml` 的全局覆盖。
 - sync 脚本时代的"克隆注入/基底 fail-closed"流程随脚本一并退役，勿再使用。
