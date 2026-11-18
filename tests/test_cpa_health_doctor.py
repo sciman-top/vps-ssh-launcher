@@ -196,6 +196,11 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIsInstance(proxy_handler, urllib.request.ProxyHandler)
         self.assertEqual(proxy_handler.proxies, {})
         opener.open.assert_called_once()
+        sent_request = opener.open.call_args.args[0]
+        self.assertEqual(
+            sent_request.get_header("User-agent"),
+            "cli-proxy-openai-compat",
+        )
 
     def test_cpa_health_classifies_malformed_2xx_as_upstream_unavailable(self) -> None:
         import io

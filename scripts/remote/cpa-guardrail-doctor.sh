@@ -2168,7 +2168,10 @@ try:
     key = config["access"]["api-keys"][0]
     request = urllib.request.Request(
         "http://127.0.0.1:8317/v1/models",
-        headers={"Authorization": f"Bearer {key}"},
+        headers={
+            "Authorization": f"Bearer {key}",
+            "User-Agent": "cli-proxy-openai-compat",
+        },
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(request, timeout=5) as response:

@@ -368,6 +368,7 @@ def _loopback_request(config):
         request_headers = {
             "Authorization": "Bearer " + _client_api_key(config),
             "Content-Type": "application/json",
+            "User-Agent": "cli-proxy-openai-compat",
         }
         if headers:
             request_headers.update(headers)
