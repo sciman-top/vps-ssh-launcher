@@ -218,6 +218,35 @@ v8.0.72+ 内置的 TOS 处理（上游 #7515，提案先例 #7296）：
   2026-02 波有分批解封先例）是人工动作，与池恢复正交；"解封后再犯=永久"
   纪律不变。
 
+### 双层锁释放顺序与事故指纹（2026-11-18 首例实弹固化）
+
+真实 `TOS_VIOLATION` 会同时武装两层：CPA 池停（上游请求拿
+`503 "antigravity pool paused after TOS_VIOLATION"`）+ admission
+`account_restricted` durable hold。**池停未清时任何探针只会拿到 503，且该
+503 响应体里的 TOS_VIOLATION 字样会把 admission hold 再 latch 一轮**
+（2026-11-18 实证）。释放顺序固定为，顺序错=浪费一轮并多落一次锁：
+
+1. 保 inode 翻 `tos-pause-window` `"2h"`→`"0"`（上节手筋，等 watcher 热加载，
+   `/v0/management/config` 读数复核）；
+2. `systemctl stop cpa-admission` → 备份并置
+   `antigravity-risk.json` 为
+   `{"version": 1, "not_before": 0, "hold_reason": null}` → `start`；
+3. 8318 回环**单发**探针定性（pool 已开时直达上游，一发分辨"仍禁用 vs 已恢复"）；
+4. 同一事件内翻回 `"2h"`（钉定契约要求，见上节）。
+
+事故期日志判别：`stale_write_ahead_cooldown retry_after≈90` = 重启写前窗
+指纹（良性，自行到期，勿当上游信号）；`operator_review_required
+retry_after=300` 循环 = 真 hold（人工复核锁，不自动恢复）。部署夜的重启
+指纹会掩盖首信号：90s 窗到期后的 half_open 探针才是第一发真实上游测试，
+其结果才入判决。
+
+**重登不解服务禁用**（2026-11-18 实测：OAuth 重登刷新 auth json 至
+`disabled:false` 后，回环探针同 403 原样返回）：禁用在账号侧，凭据侧
+`disabled` 标记清零只代表本地路由面恢复；唯一出路 = `appeal_url` 申诉
+（403 ErrorInfo metadata / 管理 API `tos_appeal_url` 透出），
+"解封后再犯=永久"。单凭据命中≠扫荡波：先跑 doctor 的 credential_ban
+观察块（sha8 标签 7d 逐凭据计数）普查，再定全池停还是单号 hold。
+
 ## antigravity 封号触发面与登录风控纪律（2026-11-18 增补）
 
 社区 2026-02 起报告的 Antigravity 永久封禁潮（2026-11 第二波延续）把可核验
