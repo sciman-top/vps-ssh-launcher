@@ -353,6 +353,16 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
   验收判据行不再打印 `sid=`，只报端口。
   再轮换时的顺序：两台同时改 → 立即 `zz_subscription_republish.ps1 -Apply` →
   `merged_subscription_lane.ps1 -Apply` → 重启 → 验收。
+  **2026-11-18 收尾（重要）**：当晚一次 vasma 菜单重配（07/12 两个 REALITY 入站）
+  静默把 shortId 换成新值，随后的人工修复又把它写回原来那个两台共用的旧值
+  （sha256 前缀 `2a7dc072`）；期间车道内一次 `reality_shortid_harden` 再覆盖过一次。
+  教训是**顺序**：先发布订阅还是先改服务端都会造成客户端与发布物错位，正确顺序只有
+  「改服务端 → 立即重发两份订阅 → 重启 → 验收」，且每一步之后都要回读比对
+  `SERVER` 与 `published` 是否一致。收尾状态：两台服务端同为旧共用值、两份订阅按
+  服务端现值重发、六条公网入口一致、两台 `ACCEPTANCE_RESULT=PASS` 与
+  `HARDENING_DRIFT=NONE`。轮换本身**已明确推迟**：客户端刚拿到重发后的列表，
+  同一晚再轮换会造成第二次全量断连，须单独安排窗口并做订阅切换。
+  部署侧另有一条硬性要求：**按单台顺序执行**，bwg 验收通过后再动 zz。
 - **`minClientVer` / `maxTimeDiff` 不是安全参数**：二者只在 AEAD 认证通过后参与判定，
   主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
   的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
