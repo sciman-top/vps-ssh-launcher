@@ -1767,9 +1767,12 @@ else
         # v2rayN currently imports the Hysteria2 port range from mport and
         # rejects an authority containing a comma. Keep the base port numeric
         # so both v2rayN and standards-oriented clients can at least connect.
+        # The authority may end in the '/?' delimiter the lanes now emit (it
+        # keeps the V2Ray-family pre-version field empty), so the host/port
+        # group stops at the first '/' as well as at '?'.
         if printf '%s\n' "$body" | grep -qE '^hysteria2://.*#.*hy2-obfs'; then
             printf '%s\n' "$body" |
-                grep -qE '^hysteria2://[^@]+@[^/?#]+:[0-9]+\?[^#]*mport=20000-20999([&#]|$)' || continue
+                grep -qE '^hysteria2://[^@]+@[^/?#]+:[0-9]+/\?[^#]*mport=20000-20999([&#]|$)|^hysteria2://[^@]+@[^/?#]+:[0-9]+\?[^#]*mport=20000-20999([&#]|$)' || continue
         fi
         served_ok=1
     done

@@ -298,6 +298,13 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
 
+    def test_served_hy2_obfs_node_accepts_the_slash_delimiter(self) -> None:
+        # The lanes emit 'hysteria2://<auth>@host:8444/?...&mport=20000-20999';
+        # a host/port group that only stops at '?' read the slash as part of the
+        # port and reported every host as vasma-sub drift (2026-11-18).
+        text = self.text
+        self.assertIn("[^/?#]+:[0-9]+/\\?[^#]*mport=20000-20999", text)
+
     def test_served_vasma_subscription_is_checked(self) -> None:
         text = self.text
         # zz republishes subscribe_local but the client-visible file is
