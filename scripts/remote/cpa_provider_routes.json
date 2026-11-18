@@ -68,7 +68,6 @@
       "host": "opencode.ai",
       "path": "/zen/go/v1",
       "headers": {
-        "user-agent": "cli-proxy-openai-compat",
         "x-opencode-session": "cpa-bwg-gateway-01"
       },
       "models": [

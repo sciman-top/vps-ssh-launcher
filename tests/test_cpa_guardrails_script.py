@@ -1878,10 +1878,7 @@ except Exception as exc:
         self.assertEqual(slot2_route["path"], "/zen/go/v1")
         self.assertEqual(
             slot2_route["headers"],
-            {
-                "user-agent": "cli-proxy-openai-compat",
-                "x-opencode-session": "cpa-bwg-gateway-01",
-            },
+            {"x-opencode-session": "cpa-bwg-gateway-01"},
         )
         self.assertEqual(
             slot2_route["models"],
