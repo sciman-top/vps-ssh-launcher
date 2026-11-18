@@ -543,6 +543,30 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 f"expected sensitive-words-replace pin to reject {bad!r}",
             )
 
+    def test_cpa_policy_pins_antigravity_tos_pause_window(self) -> None:
+        import json
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        # Absence is the CPA default, but the declared in-service posture is
+        # explicit: dropping the key, or shortening/zeroing the pool pause,
+        # silently removes the reviewed response to a pool-level TOS signal.
+        for bad in (None, "0", "", "30m", 7200):
+            mutated = json.loads(json.dumps(config))
+            antigravity = mutated["oauth"]["providers"]["antigravity"]
+            if bad is None:
+                antigravity.pop("tos-pause-window", None)
+            else:
+                antigravity["tos-pause-window"] = bad
+            issues = policy["validate_config"](mutated)
+            self.assertTrue(
+                any("tos-pause-window" in issue for issue in issues),
+                f"expected tos-pause-window pin to reject {bad!r}",
+            )
+
     def test_cpa_policy_rejects_oauth_setting_manifest_drift(self) -> None:
         import runpy
 

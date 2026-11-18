@@ -91,6 +91,18 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
     # antigravity OAuth provider block (config_v8.go buildV8Paths).
     ("oauth", "providers", "antigravity", "antigravity-credits"): False,
+    # The v8.0.72+ ToS pool pause (upstream #7515) is the in-service ban-response
+    # control declared in docs/runbooks/cpa-ban-throttle-incident-response.md:
+    # a 403 TOS_VIOLATION disables the offending credential and pauses the whole
+    # antigravity pool for this window. CPA treats an absent key as this
+    # default, so pinning it does not change behaviour -- it makes the
+    # declared posture machine-visible. Without the pin, a management-UI
+    # reserialization, an -Apply projection that drops the key, or an operator
+    # shortening the window would silently remove the only reviewed response
+    # to a pool-level enforcement signal, and no doctor/apply check would say so.
+    # Deliberately not zero: see the runbook's early-release procedure, which
+    # flips the value in place under incident control instead of editing it.
+    ("oauth", "providers", "antigravity", "tos-pause-window"): "2h",
     # Claude subscription OAuth lane (2026-10-17): claims only opus-5-5 /
     # sonnet-5-5 / haiku-5-5 per user decision; every other model the
     # credential exposes stays a provider-level exclusion tombstone. The

@@ -1191,6 +1191,11 @@ docker() {{
                 )["sensitive-words-replace"] = policy["EXPECTED_CONFIG_PATHS"][
                     ("oauth", "providers", "antigravity", "sensitive-words-replace")
                 ]
+                expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
+                    "antigravity", {}
+                )["tos-pause-window"] = policy["EXPECTED_CONFIG_PATHS"][
+                    ("oauth", "providers", "antigravity", "tos-pause-window")
+                ]
                 self.assertEqual(generated, expected)
 
         for fixture in (

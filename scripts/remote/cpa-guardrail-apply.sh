@@ -1440,6 +1440,11 @@ antigravity_provider_after = oauth_providers_after.setdefault("antigravity", {})
 if not isinstance(antigravity_provider_after, dict):
     raise SystemExit("REFUSE oauth.providers.antigravity must be a mapping")
 antigravity_provider_after["sensitive-words"] = ["gpt", "openai", "codex"]
+# v8.0.72+ ToS pool pause (upstream #7515). CPA treats an absent key as this
+# default, so writing it changes no runtime behaviour; it makes the declared
+# ban-response posture explicit in the file cpa_policy.py pins and the doctor
+# reads, instead of depending on a CPA default that a later version could move.
+antigravity_provider_after["tos-pause-window"] = "2h"
 # Literal replacements supersede the zero-width obfuscation above on the
 # system instruction: the 2026-11-18 probes showed the WAF matches through
 # zero-width-padded words, so this swap table is the effective masking

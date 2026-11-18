@@ -197,6 +197,11 @@ v8.0.72+ 内置的 TOS 处理（上游 #7515，提案先例 #7296）：
   `tos-pause-window: "2h"`（2026-11-17 用户裁决启用，`oauth.providers.antigravity`
   下）。暂停只覆盖 Antigravity 车道；**429/配额类永不触发或延长**（上游仅
   TOS 路径写入）。
+  **机器判据（2026-11-18 补齐）**：该键已进 `cpa_policy.py` 的
+  `EXPECTED_CONFIG_PATHS` 钉定，并由 `-Apply` 在既有钉定块里写回；缺失、缩短或
+  清零都会让语义复验 fail-closed。此前只有文档声明而无判据，管理面重序列化或
+  投影漏写都不会报错。上面"提前恢复"的翻 `"0"` 是**事件期受控例外**，必须在
+  同一事件内翻回 `"2h"`，否则 doctor 会报钉定漂移。
 - **恢复**：窗口到期自动恢复（本机 kv.db 持久化 + TTL 兜底，重启容器不清）。
   **提前恢复手筋**：确认无新 TOS 信号后，把该键值**保 inode** 翻 `"0"`
   （CPA watcher 热加载即时生效，`docker logs` 应出现
@@ -239,7 +244,13 @@ v8.0.72+ 内置的 TOS 处理（上游 #7515，提案先例 #7296）：
   付费/Priority 档显著减少但非零（[模型文档](https://aistudio.google.com/docs/models)、
   [Tier-2 503 实例](https://discuss.ai.google.dev/t/persistent-503-on-gemini-3-7-flash-with-priority-tier-tier-2-paid-0-success-over-multiple-retries/179804)）。
 - 已定性结论不变：agy 降智=Google tier serving 政策（碳/氩 served 裸名、flash-n
-  全池降级、换凭据无效），**客户端无解**；唯一杠杆=更高档凭据或车道分流。
+  全池降级、换凭据无效），**客户端无解**。
+  2026-11-18 证据修正：11-17 的"全池降级"结论来自裸 user 小探针，对 desktop 形状
+  不成立——同日单变量对照显示 desktop 原样重放是 WAF 指纹 429（T1/T2），修复后
+  `flash-high`/`xhigh` 仍被替换为 `flash-n`/裸名。因此**不能再用"换更高档凭据"作为降智
+  解（池内换号已实测无效，且 Antigravity FAQ 明确消费级套餐不支持自动化账号切换）**；
+  在役杠杆只有两条：质量敏感流量改走其它车道（如 `claude-sonnet-5-5-high`），或迁移
+  官方 API key / Gemini Enterprise（用户决策）。
   不凭主观感受开案：先固定请求模型与样例，再对照替换对计数与 modelVersion 读数。
 - 限额口径（官方页）：组模型共享 5h 窗与周顶，Ultra（$100/mo）token 限额 ≈ 5×
   Pro（$20/mo）（[Plans 文档](https://antigravity.google/docs/plans)）；有 Pro 仍可能

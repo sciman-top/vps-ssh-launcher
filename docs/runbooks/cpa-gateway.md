@@ -478,7 +478,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 | API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
 
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
-  不轮换；模型 pin 按各 realm 核准。WorkBuddy 的两个 realm 都 pin 上游
+  不做**同请求跨号轮换**（`max-retry-credentials` 有界回退除外）；模型 pin 按各 realm 核准。WorkBuddy 的两个 realm 都 pin 上游
   `deepseek-v4.1-flash`，CPA 用 CN 裸名与 INTL fork alias 拆分入口、admission
   lane 和持久状态；WorkBuddy `credits` scheduler 仍可能在 auth pool 中回退，
   所以这不是 per-auth realm 绑定，也不能保证一次 6008 只来自对应 realm 的账号。
@@ -491,9 +491,10 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   账号、Antigravity OAuth 2 份凭据、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
   允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
   不等于越安全**：每个凭据都是独立的账号级风险面，池化只把“单账号被限”的影响摊到
-  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 两份凭据共用同一 provider lane：未绑定会话按注册顺序选首个合格
-  凭据，会话亲和会继续固定该选择，只有配额、认证、模型不支持或永久不可用信号才
-  允许重绑定；这不是 round-robin，也不保证每次请求都直接切换。WorkBuddy 自动回退
+  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 两份凭据共用同一 provider lane：未绑定会话按全局
+  `routing.strategy`（现 `round-robin`）分配，会话亲和会继续固定该选择，只有配额、认证、
+  模型不支持或永久不可用信号才允许重绑定；轮转发生在**不同请求之间**，同一次失败
+  请求的跨号回退仍受 `max-retry-credentials=3` 约束，不保证每次请求都直接切换。WorkBuddy 自动回退
   是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
 - **`max-retry-credentials` 语义（易误读）**：现行全局值 `3` 将每个客户端请求
   限制为最多三个上游凭据；配合 `request-retry=0`，不会开启额外请求级重试轮次，
@@ -505,8 +506,11 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   `session-affinity-rebind-on=quota`、`session-affinity-subagents=false` 保持显式钉定。
   有会话标识的请求继续绑定已选凭据；瞬态 5xx、空流或缓冲失败不会因为缺省的
   `any` 语义而立即换号，从而保留缓存局部性并减少账号扩散。只有配额、认证、模型
-  不支持或永久不可用信号才允许重绑定。`fill-first` 保留为未绑定会话的初始选择策略；
-  改成 round-robin 会在池内分散新请求，不能作为降低上游限流的控制。上游 v8 配置说明
+  不支持或永久不可用信号才允许重绑定。未绑定会话的初始选择是 **`round-robin`**
+  （2026-11-06 由 `fill-first` 改来：fill-first 把整个 WorkBuddy 池压到首个 ready 凭据上，
+  与 per-account tripwire 的方向相反），由 `cpa_policy.py` 的 `EXPECTED_ROUTING` 机器钉定；
+  它是跨请求的池内分散，不是同请求内的账号轮换，也不承诺降低上游限流。会话亲和
+  （TTL 1h）保证一次会话仍钉在一个凭据上。上游 v8 配置说明
   `switch-preview-model` 已无 v8 对应项；
   仓库仍将它钉为 `false`，供兼容旧配置，不把该字段当作 v8 运行时护栏。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
