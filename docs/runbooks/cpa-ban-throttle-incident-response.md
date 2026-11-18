@@ -459,6 +459,10 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 `LOCAL_CONTRACT_FAILED` 时需要进一步定位具体模型和用例，单凭退出码无法判断
 是接口响应形状、模型名还是语义断言失败。若单宿 API key 路由返回 `403`，
 保留该路由并核对官方控制台的权限、订阅状态和脱敏请求记录。
+OpenCode 的 `403` 需同时核对响应 `message`。2026-11-18 的 Python 健康探针
+收到 `error code: 1010`，CPA 包装码为 `insufficient_quota`，不能仅凭该包装码
+判定 Go 订阅额度耗尽。该次冷却自然结束后，同一单宿路由经 curl 单次请求返回
+HTTP 200；不要反复运行 Python 矩阵探针验证该 1010。
 
 每次运行会输出一行 `PROBE_BUDGET`，给出 `models=`、`cases_per_model=`、
 `planned_generation_requests=` 与 `oauth_lane=excluded:<原因>`，用来在执行前

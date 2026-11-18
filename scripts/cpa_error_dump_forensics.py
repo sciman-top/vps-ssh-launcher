@@ -125,6 +125,7 @@ _HEADER_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9-]{1,40}):\s*(.*)$")
 # this field a `recognised` verdict reads as "the account is overloaded".
 _LAST_UPSTREAM = re.compile(r"last upstream error:\s*([^)\"]{1,120})", re.I)
 _ERROR_TYPE = re.compile(r'"type"\s*:\s*"([a-z_]{1,40})"', re.I)
+_ERROR_1010 = re.compile(r'"message"\s*:\s*"error code:\s*1010"', re.I)
 
 
 def response_text(raw: str) -> str:
@@ -173,6 +174,9 @@ def census(text: str) -> dict[str, Any]:
             headers[name] = match.group(2).strip()[:HEADER_VALUE_LIMIT]
     lowered = text.lower()
     cause = _LAST_UPSTREAM.search(text)
+    upstream_cause = cause.group(1).strip() if cause else ""
+    if not upstream_cause and _ERROR_1010.search(text):
+        upstream_cause = "error code: 1010"
     return {
         "response_bytes": len(text),
         "statuses": statuses,
@@ -180,7 +184,7 @@ def census(text: str) -> dict[str, Any]:
         "candidates": sorted(
             {token for token in CANDIDATE_MARKERS if token in lowered}
         ),
-        "upstream_cause": cause.group(1).strip() if cause else "",
+        "upstream_cause": upstream_cause,
         "error_types": sorted(set(_ERROR_TYPE.findall(text))),
     }
 

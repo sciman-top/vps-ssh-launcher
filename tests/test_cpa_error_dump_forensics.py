@@ -188,6 +188,17 @@ class VerdictTests(unittest.TestCase):
         facts = analyse(response_text(raw), MARKERS, STATUSES)
         self.assertEqual(facts["verdict"], "other")
 
+    def test_1010_message_remains_visible_with_quota_wrapper(self) -> None:
+        raw = dump(
+            response=(
+                'Status: 403\n\n{"error":{"message":"error code: 1010",'
+                '"type":"permission_error","code":"insufficient_quota"}}'
+            )
+        )
+        facts = analyse(response_text(raw), MARKERS, STATUSES)
+        self.assertEqual(facts["upstream_cause"], "error code: 1010")
+        self.assertEqual(facts["verdict"], "unrecognised")
+
     def test_rate_limit_headers_are_surfaced_when_present(self) -> None:
         raw = dump(
             response=(
