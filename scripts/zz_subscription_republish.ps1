@@ -217,7 +217,10 @@ if b:
                  % (urllib.parse.quote(b["password"], safe=""), b["sni"], b["port"], b["sni"], prefix))
 o = f.get("hy2_obfs")
 if o:
-    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#%s-hy2-obfs"
+    # The trailing slash is the delimiter V2Ray-family importers expect; it
+    # keeps the pre-version field empty so a digit-leading obfs password cannot
+    # be read as a node version (see merged_subscription_lane.ps1).
+    links.append("hysteria2://%s@%s:%s/?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#%s-hy2-obfs"
                  % (urllib.parse.quote(o["password"], safe=""), o["sni"], o["port"],
                     o["sni"], HY2_HOP_RANGE, urllib.parse.quote(o["obfs"] or "", safe=""), prefix))
 print("\n".join(links))

@@ -171,8 +171,11 @@ vasma 重装或菜单重配可能轮换 UUID / Hysteria2 口令，旧列表会�
 的 `merged-sub` 校验准确的节点数（设备异结构变化的 6/7 节点，不放宽为“至少 6”）、
 UUID 和第二 SNI 节点；`merged-sub-fetch` 再从直连回环下载一次，并验证 Hysteria2 URL
 的认证口令没有在 URI 导入中丢失。两者任一失败都重跑上面的 Apply。节点标签只用 ASCII
-的 `-reality-vision` / `-xhttp-reality` / `-hy2-obfs` 等格式，避免中文客户端订阅
-解析器改写 fragment 后误报或漏报。
+的 `--reality-vision` / `--reality-vision--alt` / `--xhttp-reality` / `-hy2-obfs` 等格式。
+**标签与 URI 里不能出现可被当作版本号的数字**：V2Ray 系客户端（含 Rust/Go 内核）把
+第一次出现的 `-([0-9]+)` 当成节点版本，按 `-` 切分时会被改写成 `[版本]` 前缀，已见 v2rayN
+实测；Hysteria2 obfs URI 因此固定写成 `:8444/?…`（尾部斜杠），让 `-<payload>/?` 后的
+预版本字段为空，密码首字符即使是数字也不被判成版本号。
 
 日常 `scripts/vps_maintenance.ps1` 的 BWG 只读观察也运行 lane acceptance，并显式使用
 `-PublicName fq.sciman.top -RealityPublicPort 443`。因此它同时检查回环与客户端实际
@@ -342,6 +345,10 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
   shortId”。漂移门禁新增 `reality_shortid_short=` 输出，双核（xray `shortIds`、
   sing-box `short_id` 字符串或列表）任一出现短值即报 `reality-shortid`；恢复用
   `reality_shortid_harden.ps1` 或直接改成 16 字符并 `xray run -test`。
+  **2026-11-18 复核：本批次不做 shortId 轮换。** 两台现值为 16 字符满熵；轮换必须与两份
+  订阅（vasma 本地文件 + 静态合并订阅）同批发布，任何客户端未及时刷新即断连，收益与
+  代价不成比例。真要轮换时的顺序：两台同时改 → 立即 `merged_subscription_lane.ps1 -Apply`
+  发新 sid → 再 `zz_subscription_republish.ps1 -Apply` 重写 vasma 本地文件 → 验收。
 - **`minClientVer` / `maxTimeDiff` 不是安全参数**：二者只在 AEAD 认证通过后参与判定，
   主动探测方过不了这一步，所以它们拦不住探测；一旦设置，却会把“时钟偏差超过阈值”
   的合成 ClientHello 精确送进回落路径。现网两机参数的 JSON 值是 `minClientVer=1.8.2`
@@ -398,6 +405,22 @@ Cloudflare 官方代理默认支持 2087，但“中国网络（China Network）
 把客户端入口迁到 Cloudflare 的 443，并引入 Origin Rule/Worker/Tunnel 一类能解耦
 “边缘端口”和“源站端口”的机制；这会新增 Cloudflare 配置权限和新的故障域，本轮不做
 无证据的网关重构，真实客户端回归仍是验收条件。
+
+## Xray 26.10.31 → 26.11.9（2026-11-18）
+
+两台同步升级，逐台执行：bwg 完成后先做主机侧验收 + zz 作为外部客户端复验，确认通过
+再对 zz 换芯。
+
+- 包来源：[`v26.11.9` Xray-linux-64.zip](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)，
+  官方 sha256 `b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82`（两台各自下载校验一致）。
+- 内核二进制 sha256 `e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d`，两台的 kernel wrapper pin（`auto_update_xray.sh` 的 `TARGET_VERSION`/`EXPECTED_SHA256`）已同步重投影。
+- 顺序（每台）：`xray run -test -confdir` 通过 → `systemctl stop xray` → `install` 新二进制 →
+  sha 复验 → `systemctl start xray` → 端口/服务复验。回滚目录：
+  bwg `/var/backups/xray-rollback-26.10.31-20261118T143242Z`、
+  zz `/var/backups/xray-rollback-26.10.31-20261118T143710Z`（含旧二进制与整份 conf）。
+- 验收：两台 `proxy_lane_acceptance.ps1` 均 `ACCEPTANCE_RESULT=PASS`（含公网 REALITY、
+  XHTTP 21470/10094、CDN、Hysteria2 base/obfs/跳跃）；另一台作为外部客户端做 TLS/
+  REALITY 握手与伪装页复验；两台 `HARDENING_DRIFT=NONE`；两份合并订阅重发后 7 节点可公网取回。
 
 ## 21470 双绑定退役（vasma 重装后必查）
 

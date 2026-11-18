@@ -346,8 +346,12 @@ def reality_link(item, suffix=''):
     # when the inbound's own user carries it, otherwise the node fails at the
     # first packet instead of degrading to plain VLESS.
     flow = '&flow=%s' % quote(item['flow']) if item.get('flow') else ''
+    # Node names carry no hyphen-separated numeric field: V2Ray-family clients
+    # (Rust/Go cores included) split the fragment on '-' and read a trailing
+    # numeric component as the node version, so '-reality-vision2' would
+    # silently re-label a rotated node. The suffix is therefore '--'.
     return (
-        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp%s#__PREFIX__-reality-vision%s'
+        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp%s#__PREFIX__--reality-vision%s'
         % (item['uuid'], sn, item['port'], sn, item['pbk'], item['sid'], flow, label(suffix))
     )
 
@@ -356,12 +360,12 @@ if reality:
     ports.append(reality['port'])
     links.append(reality_link(reality))
 if reality_alt:
-    links.append(reality_link(reality_alt, '-alt'))
+    links.append(reality_link(reality_alt, '--alt'))
 if reality_xhttp and reality_xhttp['sid']:
     ports.append(reality_xhttp['port'])
     sn = reality_xhttp['sni']
     links.append(
-        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#__PREFIX__-xhttp-reality'
+        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#__PREFIX__--xhttp-reality'
         % (
             reality_xhttp['uuid'], sn, reality_xhttp['port'], sn, reality_xhttp['pbk'],
             reality_xhttp['sid'][0], reality_xhttp['host'], quote(reality_xhttp['path']),
@@ -381,8 +385,14 @@ if hy2_base:
     )
 if hy2_obfs:
     ports.append(hy2_obfs['port'])
+    # The obfs password follows a '-' in every Hysteria2 URI (obfs-password=<p>).
+    # A rotated password is 43 base64url characters, so V2Ray-family importers
+    # that regex the node VERSION as /(\d+)/ out of the raw line would take the
+    # first digits inside the new password (a 40xxxx=1968.. style date) and
+    # re-label the node. trim_trailing_slash() below appends the delimiter the
+    # stock build already emits, which keeps that pre-version field empty.
     links.append(
-        'hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#__PREFIX__-hy2-obfs'
+        'hysteria2://%s@%s:%s/?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#__PREFIX__-hy2-obfs'
         % (
             quote(hy2_obfs['password']), hy2_obfs['sni'], hy2_obfs['port'],
             hy2_obfs['sni'], HY2_HOP_RANGE, quote(hy2_obfs['obfs'] or ''),
@@ -533,7 +543,7 @@ chmod 755 "$MERGED_DIR"
 # path below only guards the window after the write).
 tmp_target="$(mktemp "$MERGED_DIR/.merged.XXXXXX")"
 if printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' \
-    | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0 > "$tmp_target"; then
+    | sed "s/#[a-z]*-/#${NAME_PREFIX}-/g" | base64 -w0 > "$tmp_target"; then
     mv -f -- "$tmp_target" "$TARGET"
 else
     echo 'MERGED_SUB_RENDER_FAILED' >&2

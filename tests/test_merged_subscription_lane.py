@@ -49,9 +49,11 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_derives_every_lane_from_live_configs(self) -> None:
         text = self.text
+        # Hyphenated labels carry no numeric component: V2Ray-family readers
+        # read a trailing '-<digits>' as a node version.
         for marker in (
-            "__PREFIX__-reality-vision",
-            "__PREFIX__-xhttp-reality",
+            "__PREFIX__--reality-vision",
+            "__PREFIX__--xhttp-reality",
             "__PREFIX__-xhttp-tls",
             "__PREFIX__-hy2-base",
             "__PREFIX__-hy2-obfs",
@@ -65,7 +67,7 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
         # still affected by open upstream Go 1.27/H2 issues and was flaky on
         # zz; the REALITY-XHTTP node remains on auto.
         self.assertIn("mode=packet-up#__PREFIX__-xhttp-tls", text)
-        self.assertIn("mode=auto#__PREFIX__-xhttp-reality", text)
+        self.assertIn("mode=auto#__PREFIX__--xhttp-reality", text)
 
     def test_prefix_placeholder_is_replaced_on_render(self) -> None:
         # a91597c renamed the node labels to #__PREFIX__-... but only
@@ -81,9 +83,9 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
         # A client that already holds the list has to be able to switch names
         # without fetching it over the name that just got blocked.
         self.assertIn("reality_alt = {", text)
-        self.assertIn("reality_link(reality_alt, '-alt')", text)
+        self.assertIn("reality_link(reality_alt, '--alt')", text)
         self.assertIn("'sni': names[1],", text)
-        self.assertIn("__PREFIX__-reality-vision%s", text)
+        self.assertIn("__PREFIX__--reality-vision%s", text)
 
     def test_serves_from_the_existing_static_root(self) -> None:
         text = self.text
@@ -197,7 +199,7 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
                     next(
                         link
                         for link in facts["links"]
-                        if link.endswith("__PREFIX__-reality-vision")
+                        if link.endswith("__PREFIX__--reality-vision")
                     )
                 )
 
@@ -272,7 +274,7 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
                 link for link in facts["links"] if link.endswith("__PREFIX__-hy2-obfs")
             )
             authority = obfs.split("://", 1)[1].split("@", 1)[1].split("?", 1)[0]
-            self.assertEqual(authority, "example.com:8444")
+            self.assertEqual(authority, "example.com:8444/")
             self.assertIn("mport=20000-20999", obfs)
 
     def test_standby_entry_is_verified_before_it_is_published(self) -> None:

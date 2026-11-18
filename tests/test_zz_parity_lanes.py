@@ -163,7 +163,7 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn('HY2_HOP_RANGE = "20000-20999"', text)
         self.assertIn("hysteria2://%s@%s:%s?sni=%s&alpn=h3#%s-singbox_hysteria2", text)
         self.assertIn(
-            "hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander", text
+            "hysteria2://%s@%s:%s/?sni=%s&alpn=h3&mport=%s&obfs=salamander", text
         )
         self.assertNotIn("peer=%s", text)
 
@@ -210,7 +210,10 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         links = result.stdout.splitlines()
         obfs = next(link for link in links if link.endswith("#zz-hy2-obfs"))
         authority = obfs.split("://", 1)[1].split("@", 1)[1].split("?", 1)[0]
-        self.assertEqual(authority, "example.com:8444")
+        # The trailing '/' is the delimiter V2Ray-family importers expect; it
+        # keeps the pre-version field empty so a digit-leading obfs password
+        # cannot be read as the node version.
+        self.assertEqual(authority, "example.com:8444/")
         self.assertIn("mport=20000-20999", obfs)
         tls = next(link for link in links if link.endswith("#zz-VLESS_XHTTP_TLS"))
         self.assertIn("mode=packet-up", tls)
