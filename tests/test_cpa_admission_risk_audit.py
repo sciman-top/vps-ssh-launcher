@@ -25,6 +25,7 @@ MODULE = runpy.run_path(
     str(Path(__file__).parents[1] / "scripts" / "cpa_admission_risk_audit.py")
 )
 Finding = cast(Any, MODULE["Finding"])
+_plugin_route_aliases = cast(Any, MODULE["_plugin_route_aliases"])
 advertised_aliases = cast(Any, MODULE["advertised_aliases"])
 audit_contract = cast(Any, MODULE["audit_contract"])
 audit_live_health = cast(Any, MODULE["audit_live_health"])
@@ -217,6 +218,66 @@ class AdvertisedAliasesTests(unittest.TestCase):
             }
         )
         self.assertIn("alias-multi-slot", codes(audit_contract(cfg, routes)))
+
+    def test_fork_alias_advertises_pin_and_alias_for_lane_gating(self) -> None:
+        """A fork alias exposes both client names, so the lane pin is advertised.
+
+        cpa-workbuddy-plugin.md pins two INTL request names on one lane
+        (``deepseek-v4.1-flash-intl`` with ``fork: true``, and
+        ``deepseek-v4.1-flash-sg``). Reading only the alias made the audit
+        report the lane's own pin as a stale member; a non-fork alias still
+        hides the pin and must keep reporting it.
+        """
+
+        routes = routes_manifest()
+        routes["plugin_routes"] = [
+            {
+                "provider": "workbuddy-ai-provider",
+                "realm": "intl",
+                "models": ["deepseek-v4.1-flash-sg"],
+                "admission_lane": "workbuddy-oauth",
+            }
+        ]
+        routes["oauth_model_aliases"] = {
+            "workbuddy-ai-provider": [
+                {
+                    "name": "deepseek-v4.1-flash-sg",
+                    "alias": "deepseek-v4.1-flash-intl",
+                    "fork": True,
+                }
+            ]
+        }
+        cfg = admission_config()
+        cfg["lanes"].append(
+            {
+                **cfg["lanes"][0],
+                "name": "workbuddy-oauth",
+                "models": [
+                    "deepseek-v4.1-flash-intl",
+                    "deepseek-v4.1-flash-sg",
+                ],
+                "model_capacity_markers": [],
+            }
+        )
+        self.assertEqual(
+            _plugin_route_aliases(routes, routes["plugin_routes"][0]),
+            ["deepseek-v4.1-flash-sg", "deepseek-v4.1-flash-intl"],
+        )
+        findings = codes(audit_contract(cfg, routes), SEVERITY_FAIL)
+        self.assertNotIn("lane-model-not-advertised", findings)
+        self.assertNotIn("lane-route-coverage-missing", findings)
+        self.assertIn("deepseek-v4.1-flash-sg", advertised_aliases(routes))
+
+        # Without the fork the pin is not client-visible: the same lane member
+        # is then exactly the stale shape the rule exists to catch.
+        routes["oauth_model_aliases"]["workbuddy-ai-provider"][0]["fork"] = False
+        self.assertEqual(
+            _plugin_route_aliases(routes, routes["plugin_routes"][0]),
+            ["deepseek-v4.1-flash-intl"],
+        )
+        self.assertNotIn("deepseek-v4.1-flash-sg", advertised_aliases(routes))
+        findings = codes(audit_contract(cfg, routes), SEVERITY_FAIL)
+        self.assertIn("lane-model-not-advertised", findings)
 
     def test_provider_and_oauth_aliases_are_both_advertised(self) -> None:
         owners = advertised_aliases(routes_manifest())

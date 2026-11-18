@@ -314,11 +314,19 @@ def _plugin_route_aliases(routes: dict[str, Any], route: dict[str, Any]) -> list
     both realms. The INTL client-facing name is a manifest alias, so the
     admission and audit contracts must translate only that realm while
     leaving the CN bare name untouched.
+
+    A ``fork: true`` alias exposes **both** names to clients: the alias and the
+    bare upstream pin. cpa-workbuddy-plugin.md pins that contract as two rows
+    for the INTL realm (``deepseek-v4.1-flash-intl`` and
+    ``deepseek-v4.1-flash-sg``, both on ``workbuddy-intl-oauth``), and the
+    admission lane must gate both. Reporting only the alias made the audit read
+    the lane's own pin as a member no client can name. A non-fork alias still
+    hides the pin, which is when the stale-member rule must fire.
     """
 
     provider = route.get("provider")
     realm = route.get("realm")
-    aliases: dict[str, str] = {}
+    aliases: dict[str, tuple[str, bool]] = {}
     raw_aliases = routes.get("oauth_model_aliases")
     if isinstance(raw_aliases, dict):
         entries = raw_aliases.get(provider)
@@ -329,12 +337,22 @@ def _plugin_route_aliases(routes: dict[str, Any], route: dict[str, Any]) -> list
                     and isinstance(entry.get("name"), str)
                     and isinstance(entry.get("alias"), str)
                 ):
-                    aliases[entry["name"].strip()] = entry["alias"].strip()
+                    aliases[entry["name"].strip()] = (
+                        entry["alias"].strip(),
+                        entry.get("fork") is True,
+                    )
     result: list[str] = []
     for model in route.get("models", []) or []:
         if not isinstance(model, str):
             continue
-        result.append(aliases.get(model, model) if realm == "intl" else model)
+        if realm == "intl" and model in aliases:
+            alias, forked = aliases[model]
+            if forked and model not in result:
+                result.append(model)
+            if alias not in result:
+                result.append(alias)
+        elif model not in result:
+            result.append(model)
     return result
 
 
