@@ -291,6 +291,18 @@ class MainTests(unittest.TestCase):
         path.write_text(dump(response=response), encoding="utf-8")
         return path
 
+    def test_ssh_profile_without_local_files_runs_remote_analysis(self) -> None:
+        with (
+            mock.patch.dict(
+                main.__globals__,
+                {"_analyse_remotely": lambda profile: (0, '{"results":[]}', "")},
+            ),
+            redirect_stdout(io.StringIO()) as buffer,
+        ):
+            code = main(["--ssh-profile", "bwg"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(buffer.getvalue()), {"results": []})
+
     def test_main_exits_zero_when_every_response_is_recognised(self) -> None:
         path = self._dump("a.log", "Status: 503\nserver_is_overloaded")
         with redirect_stdout(io.StringIO()) as buffer:

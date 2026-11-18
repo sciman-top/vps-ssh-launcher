@@ -84,7 +84,8 @@ _QUALITY_EVAL_CASES = (
                 "role": "user",
                 "content": (
                     'Return only JSON with keys "first" and "count". '
-                    "Set first to the first Greek letter and count to the number of letters in alpha."
+                    "Set first to the lowercase English name of the first Greek letter "
+                    "and count to the number of letters in alpha."
                 ),
             }
         ],

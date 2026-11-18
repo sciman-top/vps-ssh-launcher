@@ -374,7 +374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_path = args.admission_config or DEFAULT_ADMISSION_CONFIG
         files = list(args.file)
 
-    if not files:
+    if not files and not args.ssh_profile:
         # "No input" is not "clean". In --remote mode the retention dir can be
         # absent or already rotated, and silently returning 0 reads as a health
         # verdict for dumps that were never analysed -- the same failure the
