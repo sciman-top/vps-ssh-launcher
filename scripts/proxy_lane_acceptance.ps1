@@ -677,7 +677,7 @@ PY
             code="$probe_last_code"
             probe_exit="$probe_last_exit"
             if [ "$code" = '204' ]; then
-                record reality-xray 0 "port=$rport sid=$rsid"
+                record reality-xray 0 "port=$rport"
             else
                 failure="$(probe_failure_code "$code" "$probe_exit")"
                 record reality-xray 1 "port=$rport code=${code:-none} failure=$failure client_log=$(client_log_class "$WORK/x.log")"
@@ -994,7 +994,7 @@ PY
             PIDS+=("$!")
             sleep 3
             code="$(probe_via_socks "$sb_socks_port")"
-            if [ "$code" = '204' ]; then record reality-singbox 0 "port=$rport sid=$rsid"; else record reality-singbox 1 "port=$rport code=${code:-none}"; fi
+            if [ "$code" = '204' ]; then record reality-singbox 0 "port=$rport"; else record reality-singbox 1 "port=$rport code=${code:-none}"; fi
             if [ -n "$PUBLIC_NAME" ]; then
                 sb_public_socks_port="$(next_local_port)"
                 VPS_PROBE_UUID="$ruuid" python3 - "$WORK/sb-public.json" "$sb_public_socks_port" "$REALITY_PUBLIC_PORT" "$rflow" "$rsni" "$pubkey" "$rsid" "$PUBLIC_NAME" <<'PY'

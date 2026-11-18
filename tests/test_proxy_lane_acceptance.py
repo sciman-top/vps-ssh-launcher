@@ -46,6 +46,11 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("RESULT=N/A", text)
         self.assertIn("ACCEPTANCE_RESULT=PARTIAL", text)
 
+    def test_reality_verdict_does_not_print_short_id(self) -> None:
+        self.assertIn('record reality-xray 0 "port=$rport"', self.text)
+        self.assertIn('record reality-singbox 0 "port=$rport"', self.text)
+        self.assertNotIn("sid=$rsid", self.text)
+
     def test_proves_handshake_not_service_state(self) -> None:
         text = self.text
         # Every verdict is decided by a real 204 through the tunnel, not by
