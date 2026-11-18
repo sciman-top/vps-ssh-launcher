@@ -106,11 +106,11 @@ def start_shadow(config_path, port, workdir):
     raise SystemExit("SHADOW_NOT_LISTENING")
 
 
-def post(port, model, body=None):
+def post(port, model, body=None, timeout=90):
     import http.client
 
     payload = body if body is not None else json.dumps({"model": model, "input": "x"})
-    client = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+    client = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
         client.request(
             "POST", "/v1/responses", payload, {"Content-Type": "application/json"}
@@ -267,13 +267,16 @@ def main():
 
     failed = [name for name, ok, _ in checks if not ok]
     for name, ok, detail in checks:
-        print("BRANCH %-28s %s %s" % (name, "PASS" if ok else "FAIL", detail))
-    print("BRANCHES_CHECKED=%d FAILED=%d" % (len(checks), len(failed)))
+        print(
+            "BRANCH %-28s %s %s" % (name, "PASS" if ok else "FAIL", detail),
+            flush=True,
+        )
+    print("BRANCHES_CHECKED=%d FAILED=%d" % (len(checks), len(failed)), flush=True)
     shutil.rmtree(workdir, ignore_errors=True)
     if failed:
-        print("BRANCH_ACCEPTANCE=FAIL " + ",".join(failed))
+        print("BRANCH_ACCEPTANCE=FAIL " + ",".join(failed), flush=True)
         return 1
-    print("BRANCH_ACCEPTANCE=PASS")
+    print("BRANCH_ACCEPTANCE=PASS", flush=True)
     return 0
 
 

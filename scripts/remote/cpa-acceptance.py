@@ -587,7 +587,7 @@ def main():
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-ai-input-im"}],
                 "models": [
-                    {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
+                    {"name": "gpt-6.2-astra", "alias": "gpt-6.2-astra"},
                 ],
             },
             {
@@ -624,14 +624,6 @@ def main():
                         "name": "deepseek-v4.1-flash-oc",
                         "alias": "deepseek-v4.1-flash-oc",
                     },
-                ],
-            },
-            {
-                "name": "http-bridge-8003",
-                "base-url": "http://127.0.0.1:18318/v1",
-                "api-key-entries": [{"api-key": "fixture-http-bridge"}],
-                "models": [
-                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
                 ],
             },
             {

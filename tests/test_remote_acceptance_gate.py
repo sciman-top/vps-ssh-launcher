@@ -118,3 +118,44 @@ def test_the_gate_never_prints_pass_outside_its_fixture() -> None:
     completed = _run("cpa-acceptance.py")
     assert completed.returncode != 0
     assert "ACCEPTANCE_RESULT=PASS" not in completed.stdout
+
+
+def test_acceptance_fixture_catalog_stays_aligned_with_health_contract() -> None:
+    """cpa-acceptance.py's synthetic fixture must satisfy cpa-health's model contract."""
+    import ast
+
+    acceptance_path = REPO_ROOT / "scripts" / "remote" / "cpa-acceptance.py"
+    module = _rehearsal_module()
+    module["assert_catalog_contract"].__globals__["ROOT"] = (
+        REPO_ROOT / "scripts" / "remote"
+    )
+    module["assert_catalog_contract"]()
+
+    tree = ast.parse(acceptance_path.read_text(encoding="utf-8"))
+    fixture_config = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == "config"
+                    and isinstance(node.value, ast.Dict)
+                    and any(
+                        isinstance(k, ast.Constant)
+                        and k.value == "openai-compatibility"
+                        for k in node.value.keys
+                    )
+                ):
+                    # Replace str(ROOT / "auth") with a literal string for literal_eval
+                    source_segment = ast.get_source_segment(
+                        acceptance_path.read_text(encoding="utf-8"), node.value
+                    )
+                    assert source_segment is not None
+                    fixture_config = ast.literal_eval(
+                        source_segment.replace(
+                            'str(ROOT / "auth")', '"/opt/cliproxyapi/auth"'
+                        )
+                    )
+                    break
+    assert isinstance(fixture_config, dict)
+    module["assert_fixture_model_coverage"](fixture_config)
