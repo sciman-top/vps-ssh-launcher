@@ -452,6 +452,14 @@ CPA_HEALTH_INCLUDE_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 ```
 
+经 SSH 运行时可加 `python3 -u` 及时输出逐路结果，并用 launcher 的
+`--command-timeout` 和 `--command-hard-timeout` 给评估留出有上限的窗口。
+先跑 `quality-canary` 查看逐路 `GENERATION` 结果。探针遇到首个失败即退出，
+此前通过的路由保留各自的验收结果，后续路由仍待验证。`quality-eval` 返回
+`LOCAL_CONTRACT_FAILED` 时需要进一步定位具体模型和用例，单凭退出码无法判断
+是接口响应形状、模型名还是语义断言失败。若单宿 API key 路由返回 `403`，
+保留该路由并核对官方控制台的权限、订阅状态和脱敏请求记录。
+
 每次运行会输出一行 `PROBE_BUDGET`，给出 `models=`、`cases_per_model=`、
 `planned_generation_requests=` 与 `oauth_lane=excluded:<原因>`，用来在执行前
 确认这次运行的计划请求量。`readiness` 和 `generation`（单目标
