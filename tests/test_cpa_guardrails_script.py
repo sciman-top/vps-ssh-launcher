@@ -1316,6 +1316,17 @@ docker() {{
         # exactly the mistake the refresh rotation owns.
         self.assertIn("REFUSE intl_disabled_counter_unavailable", apply_source)
         self.assertIn("REFUSE intl_disabled_expectation_partial", apply_source)
+        # The precondition counts through THIS payload's module: a transaction
+        # always runs one generation behind its own projection, so asking the
+        # deployed generation for a verb it never had refuses the rollout that
+        # would introduce it (observed on the first apply of this control).
+        self.assertIn("python3 - \"$INTL_COUNTER_DIR\" <<'PY'", apply_source)
+        self.assertIn('base64.b64decode("__CPA_POLICY_B64__")', apply_source)
+        self.assertIn(
+            'INTL_EXPECTED_DISABLED=$(python3 "$INTL_COUNTER_DIR/cpa_policy.py" count-intl-disabled "$DIR/auth"',
+            apply_source,
+        )
+        # The readback still uses the freshly projected on-host module.
         self.assertIn(
             'INTL_AFTER_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth"',
             apply_source,

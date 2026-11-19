@@ -73,13 +73,27 @@ BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 # there cannot drift apart. Nothing may tighten an auth file by rewriting it
 # (refresh rotation owns those bytes), so the projection only ever lowers
 # disabled to true.
-INTL_EXPECTED_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
+# Count from THIS payload's policy module, not the deployed one: a transaction
+# always runs one generation behind its own projection (the first rollout of
+# this control is exactly that case), and asking the previous generation for a
+# verb it never had refuses the transaction that would introduce it. The count
+# only reads auth files, so the payload copy is authoritative for the decision.
+INTL_COUNTER_DIR=$(mktemp -d /tmp/cpa-intl-counter.XXXXXXXXXX)
+python3 - "$INTL_COUNTER_DIR" <<'PY' || { echo "REFUSE intl_counter_payload_unwritable"; exit 1; }
+import base64
+import sys
+from pathlib import Path
+Path(sys.argv[1], "cpa_policy.py").write_bytes(base64.b64decode("__CPA_POLICY_B64__"))
+PY
+INTL_EXPECTED_DISABLED=$(python3 "$INTL_COUNTER_DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
 case "$INTL_EXPECTED_DISABLED" in
   ''|*[!0-9]*)
-    echo "REFUSE intl_disabled_counter_unavailable projected cpa_policy predates count-intl-disabled; re-projection cannot prove which INTL credentials must stay disabled"
+    rm -rf -- "$INTL_COUNTER_DIR"
+    echo "REFUSE intl_disabled_counter_unavailable payload cpa_policy could not count INTL credentials; re-projection cannot prove which of them must stay disabled"
     exit 1
     ;;
 esac
+rm -rf -- "$INTL_COUNTER_DIR"
 # Zero is a valid count only on a host that has no INTL credentials at all.
 # With files present the expectation must cover every one of them, otherwise a
 # half-projected set would read back as satisfied.

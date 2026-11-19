@@ -77,6 +77,14 @@ passthrough/gemini-4-neon-xhigh/HTTP429/noncapacity:6`）。doctor 现读数
 （与 `ADMISSION_CONFIG` 装载同层），并补 `test_policy_counter_verb_is_reachable_before_projection`
 钉住"定义必须先于 `__main__` 且 CLI 计数正确"。
 
+第二次 `-Apply` 仍被同一 REFUSE 挡住，定位到真正的根因：**apply 事务永远跑在
+它自己这次投影的上一代**（第一次上线新控制时就是这种情形），所以拿
+`/opt/cliproxyapi/cpa_policy.py` 的旧版去问一个旧版从未有过的动词，必然失败。
+修复：前置计数改为对**本 payload 内嵌的** `cpa_policy.py` 副本执行
+（`__CPA_POLICY_B64__` → 临时目录 → `count-intl-disabled`），它只读 auth 文件，
+与宿主上的旧模块无关；投影后回读仍用新落盘的 `$DIR/cpa_policy.py`。
+两次拒绝都发生在 `MUTATED=1` 之前，远端零写入。
+
 ## 远端写入
 
 **本次未对 bwg 写入。** 上述两项修复都要经 `-Apply`（自带 drain、备份、回滚与
