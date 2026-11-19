@@ -2764,14 +2764,26 @@ if ! python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >"$BK/cpa-policy-test.log" 
   exit 1
 fi
 # Read the projection back through the same counter the doctor arms against:
-# a partially rewritten auth set must roll back here, not surface later as a
-# strict-doctor failure with the transaction already committed.
-INTL_AFTER_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
-if [ "$INTL_AFTER_DISABLED" != "$INTL_EXPECTED_DISABLED" ]; then
+# every INTL credential must be disabled once the transaction completes, not
+# just "one more than before". The readback runs the payload's own module copy
+# for the same reason the precondition does: the deployed $DIR/cpa_policy.py is
+# still the previous generation on this first rollout and answers nothing.
+INTL_COUNTER_DIR=$(mktemp -d /tmp/cpa-intl-verify.XXXXXXXXXX)
+python3 - "$INTL_COUNTER_DIR" <<'PY' || echo "INTL_VERIFY_COUNTER_UNAVAILABLE"
+import base64
+import sys
+from pathlib import Path
+Path(sys.argv[1], "cpa_policy.py").write_bytes(base64.b64decode("__CPA_POLICY_B64__"))
+PY
+INTL_AFTER_DISABLED=$(python3 "$INTL_COUNTER_DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
+rm -rf -- "$INTL_COUNTER_DIR"
+INTL_AUTH_TOTAL_AFTER=$(find "$DIR/auth" -maxdepth 1 -type f -name 'workbuddyai-*.json' 2>/dev/null | wc -l)
+if [ "$INTL_AFTER_DISABLED" != "$INTL_AUTH_TOTAL_AFTER" ]; then
   restore_all
-  echo "ROLLBACK intl_auth_disabled_readback want=$INTL_EXPECTED_DISABLED got=$INTL_AFTER_DISABLED"
+  echo "ROLLBACK intl_auth_disabled_readback want=$INTL_AUTH_TOTAL_AFTER got=$INTL_AFTER_DISABLED"
   exit 1
 fi
+echo "INTL_AUTH_READBACK disabled=$INTL_AFTER_DISABLED of=$INTL_AUTH_TOTAL_AFTER"
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"

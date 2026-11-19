@@ -1333,9 +1333,16 @@ docker() {{
             'INTL_EXPECTED_DISABLED=$(python3 "$INTL_COUNTER_DIR/cpa_policy.py" count-intl-disabled "$DIR/auth"',
             apply_source,
         )
-        # The readback still uses the freshly projected on-host module.
+        # The readback also runs the payload's module copy (the deployed one is
+        # still the previous generation on this rollout) and requires the whole
+        # set to be disabled, not merely more than the baseline.
+        self.assertIn("mktemp -d /tmp/cpa-intl-verify", apply_source)
         self.assertIn(
-            'INTL_AFTER_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth"',
+            'INTL_AFTER_DISABLED=$(python3 "$INTL_COUNTER_DIR/cpa_policy.py" count-intl-disabled "$DIR/auth"',
+            apply_source,
+        )
+        self.assertIn(
+            'if [ "$INTL_AFTER_DISABLED" != "$INTL_AUTH_TOTAL_AFTER" ]; then',
             apply_source,
         )
         self.assertIn("ROLLBACK intl_auth_disabled_readback", apply_source)

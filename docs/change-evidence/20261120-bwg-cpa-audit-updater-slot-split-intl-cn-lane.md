@@ -90,6 +90,13 @@ passthrough/gemini-4-neon-xhigh/HTTP429/noncapacity:6`）。doctor 现读数
 "中间态即拒绝"是错误前提，改为只打印 `INTL_AUTH_BASELINE`，完整性由投影后回读
 （`count-intl-disabled == 投影后计数`）证明。
 
+第四次 `-Apply` 成功走到事务末尾（`INTL_AUTH_DISABLED changed=1 already=6`、17 项
+`PROJECTION_HASH_VERIFIED`），却在回读处以
+`want=6 got=7` 回滚：回读拿的是**投影前部署的旧模块**且期望值取的是基线。改为
+"回读用本 payload 的模块、以文件总数为期望"，并在失败路径上先 `restore_all`。
+已核实这次回滚是**干净**的：`disabled=6/7`、timer 仍 `RandomizedDelaySec=30min`、
+`cpa-admission active`、`cli-proxy-api Up`。
+
 > **工作树污染（本轮插入）**：检查期间发现 `scripts/remote/cpa_policy.py` 与
 > `scripts/remote/cpa_provider_routes.json` 被**本任务之外的并发编辑**写入了
 > `oauth_settings_contract`（引用了未定义的 `EFFORT_LEVELS`，`ruff` F821，且指向
