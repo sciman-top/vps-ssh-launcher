@@ -273,6 +273,36 @@ if not isinstance(ADMISSION_CONFIG, dict):
     ADMISSION_CONFIG = {}
     ADMISSION_CONFIG_ERROR = ADMISSION_CONFIG_ERROR or "InvalidAdmissionConfigType"
 
+# 2026-11-20 CN-lane protection. The workbuddy-ai-provider plugin is closed
+# dark, but its auth files stayed enabled: the plugin's periodic credit sweep
+# still reads them, an exhausted balance answers a bare 429 (six times in the
+# measured 24h window), and a re-enabled plugin would route them again with no
+# gate noticing. Only `disabled` is projected; refresh material is untouched so
+# a still-valid INTL token is not invalidated by this control.
+#
+# It lives here, not at the end of the module, because the apply transaction
+# calls it through the CLI before projecting: a host still running the previous
+# generation must answer the counter question, and a later definition would be
+# a NameError at that exact moment.
+WORKBUDDY_INTL_AUTH_PREFIX = "workbuddyai-"
+
+
+def count_workbuddy_intl_disabled(auth_dir: str | Path) -> int:
+    try:
+        entries = sorted(Path(auth_dir).glob(WORKBUDDY_INTL_AUTH_PREFIX + "*.json"))
+    except OSError:
+        return 0
+    disabled = 0
+    for entry in entries:
+        try:
+            payload = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("disabled") is True:
+            disabled += 1
+    return disabled
+
+
 EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # Two, not one. A measured desktop turn runs 39-216s, so single-flight
     # starved every concurrent request for the whole turn and then rejected it
@@ -2458,30 +2488,6 @@ def validate_file(path: str | Path, marker_path: Path | None = None) -> list[str
 
 
 # 2026-11-20 CN-lane protection. The workbuddy-ai-provider plugin is closed
-# dark, but its auth files stayed enabled: the plugin's periodic credit sweep
-# still reads them, an exhausted balance answers a bare 429 (six times in the
-# measured 24h window), and a re-enabled plugin would route them again with no
-# gate noticing. Only `disabled` is projected; refresh material is untouched so
-# a still-valid INTL token is not invalidated by this control.
-WORKBUDDY_INTL_AUTH_PREFIX = "workbuddyai-"
-
-
-def count_workbuddy_intl_disabled(auth_dir: str | Path) -> int:
-    try:
-        entries = sorted(Path(auth_dir).glob(WORKBUDDY_INTL_AUTH_PREFIX + "*.json"))
-    except OSError:
-        return 0
-    disabled = 0
-    for entry in entries:
-        try:
-            payload = json.loads(entry.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(payload, dict) and payload.get("disabled") is True:
-            disabled += 1
-    return disabled
-
-
 # Validating a 190 KB source costs tens of MB of interpreter memory, and the two
 # protected interpreters on this host are exactly the processes that must not be
 # OOM-killed: cpa-admission (holds every lane's durable state) and the CPA

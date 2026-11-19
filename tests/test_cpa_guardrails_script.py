@@ -1262,6 +1262,50 @@ docker() {{
         self.assertIn("note=expectation_not_projected_yet", readout.stdout)
         self.assertNotIn("workbuddy-intl-auth-disabled-guard=armed", readout.stdout)
 
+    def test_policy_counter_verb_is_reachable_before_projection(self) -> None:
+        """The apply's precondition and the doctor's expectation are one number.
+
+        The counter must answer as a CLI verb on the *previous* generation:
+        the bootstrap apply runs before its own payload is deployed, so a
+        helper defined after the entry point would raise NameError exactly then.
+        """
+        root = Path(__file__).parents[1]
+        auth_dir = root / "scripts" / "remote"
+        with tempfile.TemporaryDirectory() as tmp:
+            auth = Path(tmp)
+            (auth / "workbuddyai-a.json").write_text(
+                '{"disabled":true}', encoding="utf-8"
+            )
+            (auth / "workbuddyai-b.json").write_text(
+                '{"disabled":false}', encoding="utf-8"
+            )
+            (auth / "workbuddyai-c.json").write_text(
+                '{"type":"workbuddy"}', encoding="utf-8"
+            )
+            (auth / "workbuddy-d.json").write_text(
+                '{"disabled":true}', encoding="utf-8"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(auth_dir / "cpa_policy.py"),
+                    "count-intl-disabled",
+                    str(auth),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "1")
+        # The definition has to precede the __main__ block for the same reason.
+        source = (auth_dir / "cpa_policy.py").read_text(encoding="utf-8")
+        self.assertLess(
+            source.index("def count_workbuddy_intl_disabled"),
+            source.index('if __name__ == "__main__":'),
+        )
+
     def test_apply_projects_intl_disabled_with_readback(self) -> None:
         source = read_guardrail_source()
         apply_source = (

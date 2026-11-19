@@ -68,6 +68,15 @@ passthrough/gemini-4-neon-xhigh/HTTP429/noncapacity:6`）。doctor 现读数
 - `scripts/remote/cpa-guardrail-apply.sh` 另把 `observability.usage` 的两项 CPA 默认值钉定，
   使"声明的姿态"机器可见（无行为变更）。
 
+## 首次 `-Apply` 暴露的自举缺陷（同日修复）
+
+第一次 `-Apply` 以 `REFUSE intl_disabled_counter_unavailable` 终止：apply 事务在**用上一代**
+`cpa_policy.py` 做前置计数，而计数函数被写在模块尾部，上一代根本没有该动词。
+失败发生在 `MUTATED=1` 之前，远端零写入。修复：把
+`WORKBUDDY_INTL_AUTH_PREFIX` / `count_workbuddy_intl_disabled` 移到模块顶部常量区
+（与 `ADMISSION_CONFIG` 装载同层），并补 `test_policy_counter_verb_is_reachable_before_projection`
+钉住"定义必须先于 `__main__` 且 CLI 计数正确"。
+
 ## 远端写入
 
 **本次未对 bwg 写入。** 上述两项修复都要经 `-Apply`（自带 drain、备份、回滚与
