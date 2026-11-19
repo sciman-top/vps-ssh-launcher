@@ -186,6 +186,20 @@ docker() {{
             known_single_output,
         )
 
+        gemini4_known = "\n".join(
+            [
+                'upstream served model "gemini-4-neon" for requested model "gemini-4-neon-xhigh"',
+                'upstream served model "gemini-4-argon-trial" for requested model "gemini-4-argon-high"',
+            ]
+            * 4
+        )
+        gemini4_output = run(gemini4_known)
+        self.assertIn("model_substitution_known_name_variant_pairs=2", gemini4_output)
+        self.assertIn("model_substitution_unknown_pairs=0", gemini4_output)
+        self.assertIn(
+            "model_substitution=WARN_SUBSTITUTION_REVIEWED_PAIR", gemini4_output
+        )
+
         unknown = 'upstream served model "gemini-3.8-flash-lite" for requested model "gemini-3.8-flash-high"'
         unknown_output = run("\n".join([unknown] * 6))
         self.assertIn("model_substitution_known_name_variant_pairs=0", unknown_output)

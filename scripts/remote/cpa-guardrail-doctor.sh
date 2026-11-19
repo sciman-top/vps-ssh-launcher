@@ -3209,13 +3209,13 @@ if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" |
   SUBST_PAIRS=$(wc -l < "$SUBST_PAIRS_TMP")
   echo "model_substitution_distinct_pairs=$SUBST_PAIRS"
   awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "model_substitution_pair=%s%s\n", count, $0 }'
-  # This pair was historically treated as a Gemini modelVersion base-name
-  # echo. Desktop-shaped observations on 2026-11-18 found the same
-  # high-to-n substitution across the credential pool, so keep recognizing the
-  # pair for attribution but surface it for review regardless of request
-  # coverage. The pair alone still does not prove a quality change.
-  KNOWN_NAME_VARIANT_PAIR='gemini-3.8-flash-n <== gemini-3.8-flash-high'
-  KNOWN_SUBST_PAIRS=$(grep -F -x -c "$KNOWN_NAME_VARIANT_PAIR" "$SUBST_PAIRS_TMP" 2>/dev/null || true)
+  # These pairs match _PROVIDER_MODEL_ALIASES in scripts/cpa_cache_reset_probe.py:
+  # Antigravity splits the requested -high/-xhigh suffix into thinkingLevel and
+  # echoes the upstream base modelVersion (or -n / -trial suffix). Keep
+  # recognizing the reviewed pairs for attribution while still surfacing
+  # WARN_SUBSTITUTION_REVIEWED_PAIR for operator awareness.
+  KNOWN_NAME_VARIANT_PATTERN='gemini-3\.8-flash(-n)? <== gemini-3\.8-flash-high|gemini-4-hydrogen <== gemini-4-hydrogen-xhigh|gemini-4-carbon <== gemini-4-carbon-high|gemini-4-argon(-trial)? <== gemini-4-argon-high|gemini-4-neon <== gemini-4-neon-xhigh'
+  KNOWN_SUBST_PAIRS=$(grep -E -x -c "$KNOWN_NAME_VARIANT_PATTERN" "$SUBST_PAIRS_TMP" 2>/dev/null || true)
   UNKNOWN_SUBST_PAIRS=$((SUBST_PAIRS - KNOWN_SUBST_PAIRS))
   echo "model_substitution_known_name_variant_pairs=$KNOWN_SUBST_PAIRS"
   echo "model_substitution_unknown_pairs=$UNKNOWN_SUBST_PAIRS"

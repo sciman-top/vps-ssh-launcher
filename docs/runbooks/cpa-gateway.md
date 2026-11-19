@@ -919,6 +919,12 @@ image_id `7bb4b400…`、base index digest `9ee2d808…` 钉定；`AUTH_BYTES_UN
 workbuddy 插件无新版本，CN 0.21.27 继续注册、INTL 保持 closed dark；cache-canary
 0.9956 与基线一致）。全过程与观察项见
 [20261119-bwg-cpa-v8078-swap.md](../change-evidence/20261119-bwg-cpa-v8078-swap.md)。
+同日晚间上游发布 `v8.0.79`（含 Antigravity Hub changelist 升至 2.33.0 并钉定未映射版本、
+Antigravity model probe 强制 HTTP/1.1 without ALPN、Codex tool schema 剥离 `uniqueItems`、
+Home-backed codex continuity），按用户指令继续完成 `v8.0.78-gemini-raw → v8.0.79-gemini-raw`
+换芯（binary `ec1ad20c…`、image_id `1d6eafc5…`、base index digest `ce02dd2b…` 钉定），
+并同步修复 `cpa-guardrail-doctor.sh` 的 Gemini 4 已知回显基础名变体识别；详见
+[20261119-bwg-cpa-v8079-swap.md](../change-evidence/20261119-bwg-cpa-v8079-swap.md)。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`

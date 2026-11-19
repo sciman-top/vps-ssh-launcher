@@ -82,8 +82,10 @@ park 仍由插件注册表持有。
 ## 3. 降智面：只观测，不改写
 
 医生台的 `model_substitution` 记录"请求的名字"与"上游回显的名字"。已知且已审查的等价对：
-`gemini-3.8-flash-n <== gemini-3.8-flash-high`、`hy4-flash-free <== hy4flash-free`
-（上游只是回显基础名，覆盖 100%，**不是降级**；历史行 `hy4-free <== hy4free`
+`gemini-3.8-flash(-n) <== gemini-3.8-flash-high`、`gemini-4-hydrogen <== gemini-4-hydrogen-xhigh`、
+`gemini-4-carbon <== gemini-4-carbon-high`、`gemini-4-argon(-trial) <== gemini-4-argon-high`、
+`gemini-4-neon <== gemini-4-neon-xhigh`、`hy4-flash-free <== hy4flash-free`
+（上游把 `-high`/`-xhigh` 拆入 `thinkingLevel` 后只回显基础名或 `-n`/`-trial` 后缀，**不是降级**；历史行 `hy4-free <== hy4free`
 属于 2026-11-17 更名前退役的上游）。
 
 出现**未知**变体对时：先看该名字的 `first_text_ms` 与输出长度分布是否同步劣化，
