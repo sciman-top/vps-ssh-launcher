@@ -143,6 +143,32 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg            #
   手动恢复 = 拷回这两个位置后 `systemctl daemon-reload`。
 - 本地：`git revert` 本提交（`scripts/remote/fork-binary.sha256` 未变，无需换芯回滚）。
 
+## 受控实战验收（\`-Apply\` 之后）
+
+```text
+INTL_AUTH_BASELINE files=7 disabled_before=7        # 回正后一次幂等 apply
+INTL_AUTH_DISABLED changed=0 already=7
+UPDATER_TIMER_READBACK on_calendar=*-*-* 04:00:00 randomized_delay=300
+INTL_AUTH_READBACK disabled=7 of=7
+READY_STATUS=200
+GUARDRAILS_APPLIED
+systemctl status cliproxyapi-update.timer
+  Loaded: loaded (…; enabled)   Active: active (waiting)   Trigger: Fri 2026-11-20 04:04:38 UTC
+systemctl list-timers → cliproxyapi-update.timer  Fri 2026-11-20 04:04:38 UTC  9h
+python3 cpa-health.py cache-canary
+  CACHE_CANARY sample=1 hit_ratio=0.0000 / sample=2 hit_ratio=0.9956 (4096/4114)   HEALTH_OK
+```
+
+严格 doctor（`scripts/cpa_bwg_guardrails.ps1 -Profile bwg`）：
+`DOCTOR_CONTRACT_OK`、`runtime_binary_hash=MATCH`、`admission-health=OK`、
+17 项 `drift=… MATCH`、`workbuddy-version=cn:0.21.27 intl:disabled_closed_dark_20261117`、
+`workbuddy-intl-auth-files=7 disabled=7 enabled=0`、
+`workbuddy-intl-auth-disabled-guard=armed expected=7`、
+`updater-schedule-slot=OK`、`updater-schedule-jitter=OK`。
+
+回滚回执：第 4 次 `-Apply` 的回读拒绝回滚后，实测 `disabled=6/7`、
+timer `RandomizedDelaySec=30min`、`cpa-admission active`、`cli-proxy-api Up` —— 回滚路径真实可用。
+
 ## 本地门禁
 
 `scripts/run_gates.ps1 -RunParallel`：`contract:catalog` / `build` / `test-lane`（1762 passed,
