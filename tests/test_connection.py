@@ -18,6 +18,10 @@ from launcher_fakes import (
     FakeParamikoModule,
     FakeRejectPolicy,
     FakeSSHClient,
+    FakeSSHException,
+    FakeSSHAuthException,
+    FakeSSHHostKeyException,
+    HandshakeRetryParamikoModule,
     StubCallable,
     patch_attr,
 )
@@ -572,6 +576,69 @@ class ConnectionTests(unittest.TestCase):
             [0.25, 0.5],
         )
 
+    def test_connect_with_retry_retries_transient_banner_failure(self) -> None:
+        args = argparse.Namespace()
+        banner_error = FakeSSHException("Error reading SSH protocol bannerTimeout")
+        with patch_attr(
+            connection,
+            "_load_paramiko",
+            return_value=HandshakeRetryParamikoModule,
+        ):
+            with patch_attr(
+                connection,
+                "connect_client",
+                side_effect=banner_error,
+            ) as connect_client:
+                with patch_attr(connection.time, "sleep") as sleep:
+                    with self.assertRaises(FakeSSHException):
+                        connection.connect_with_retry(args)
+
+        self.assertEqual(len(connect_client.calls), 1 + connection.CONNECT_RETRIES)
+        self.assertEqual(
+            [call.args[0] for call in sleep.calls],
+            [0.25, 0.5],
+        )
+
+    def test_connect_with_retry_does_not_retry_ssh_auth_failure(self) -> None:
+        args = argparse.Namespace()
+        auth_error = FakeSSHAuthException("Authentication failed.")
+        with patch_attr(
+            connection,
+            "_load_paramiko",
+            return_value=HandshakeRetryParamikoModule,
+        ):
+            with patch_attr(
+                connection,
+                "connect_client",
+                side_effect=auth_error,
+            ) as connect_client:
+                with patch_attr(connection.time, "sleep") as sleep:
+                    with self.assertRaises(FakeSSHAuthException):
+                        connection.connect_with_retry(args)
+
+        connect_client.assert_called_once_with(args)
+        sleep.assert_not_called()
+
+    def test_connect_with_retry_does_not_retry_unknown_ssh_exception(self) -> None:
+        args = argparse.Namespace()
+        unknown_error = FakeSSHException("DEK error, invalid data passed.")
+        with patch_attr(
+            connection,
+            "_load_paramiko",
+            return_value=HandshakeRetryParamikoModule,
+        ):
+            with patch_attr(
+                connection,
+                "connect_client",
+                side_effect=unknown_error,
+            ) as connect_client:
+                with patch_attr(connection.time, "sleep") as sleep:
+                    with self.assertRaises(FakeSSHException):
+                        connection.connect_with_retry(args)
+
+        connect_client.assert_called_once_with(args)
+        sleep.assert_not_called()
+
     def test_connect_client_closes_socket_when_client_construction_fails(self) -> None:
         args = SimpleNamespace(
             host="127.0.0.1",
@@ -801,6 +868,44 @@ class RetryClassificationTests(unittest.TestCase):
         self.assertFalse(
             connection._is_retryable_connection_error(OSError(errno.EACCES, "denied"))
         )
+
+    def test_transient_handshake_failures_are_retryable(self) -> None:
+        with patch_attr(
+            connection,
+            "_load_paramiko",
+            return_value=HandshakeRetryParamikoModule,
+        ):
+            cases = [
+                FakeSSHException("Error reading SSH protocol bannerTimeout"),
+                FakeSSHException("No existing session"),
+                EOFError(),
+            ]
+            for exc in cases:
+                with self.subTest(exc=str(exc) or type(exc).__name__):
+                    self.assertTrue(connection._is_transient_handshake_error(exc))
+
+    def test_auth_and_host_key_verdicts_are_never_retried(self) -> None:
+        with patch_attr(
+            connection,
+            "_load_paramiko",
+            return_value=HandshakeRetryParamikoModule,
+        ):
+            cases = [
+                FakeSSHAuthException("Authentication failed."),
+                FakeSSHHostKeyException("Host key ed25519 could not be verified."),
+                FakeSSHException("Indecipherable protocol version \"HTTP/1.1\""),
+            ]
+            for exc in cases:
+                with self.subTest(exc=str(exc)):
+                    self.assertFalse(connection._is_transient_handshake_error(exc))
+
+    def test_a_paramiko_double_without_ssh_exception_never_retries(self) -> None:
+        # The client-only double used elsewhere exposes no SSHException; the
+        # classifier must keep its pre-classification no-retry behavior.
+        with patch_attr(connection, "_load_paramiko", return_value=FakeParamikoModule):
+            self.assertFalse(
+                connection._is_transient_handshake_error(FakeSSHException("boom"))
+            )
 
     def test_the_retry_loop_exhausts_into_the_final_error(self) -> None:
         calls: list[int] = []

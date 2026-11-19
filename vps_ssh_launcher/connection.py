@@ -58,6 +58,16 @@ RETRYABLE_SOCKET_ERROR_CODES = frozenset(
         10061,  # WSAECONNREFUSED
     }
 )
+# Paramiko wraps every mid-handshake transport failure (banner read timeout,
+# server-side pre-auth drop such as MaxStartups, SOCKS5 relay hiccup) as
+# SSHException instead of an OSError, so the retry loop would otherwise give
+# up on the transient blips a staged multi-connection transfer hits most.
+# Only these observed handshake messages retry; auth and host-key verdicts
+# stay terminal so a retry can never mask a wrong secret or an untrusted key.
+TRANSIENT_HANDSHAKE_MESSAGES = (
+    "error reading ssh protocol banner",
+    "no existing session",
+)
 
 
 @dataclass(frozen=True)
@@ -481,6 +491,36 @@ def _is_retryable_connection_error(exc: OSError) -> bool:
     return error_code in RETRYABLE_SOCKET_ERROR_CODES
 
 
+def _is_transient_handshake_error(exc: BaseException) -> bool:
+    """Classify the Paramiko handshake failures that surface outside OSError.
+
+    A bare EOFError is how Paramiko reports a TCP close before the banner;
+    unknown exception types and a partial client-only Paramiko double behave
+    exactly as before this classifier existed: no retry.
+    """
+    if isinstance(exc, EOFError):
+        return True
+    try:
+        paramiko_module = _load_paramiko()
+    except RuntimeError:
+        return False
+    ssh_exception = getattr(paramiko_module, "SSHException", None)
+    if ssh_exception is None or not isinstance(exc, ssh_exception):
+        return False
+    terminal_types = tuple(
+        exception_type
+        for exception_type in (
+            getattr(paramiko_module, "AuthenticationException", None),
+            getattr(paramiko_module, "HostKeyException", None),
+        )
+        if exception_type is not None
+    )
+    if terminal_types and isinstance(exc, terminal_types):
+        return False
+    message = str(exc).lower()
+    return any(pattern in message for pattern in TRANSIENT_HANDSHAKE_MESSAGES)
+
+
 def connect_with_retry(args: Any) -> paramiko.SSHClient:
     """Connect with optional retry for transient network errors."""
     for attempt in range(1 + CONNECT_RETRIES):
@@ -488,8 +528,11 @@ def connect_with_retry(args: Any) -> paramiko.SSHClient:
             return connect_client(args)
         except FileNotFoundError:
             raise
-        except OSError as exc:
-            if not _is_retryable_connection_error(exc):
+        except Exception as exc:
+            if isinstance(exc, OSError):
+                if not _is_retryable_connection_error(exc):
+                    raise
+            elif not _is_transient_handshake_error(exc):
                 raise
             if attempt < CONNECT_RETRIES:
                 # Short exponential spacing: transient blips still get spaced

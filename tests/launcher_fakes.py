@@ -103,6 +103,26 @@ class FakeAuthenticationException(Exception):
     pass
 
 
+class FakeSSHException(Exception):
+    """Mirror paramiko.ssh_exception.SSHException for retry classification."""
+
+
+class FakeSSHAuthException(FakeSSHException):
+    """Mirror paramiko AuthenticationException (an SSHException subclass)."""
+
+
+class FakeSSHHostKeyException(FakeSSHException):
+    """Mirror paramiko HostKeyException (an SSHException subclass)."""
+
+
+class HandshakeRetryParamikoModule:
+    """Paramiko double carrying the exception family used by retries."""
+
+    SSHException: type[FakeSSHException] = FakeSSHException
+    AuthenticationException: type[FakeSSHAuthException] = FakeSSHAuthException
+    HostKeyException: type[FakeSSHHostKeyException] = FakeSSHHostKeyException
+
+
 class FakeRejectPolicy:
     pass
 
