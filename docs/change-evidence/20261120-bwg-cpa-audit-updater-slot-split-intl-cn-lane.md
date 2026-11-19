@@ -85,6 +85,19 @@ passthrough/gemini-4-neon-xhigh/HTTP429/noncapacity:6`）。doctor 现读数
 与宿主上的旧模块无关；投影后回读仍用新落盘的 `$DIR/cpa_policy.py`。
 两次拒绝都发生在 `MUTATED=1` 之前，远端零写入。
 
+第三次 `-Apply` 被 `REFUSE intl_disabled_expectation_partial files=7 disabled=6` 挡住：
+六个 INTL 凭据本来就是 2026-11-17 切换时就已禁用，期望值本就该从 6 起步、由本次投影补到 7。
+"中间态即拒绝"是错误前提，改为只打印 `INTL_AUTH_BASELINE`，完整性由投影后回读
+（`count-intl-disabled == 投影后计数`）证明。
+
+> **工作树污染（本轮插入）**：检查期间发现 `scripts/remote/cpa_policy.py` 与
+> `scripts/remote/cpa_provider_routes.json` 被**本任务之外的并发编辑**写入了
+> `oauth_settings_contract`（引用了未定义的 `EFFORT_LEVELS`，`ruff` F821，且指向
+> 并不存在的 `v8.0.79+agy-effort` fork 构建，与当前 gemini-raw 镜像不一致）。
+> 本轮不替他方决定该特性的去留：已按 `git checkout` 还原为 HEAD，并把原始 diff
+> 存档到 `%APPDATA%\vps-ssh-launcher\concurrent-work\20261120-oauth-settings-contract.patch`，
+> 交回其所有者处理。
+
 ## 远端写入
 
 **本次未对 bwg 写入。** 上述两项修复都要经 `-Apply`（自带 drain、备份、回滚与

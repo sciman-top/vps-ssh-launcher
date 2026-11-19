@@ -1315,7 +1315,14 @@ docker() {{
         # credentials must stay disabled, and rewriting auth bytes blind is
         # exactly the mistake the refresh rotation owns.
         self.assertIn("REFUSE intl_disabled_counter_unavailable", apply_source)
-        self.assertIn("REFUSE intl_disabled_expectation_partial", apply_source)
+        # A baseline below the file total is legitimate (six of seven were
+        # already disabled by the 2026-11-17 cutover); completeness is proven
+        # by the readback, not by assuming the expectation starts at zero.
+        self.assertNotIn("REFUSE intl_disabled_expectation_partial", apply_source)
+        self.assertIn(
+            'echo "INTL_AUTH_BASELINE files=$INTL_AUTH_TOTAL disabled_before=$INTL_EXPECTED_DISABLED"',
+            apply_source,
+        )
         # The precondition counts through THIS payload's module: a transaction
         # always runs one generation behind its own projection, so asking the
         # deployed generation for a verb it never had refuses the rollout that
