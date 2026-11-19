@@ -1897,9 +1897,17 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             for provider in transformed["api-keys"]["openai-compatibility"]
         }
         for provider in route_manifest["providers"]:
+            # A declared thinking-levels list is projected as the model's
+            # thinking.levels block (the gateway serves capabilities, not the
+            # manifest's own vocabulary).
+            expected_models = json.loads(json.dumps(provider["models"]))
+            for model in expected_models:
+                levels = model.pop("thinking-levels", None)
+                if levels is not None:
+                    model["thinking"] = {"levels": levels}
             self.assertEqual(
                 compatibility[provider["name"]],
-                provider["models"],
+                expected_models,
             )
         # The regression itself: projected codex groups must carry the full
         # tombstone set after the in-place merge.

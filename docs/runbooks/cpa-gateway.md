@@ -1288,6 +1288,52 @@ DeepSeek 的命中率以官方返回的 `prompt_cache_hit_tokens` /
 `prompt_cache_miss_tokens` 观测，不把一次受控样本外推为长期收益；OAuth/Codex
 路由和 ai.input.im 不套用 DeepSeek 或 OpenAI API 的缓存结论。
 
+### 思考等级（thinking-levels）契约与 xhigh 降档（2026-11-20）
+
+Antigravity 车道的客户端面是 codex（Responses）协议：Codex 客户端把
+`codex_local_access` 指向本网关，`reasoning.effort` 由翻译器落成上游
+`request.generationConfig.thinkingConfig.thinkingLevel`。上游
+`sdk/cliproxy/service_models.go` 的 `buildConfiguredModelInfo` 对这类模型内置的
+能力是 **low/medium/high**，而同一目录又把 `gemini-4-hydrogen-xhigh` /
+`gemini-4-neon-xhigh` 发布给客户端——于是 `xhigh` 回合在这条车道上**没有可执行的
+约束**，等级是否被静默替换/降档完全取决于上游（2026-11-17 `flash-high → flash-n`
+先例）。
+
+> [!IMPORTANT]
+> `internal/thinking` 的共享思考校验在 antigravity 上**看不见信封里的等级**：
+> 翻译后的载荷把等级放在 `request.generationConfig.thinkingConfig`，而共享校验按
+> **源格式**（Responses）去原始 body 找 `reasoning.effort`，找不到就回落成翻译器
+> 早先写入的值（内部 debug 日志 `thinking: no config found, passthrough`）。
+> 因此仅声明能力不足以生效，必须让共享校验读到信封等级。
+
+分层修复（fork 补丁 `outputs/cpa-agy-claude-effort.patch`，台账
+[20261120-bwg-cpa-thinking-levels](../change-evidence/20261120-bwg-cpa-thinking-levels-and-agy-effort.md)）：
+
+1. `internal/thinking/apply.go`：新增 `ExtractReasoningEffortConfigPrefix` 与
+   `reasoningEffortConfigPrefix`，仅 antigravity 在 doc 回落后读取信封等级，再交给
+   正常的校验/钳制管线。用户自定义模型（本栈的 Gemini 模型）与 Gemini 源格式请求
+   都不进入该分支。
+2. `internal/runtime/executor/helps/model_capabilities.go`：调用方未自报等级
+   （无 body 等级、无后缀）时，把信封等级拷到源 body 再跑共享校验；显式 body 等级
+   与后缀永远优先。
+3. manifest：`oauth_settings_contract.channels.antigravity.thinking-levels =
+   [low, medium, high]`；provider 侧 glm 模型就地声明 `thinking-levels =
+   [low, medium, high, xhigh]`。`-Apply` 把后者投影成 `models[].thinking.levels`，
+   `cpa_policy.py` 同时校验 manifest 声明与运行配置的 `thinking.levels` 漂移。
+
+命中率与"吐字"的实测结论（2026-11-19/20 窗口，`journalctl -u cpa-admission`）：
+
+| 观测 | 数值 | 读法 |
+|---|---|---|
+| antigravity 输入 token 缓存命中 | 93.7%（564 请求） | 与 ChatGPT 车道 90–97% 同量级 |
+| `upstream_header_ms ≥ 3s` 的 antigravity 请求 | 552/564 | 首字延迟主要由**思考阶段本身**决定，不是网关 |
+| 其中输出 < 4KB | 2/552 | **不是**"大输入小输出"被浪费；"收紧上下文"没有依据 |
+| 非 OAuth 车道 `route=other`（标题/摘要类）`upstream_time` p50/p90 | 3.0s / 4.7s | 轻量调用约占 24h 全部 200 响应的 88%，才是账号预算主要消耗者 |
+| chatgpt 车道 `first_text_ms` p50/p90 | 3.5s / 39.4s | 尾部由长思考回合决定，与队列无关（`waited_ms` p90 = 7ms） |
+
+因此缓存命中率（>93%）与排队（`waited_ms` p90 < 10ms）都**不是当前瓶颈**；
+用户感知的"吐字慢"来自 xhigh 思考时长与 Codex 侧高频轻量调用，可调的杠杆是
+客户端思考等级与轻量调用合并，而不是网关参数。
 ### 实测命中率与读法（2026-11-08）
 
 admission 现在把 provider 回传的缓存计数按模型滚动聚合到 `/healthz` 的

@@ -260,6 +260,12 @@ if not isinstance(ROUTE_MANIFEST, dict):
     ROUTE_MANIFEST = {}
     ROUTE_MANIFEST_ERROR = ROUTE_MANIFEST_ERROR or "InvalidManifestType"
 
+# The discrete thinking levels the runtime understands (internal/thinking's
+# ParseLevelSuffix and the -high/-xhigh model slugs the provider catalogs
+# publish). The route manifest's thinking-level contract is validated against
+# exactly this vocabulary so a typo cannot silently disable the clamp.
+EFFORT_LEVELS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
+
 ADMISSION_CONFIG_PATH = Path(__file__).with_name("cpa-admission.json")
 try:
     ADMISSION_CONFIG: Any = json.loads(
@@ -740,6 +746,59 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
     if not isinstance(oauth_settings, dict) or not oauth_settings:
         issues.append("route manifest oauth_settings must be a non-empty mapping")
         oauth_settings = {}
+    # 2026-11-20: antigravity Claude models are served over the codex (Responses)
+    # client surface, whose built-in thinking capability is low/medium/high while
+    # the same catalog publishes the gemini-4-*-xhigh slugs. Declaring the levels
+    # gives the fork build something to clamp against instead of forwarding an
+    # unsupported level that upstream silently substitutes (2026-11-17
+    # flash-high -> flash-n). The declaration lives outside oauth_settings because
+    # that mapping is projected verbatim and must keep holding only what the
+    # gateway serves.
+    settings_contract = manifest.get("oauth_settings_contract")
+    if settings_contract is not None:
+        if not isinstance(settings_contract, dict):
+            issues.append("route manifest oauth_settings_contract must be a mapping")
+            settings_contract = {}
+        unknown_contract_fields = set(settings_contract) - {"note", "channels"}
+        if unknown_contract_fields:
+            issues.append(
+                "route manifest oauth_settings_contract has unsupported fields "
+                f"{sorted(unknown_contract_fields)!r}"
+            )
+        contract_channels = settings_contract.get("channels")
+        if not isinstance(contract_channels, dict) or not contract_channels:
+            issues.append(
+                "route manifest oauth_settings_contract.channels must be a "
+                "non-empty mapping"
+            )
+            contract_channels = {}
+        for contract_channel, contract in contract_channels.items():
+            contract_label = (
+                f"route manifest oauth_settings_contract.{contract_channel}"
+            )
+            if contract_channel not in oauth_settings:
+                issues.append(
+                    f"{contract_label} names a channel that oauth_settings "
+                    "does not serve"
+                )
+            if not isinstance(contract, dict):
+                issues.append(f"{contract_label} must be a mapping")
+                continue
+            if set(contract) != {"thinking-levels"}:
+                issues.append(f"{contract_label} must declare only thinking-levels")
+            levels = contract.get("thinking-levels")
+            if not isinstance(levels, list) or not levels:
+                issues.append(
+                    f"{contract_label}.thinking-levels must be a non-empty list"
+                )
+                continue
+            for level in levels:
+                if level not in EFFORT_LEVELS:
+                    issues.append(
+                        f"{contract_label}.thinking-levels has unknown level {level!r}"
+                    )
+            if len(levels) != len(set(levels)):
+                issues.append(f"{contract_label}.thinking-levels contains duplicates")
     oauth_route_models: dict[str, set[str]] = {}
     for route in oauth_routes:
         if not isinstance(route, dict) or not isinstance(route.get("name"), str):
@@ -1921,6 +1980,43 @@ def _provider_model_records(provider: Any) -> dict[str, dict[str, Any]]:
     return models
 
 
+def _provider_thinking_levels(provider: Any) -> dict[str, list[str]]:
+    """Return each upstream model name mapped to its configured thinking levels.
+
+    A model without a thinking block inherits the codex-family default upstream
+    uses for the same surface, so absence is reported as an empty list and
+    compared against the manifest expectation the same way.
+    """
+    levels: dict[str, list[str]] = {}
+    if not isinstance(provider, dict):
+        return levels
+    for item in provider.get("models") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        thinking = item.get("thinking")
+        declared = thinking.get("levels") if isinstance(thinking, dict) else None
+        levels[name] = list(declared) if isinstance(declared, list) else []
+    return levels
+
+
+def _expected_thinking_levels(host: str) -> dict[str, list[str]]:
+    """Return the manifest-declared thinking levels for one provider host."""
+    expected: dict[str, list[str]] = {}
+    for provider in _VALID_PROVIDER_ROUTES:
+        if provider.get("host") != host:
+            continue
+        for model in provider.get("models", []):
+            if isinstance(model, dict) and isinstance(model.get("name"), str):
+                declared = model.get("thinking-levels")
+                expected[model["name"]] = (
+                    list(declared) if isinstance(declared, list) else []
+                )
+    return expected
+
+
 def _provider_url(provider: Any) -> str | None:
     if not isinstance(provider, dict):
         return None
@@ -2468,6 +2564,14 @@ def validate_config(
                 issues.append(
                     f"{label}.models max-context-length/input-modalities drift"
                 )
+            elif _provider_thinking_levels(provider) != _expected_thinking_levels(host):
+                # 2026-11-20: models served through the codex client surface
+                # (codex_local_access points every client at this gateway)
+                # otherwise inherit the built-in low/medium/high capability,
+                # while the catalog publishes e.g. gemini-4-neon-xhigh. The
+                # declared levels let the fork clamp an unsupported turn
+                # instead of handing upstream a level it silently substitutes.
+                issues.append(f"{label}.models.thinking.levels drift")
             expected_url = EXPECTED_PROVIDER_URLS.get(host)
             if expected_url is not None and _provider_url(provider) != expected_url:
                 issues.append(

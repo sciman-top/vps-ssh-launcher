@@ -975,7 +975,13 @@ def provider_host(entry):
 
 
 def model_entry(name):
-    allowed = {"name", "alias", "input-modalities", "max-context-length"}
+    allowed = {
+        "name",
+        "alias",
+        "input-modalities",
+        "max-context-length",
+        "thinking-levels",
+    }
     if (
         not isinstance(name, dict)
         or not {"name", "alias"} <= set(name)
@@ -1001,6 +1007,23 @@ def model_entry(name):
                 "REFUSE provider route max-context-length must be a positive integer"
             )
         entry["max-context-length"] = max_context_length
+    thinking_levels = name.get("thinking-levels")
+    if thinking_levels is not None:
+        # 2026-11-20: the thinking vocabulary the runtime understands
+        # (internal/thinking ParseLevelSuffix). Declaring it on the model makes
+        # the capability explicit instead of inheriting the codex-family
+        # default, which is what let an xhigh turn reach an upstream that
+        # silently substituted another model.
+        effort_levels = {"minimal", "low", "medium", "high", "xhigh", "max"}
+        if (
+            not isinstance(thinking_levels, list)
+            or not thinking_levels
+            or any(not isinstance(value, str) for value in thinking_levels)
+            or any(value not in effort_levels for value in thinking_levels)
+            or len(thinking_levels) != len(set(thinking_levels))
+        ):
+            raise SystemExit("REFUSE provider route thinking-levels is invalid")
+        entry["thinking"] = {"levels": thinking_levels}
     return entry
 
 

@@ -121,6 +121,72 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 )
             self.assertIn("quarantine is active", str(quarantine_exc.exception))
 
+    def test_thinking_levels_contract_is_declared_and_enforced(self) -> None:
+        """An unsupported effort must be clamped, not forwarded for substitution.
+
+        The antigravity lane is served over the codex (Responses) surface, whose
+        built-in capability for these models is low/medium/high while the
+        catalog publishes the gemini-4-*-xhigh slugs. The manifest declares the
+        levels (provider hosts declare theirs on the model), the policy
+        validates the declaration against the runtime vocabulary, and the
+        runtime compares the projected model capabilities against it.
+        """
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        self.assertEqual(
+            manifest["oauth_settings_contract"]["channels"]["antigravity"][
+                "thinking-levels"
+            ],
+            ["low", "medium", "high"],
+        )
+        self.assertEqual(policy["_route_manifest_issues"](manifest), [])
+
+        typo = json.loads(json.dumps(manifest))
+        typo["oauth_settings_contract"]["channels"]["antigravity"][
+            "thinking-levels"
+        ].append("turbo")
+        self.assertTrue(
+            any(
+                "unknown level" in issue
+                for issue in policy["_route_manifest_issues"](typo)
+            )
+        )
+
+        unserved = json.loads(json.dumps(manifest))
+        unserved["oauth_settings_contract"]["channels"]["claude"] = {
+            "thinking-levels": ["low"]
+        }
+        self.assertTrue(
+            any(
+                "does not serve" in issue
+                for issue in policy["_route_manifest_issues"](unserved)
+            )
+        )
+
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        glm_provider = next(
+            provider
+            for provider in config["api-keys"]["openai-compatibility"]
+            if provider["base-url"].startswith("https://open.bigmodel.cn")
+        )
+        for model in glm_provider["models"]:
+            del model["thinking"]
+        self.assertTrue(
+            any(
+                "thinking.levels drift" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+
+        apply_source = (
+            repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('entry["thinking"] = {"levels": thinking_levels}', apply_source)
+
     def test_safe_bootstrap_retry_is_pinned_once(self) -> None:
         """A dead pre-first-byte stream must be retried once, not by the client.
 

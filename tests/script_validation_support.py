@@ -256,6 +256,20 @@ class ScriptValidationMixin:
         for pin in self.LANE_WRITE_SAFETY_PINS:
             self.assertIn(pin, text)
 
+    @staticmethod
+    def _cpa_provider_models(provider: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return manifest provider models in the shape -Apply projects.
+
+        The projection keeps only the fields the gateway serves; a declared
+        thinking-levels list becomes the model's thinking.levels block.
+        """
+        models: list[dict[str, Any]] = json.loads(json.dumps(provider["models"]))
+        for model in models:
+            levels = model.pop("thinking-levels", None)
+            if levels is not None:
+                model["thinking"] = {"levels": list(levels)}
+        return models
+
     def _valid_cpa_policy_config(self, policy: dict[str, Any]) -> dict[str, Any]:
         route_manifest = policy["ROUTE_MANIFEST"]
         codex_groups = [
@@ -293,7 +307,7 @@ class ScriptValidationMixin:
                     + provider["path"]
                 ),
                 "keys": [{"api-key": f"{provider['name']}_TEST_KEY"}],
-                "models": json.loads(json.dumps(provider["models"])),
+                "models": self._cpa_provider_models(provider),
                 "request-retry": 0,
                 "disable-cooling": False,
                 "support-prompt-cache-key": False,

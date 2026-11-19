@@ -2281,6 +2281,9 @@ except Exception as exc:
                     "alias": "glm-5.3",
                     "input-modalities": ["text"],
                     "max-context-length": 1000000,
+                    # Declared 2026-11-20 so the codex-surface client contract
+                    # (low/medium/high) cannot clamp a declared xhigh model.
+                    "thinking-levels": ["low", "medium", "high", "xhigh"],
                 },
             )
             glm_flash = next(
@@ -2294,6 +2297,7 @@ except Exception as exc:
                     "name": "glm-5.3-flash",
                     "alias": "glm-5.3-flash",
                     "max-context-length": 1000000,
+                    "thinking-levels": ["low", "medium", "high", "xhigh"],
                 },
             )
         self.assertFalse(

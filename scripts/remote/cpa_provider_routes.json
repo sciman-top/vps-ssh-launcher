@@ -95,12 +95,14 @@
           "name": "glm-5.3",
           "alias": "glm-5.3",
           "input-modalities": ["text"],
-          "max-context-length": 1000000
+          "max-context-length": 1000000,
+          "thinking-levels": ["low", "medium", "high", "xhigh"]
         },
         {
           "name": "glm-5.3-flash",
           "alias": "glm-5.3-flash",
-          "max-context-length": 1000000
+          "max-context-length": 1000000,
+          "thinking-levels": ["low", "medium", "high", "xhigh"]
         }
       ],
       "optional_models": []
@@ -168,6 +170,14 @@
       ]
     }
   ],
+  "oauth_settings_contract": {
+    "note": "Thinking-level contract for OAuth channels whose client surface is the codex (Responses) protocol. The antigravity lane is served to Codex clients, whose built-in thinking capability for these models is the codex family default low/medium/high (sdk/cliproxy/service_models.go buildConfiguredModelInfo), while the same catalog publishes the gemini-4-*-xhigh slugs. Without a declaration an xhigh turn had no enforceable bound on the lane. The declaration stays out of oauth_settings on purpose: that mapping is projected verbatim into oauth.settings and must keep holding only what the gateway serves. The fork build v8.0.79+agy-effort clamps an unsupported level there instead of forwarding it to an upstream that silently substitutes another model (2026-11-17 flash-high -> flash-n). Only the anthropic (Claude) models of the lane consume it: the Gemini models are user-defined and keep their own handling.",
+    "channels": {
+      "antigravity": {
+        "thinking-levels": ["low", "medium", "high"]
+      }
+    }
+  },
   "oauth_settings": {
     "codex": [
       {
