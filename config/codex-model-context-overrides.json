@@ -5,7 +5,7 @@
       "slug": "gpt-6.1-sol",
       "context_window": 500000,
       "max_context_window": 500000,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "gpt-6-luna",
@@ -35,67 +35,67 @@
       "slug": "gpt-6.2-sol",
       "context_window": 500000,
       "max_context_window": 500000,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "glm-5.3",
       "context_window": 1000000,
       "max_context_window": 1000000,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "glm-5.3-flash",
       "context_window": 1000000,
       "max_context_window": 1000000,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "deepseek-v4.1-flash",
       "context_window": 1000000,
       "max_context_window": 1000000,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "deepseek-v4.1-flash-oc",
       "context_window": 1000000,
       "max_context_window": 1000000,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "gemini-3.8-flash-high",
       "context_window": 1048576,
       "max_context_window": 1048576,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "gemini-4-hydrogen-xhigh",
       "context_window": 1048576,
       "max_context_window": 1048576,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "gemini-4-argon-high",
       "context_window": 1048576,
       "max_context_window": 1048576,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "gemini-4-neon-xhigh",
       "context_window": 1048576,
       "max_context_window": 1048576,
-      "auto_compact_token_limit": 256000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "claude-opus-5-5-high",
       "context_window": 1000000,
       "max_context_window": 1000000,
-      "auto_compact_token_limit": 200000
+      "auto_compact_token_limit": 320000
     },
     {
       "slug": "claude-sonnet-5-5-high",
       "context_window": 1000000,
       "max_context_window": 1000000,
-      "auto_compact_token_limit": 200000
+      "auto_compact_token_limit": 320000
     }
   ]
 }

@@ -26,15 +26,14 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 
 ### CPA 在役模型上下文契约（2026-11-19）
 
-| 容量 | 日常自动压缩 | 模型 |
+| 容量 | 自动压缩阈值 | 模型 |
 | ---: | ---: | --- |
 | 272000 | 200000 | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
-| 500000 | 256000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | 200000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
-| 1000000 | 256000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc` |
-| 1048576 | 256000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high`, `gemini-4-neon-xhigh` |
+| 500000 | 320000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
+| 1000000 | 320000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc` |
+| 1048576 | 320000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high`, `gemini-4-neon-xhigh` |
 
-200000（272K 档与 Antigravity Claude 档）与 256000（500K/1M 档）为按通道特性分层的自动压缩阈值：`gpt-6.2-astra` 已纳入 `config/codex-model-context-overrides.json` 显式钉定（消除默认生成时 `max_context_window=872000` 的漂移），`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
+272K 路由维持 200000，其余 12 款采用 320000 作为待验证的真实任务试验阈值。目录容量保持原值。该分组是统一试验起点，不代表不同模型已经证实有相同的最优压缩点；每款模型需按完成质量、返工、耗时和可取得的配额数据独立评估。`gpt-6.2-astra` 继续显式钉定目录窗口，以消除默认生成时 `max_context_window=872000` 的漂移。`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
 两条 DeepSeek 分别使用 WorkBuddy 与 OpenCode Go，按入口验证实际输入与配额。
 
 2026-11-18 BWG 观测中，WorkBuddy `deepseek-v4.1-flash` 在 200–272K 和
@@ -43,7 +42,7 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 72 小时自然流量，按请求实际输入分桶，缓存比例按 token 加权。
 智谱 Coding Plan 的 `glm-5.3-flash` 单次合成对照在 236564 和 471269
 输入 token 时均找回三项指定记录。该对照复用了部分前缀，未测自动压缩后的
-需求保留、代码通过率或订阅扣额。当前试用阈值仍待这些指标验证。
+需求保留、代码通过率或订阅扣额。200000 与 320000 的试验阈值仍待真实任务指标验证。
 
 2026-11-19 8318 回环单发补充对照（中位 needle + 均质重复填充，
 chat wire，`max_tokens=1024`；64 会被思考预算吞掉返回空 content，
@@ -58,7 +57,7 @@ chat wire，`max_tokens=1024`；64 会被思考预算吞掉返回空 content，
 
 单 needle + 均质填充是召回下限题（context rot 研究中退化先出现在聚合/推理
 任务），本表只证明订阅车道接受 >700K 输入且机械召回不掉，不构成 200000/
-256000 试用档相对 90% 档的质量终审；真实任务对照仍按上文判据执行。
+320000 试验档相对更早压缩策略的质量终审；真实任务对照仍按上文判据执行。
 
 ## 增加模型（desktop 要看到新名）
 
