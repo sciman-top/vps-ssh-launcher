@@ -8,6 +8,14 @@ ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
 ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
 ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
 WORKBUDDY_VERSION_CHECK=$(printf %s '__CPA_WORKBUDDY_VERSION_CHECK_B64__' | base64 -d)
+# 2026-11-20: the CN lane keeps every INTL credential disabled. The
+# workbuddy-ai-provider plugin is closed dark (it must not register), so a
+# disabled INTL auth file cannot be routed; the plugin still reads the files on
+# its periodic credit sweep and a bare 429 is what a sweep over an exhausted
+# balance returns. Only `disabled` flips: refresh material and loginPlatform
+# stay untouched so a still-valid INTL token is not invalidated by this change.
+# CPA_DIR is absolute, so the auth directory needs no container path mapping.
+WORKBUDDY_INTL_PREFIX=workbuddyai-
 
 mark_fail() {
   echo "$1=FAIL"
@@ -1891,10 +1899,54 @@ for orphan in /opt/cliproxyapi/cpa-guardrail-doctor.sh \
   fi
 done
 echo "projection-copy-coverage=streamed_inline_not_read_from_disk; an orphan line above means a historical copy of a projected payload is still on the host and is not executing; remove it with a backed-up transaction, never by overwriting it with a newer copy, because nothing reads it"
+echo "==updater-schedule=="
+# Projected-then-reloaded, never "pre-check": the doctor runs BEFORE -Apply, so
+# by definition it would fail on every projection change and block the very
+# transaction that installs the split. Strict semantics apply to the
+# projection-drift hashes instead (a live timer diverging from the committed
+# unit is a drift failure); this section is the decision readout an operator
+# needs to see whether the last reload actually took effect.
+UPDATER_SCHEDULE_CHECK=$(printf %s '__CPA_UPDATER_SCHEDULE_CHECK_B64__' | base64 -d)
+# The daily updater, the monthly maintenance wrapper and the two kernel
+# wrappers share one flock and all start inside the 04:0x-04:3x UTC window.
+# The updater takes the lock with `flock -n`, so a start that lands on another
+# transaction's slot is a silently skipped update (measured 2026-11-19). The
+# readout names the anchors, the jitter and the start budget it observed.
+if UPDATER_SCHEDULE_OUTPUT=$(sh -c "$UPDATER_SCHEDULE_CHECK --status" 2>&1); then
+  printf '%s\n' "$UPDATER_SCHEDULE_OUTPUT"
+else
+  printf '%s\n' "$UPDATER_SCHEDULE_OUTPUT"
+  echo "updater-schedule=UNVERIFIED reason=readout_failed"
+fi
 echo "==timer=="
 systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
 systemctl show cliproxyapi-update.timer -p NextElapseUSecRealtime --value || true
+# Read-only schedule readout, not a gate. The unit is host state, so a value
+# that proves a slot-split or retimed projection is visible here next to the
+# trigger age instead of leaving the operator to read systemctl list-timers.
+TIMER_CALENDAR=$(systemctl show cliproxyapi-update.timer -p TimersCalendar --value 2>/dev/null || true)
+case "$TIMER_CALENDAR" in
+  ''|*[![:print:]]*) echo "timer_on_calendar=UNKNOWN" ;;
+  *) echo "timer_on_calendar=$TIMER_CALENDAR" ;;
+esac
+TIMER_RANDOM_DELAY_USEC=$(systemctl show cliproxyapi-update.timer -p RandomizedDelayUSec --value 2>/dev/null || true)
+case "$TIMER_RANDOM_DELAY_USEC" in
+  ''|*[!0-9]*) echo "timer_randomized_delay_seconds=UNKNOWN" ;;
+  *) echo "timer_randomized_delay_seconds=$(( TIMER_RANDOM_DELAY_USEC / 1000000 ))" ;;
+esac
+# Same value as a duration (an operator reads "5min" faster than "300") plus
+# the last four triggers, so a slot split that starts deferring becomes
+# visible without opening the journal. Readout only.
+case "$TIMER_RANDOM_DELAY_USEC" in
+  ''|*[!0-9]*) echo "timer_randomized_delay=UNKNOWN" ;;
+  *) echo "timer_randomized_delay=$(( TIMER_RANDOM_DELAY_USEC / 60000000 ))min" ;;
+esac
+TIMER_LAST_TRIGGERS=$(systemctl show cliproxyapi-update.timer -p TimersMonotonic --value 2>/dev/null || true)
+case "$TIMER_LAST_TRIGGERS" in
+  ''|*[![:print:]]*) echo "timer_last_triggers=UNKNOWN" ;;
+  *) echo "timer_last_triggers=$TIMER_LAST_TRIGGERS" ;;
+esac
 LAST_TRIGGER=$(systemctl show cliproxyapi-update.timer -p LastTriggerUSec --value 2>/dev/null || true)
 case "$LAST_TRIGGER" in
   ''|0|no)
@@ -3046,7 +3098,11 @@ echo "==workbuddy-config=="
 # legacy section must be gone, the luode default-on loops stay explicitly
 # off, the INTL plugin stays enabled with keepalive off, and the alias
 # bridge entries the admission lane entry points depend on must exist.
-python3 - "$DIR/config.yaml" <<'PY'
+INTL_DISABLED_EXPECTED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
+python3 - "$DIR/config.yaml" "$DIR/auth" "$WORKBUDDY_INTL_PREFIX" "$INTL_DISABLED_EXPECTED" <<'PY'
+import glob
+import json
+import os
 import sys
 import yaml
 from pathlib import Path
@@ -3056,6 +3112,29 @@ try:
 except Exception as exc:
     print("workbuddy-config=UNREADABLE exc=" + type(exc).__name__)
     raise SystemExit(1)
+
+# The expected INTL disabled-credential count comes from cpa_policy, the same
+# counter the apply uses as its precondition, so a partial projection cannot
+# satisfy one and fail the other. Passed in by the caller as argv[4]; an empty
+# value means the projected cpa_policy predates the counter, which degrades the
+# guard to a readout instead of failing a healthy closed-dark host.
+try:
+    INTL_DISABLED_EXPECTED = (
+        int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] != "" else None
+    )
+except ValueError:
+    INTL_DISABLED_EXPECTED = None
+auth_dir_arg = sys.argv[2]
+
+
+def read_auth_disabled(path):
+    """True only for a well-formed auth file that sets disabled: true."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return isinstance(payload, dict) and payload.get("disabled") is True
+
 
 plugins = config.get("plugins") if isinstance(config, dict) else None
 configs = plugins.get("configs") if isinstance(plugins, dict) else None
@@ -3159,6 +3238,56 @@ for provider_key in ("workbuddy-provider", "workbuddy-ai-provider"):
     else:
         drift.append(f"oauth_excluded_models:{provider_key}")
         print(f"workbuddy-excluded-{provider_key}=ABSENT note=realm_discovery_reopened")
+
+# 2026-11-20 CN-lane protection. The INTL plugin is closed dark, but its seven
+# auth files stayed enabled and the plugin's periodic credit sweep kept reading
+# them; an exhausted balance answers a bare 429 (measured six times in the 24h
+# window) while the CN lane is the one every client actually uses. The lane
+# stays closed by keeping those files disabled: the credential is preserved
+# (only `disabled` flips, refresh material untouched) and a plugin that starts
+# routing them again is then a visible drift instead of a silent reopen.
+#
+# Before the first projection the host legitimately has zero disabled files.
+# Failing then would block the reviewed deploy transaction that creates them
+# (its precondition is a clean strict doctor), so an unprojected expectation
+# degrades to a readout. Partial application still fails: once any file is
+# disabled the expectation is live and the remaining enabled files are drift.
+intl_auth_files = sorted(
+    glob.glob(os.path.join(auth_dir_arg, sys.argv[3] + "*.json"))
+)
+intl_disabled = [path for path in intl_auth_files if read_auth_disabled(path)]
+intl_enabled = [
+    os.path.basename(path) for path in intl_auth_files if not read_auth_disabled(path)
+]
+print(
+    f"workbuddy-intl-auth-files={len(intl_auth_files)} "
+    f"disabled={len(intl_disabled)} enabled={len(intl_enabled)}"
+)
+if INTL_DISABLED_EXPECTED is None:
+    print(
+        "workbuddy-intl-auth-disabled-guard=READOUT_ONLY expected=unknown "
+        "note=projected_policy_has_no_intl_counter"
+    )
+elif len(intl_disabled) < INTL_DISABLED_EXPECTED:
+    print(
+        "workbuddy-intl-auth-disabled-guard=READOUT_ONLY "
+        f"expected={INTL_DISABLED_EXPECTED} disabled={len(intl_disabled)} "
+        "note=expectation_not_projected_yet"
+    )
+else:
+    print(
+        f"workbuddy-intl-auth-disabled-guard=armed expected={INTL_DISABLED_EXPECTED}"
+    )
+    for name in intl_enabled:
+        drift.append(f"intl_auth_enabled:{name}")
+    if intl_enabled:
+        print(
+            "workbuddy-intl-auth-enabled=PRESENT "
+            + ",".join(intl_enabled)
+            + " note=clone_realm_can_be_routed"
+        )
+    else:
+        print("workbuddy-intl-auth-enabled=none")
 
 if drift:
     print("workbuddy-config=DRIFT " + ",".join(drift))

@@ -2457,6 +2457,31 @@ def validate_file(path: str | Path, marker_path: Path | None = None) -> list[str
     return validate_config(config, marker_path)
 
 
+# 2026-11-20 CN-lane protection. The workbuddy-ai-provider plugin is closed
+# dark, but its auth files stayed enabled: the plugin's periodic credit sweep
+# still reads them, an exhausted balance answers a bare 429 (six times in the
+# measured 24h window), and a re-enabled plugin would route them again with no
+# gate noticing. Only `disabled` is projected; refresh material is untouched so
+# a still-valid INTL token is not invalidated by this control.
+WORKBUDDY_INTL_AUTH_PREFIX = "workbuddyai-"
+
+
+def count_workbuddy_intl_disabled(auth_dir: str | Path) -> int:
+    try:
+        entries = sorted(Path(auth_dir).glob(WORKBUDDY_INTL_AUTH_PREFIX + "*.json"))
+    except OSError:
+        return 0
+    disabled = 0
+    for entry in entries:
+        try:
+            payload = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("disabled") is True:
+            disabled += 1
+    return disabled
+
+
 # Validating a 190 KB source costs tens of MB of interpreter memory, and the two
 # protected interpreters on this host are exactly the processes that must not be
 # OOM-killed: cpa-admission (holds every lane's durable state) and the CPA
@@ -2476,6 +2501,7 @@ _PROBE_REQUIRED_HELPERS = frozenset(
         "probe_check",
         "lint_source",
         "load_quarantine_aliases",
+        "count_workbuddy_intl_disabled",
         "_validate_source_in_child",
     }
 )
@@ -2712,8 +2738,17 @@ if __name__ == "__main__":
             raise SystemExit(1)
         print(f"POLICY_OK peak_rss_bytes={peak}" if peak is not None else "POLICY_OK")
         raise SystemExit(0)
+    if len(_sys.argv) == 3 and _sys.argv[1] == "count-intl-disabled":
+        # The apply's precondition and the doctor's expectation are the same
+        # counted number, so a partial projection cannot satisfy one and fail
+        # the other. Prints the bare count; exit 0 even when zero.
+        print(count_workbuddy_intl_disabled(_sys.argv[2]))
+        raise SystemExit(0)
     if len(_sys.argv) != 2:
-        print("usage: cpa_policy.py CONFIG | check PATH", file=_sys.stderr)
+        print(
+            "usage: cpa_policy.py CONFIG | check PATH | count-intl-disabled AUTH_DIR",
+            file=_sys.stderr,
+        )
         raise SystemExit(2)
     violations = validate_file(_sys.argv[1])
     if violations:

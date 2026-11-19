@@ -278,6 +278,49 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   fail-closed（`config-permissions=owner-only`，即除属主外无任何读写位）；
   此前它只被 `stat` 打印、从不参与门禁。
 
+### 定时器时隙拆分（2026-11-20）
+
+本机 04:0x–04:3x UTC 有四个后台事务：updater（本 timer）、月度系统维护
+（04:10）、xray 内核周更（04:20）、sing-box 内核周更（04:30）。四者共用
+`/run/vps-ssh-launcher-maintenance.lock`，而 updater 取锁是 `flock -n`
+（不等待），所以它每日 04:00 起跑后落在谁的窗口里，决定了当天更新到底跑没跑。
+实测 2026-11-19T04:13:29Z 的 `DEFER: no-update readiness failed; image unchanged`
+对应 v8.0.78 已进入 72h 成熟窗的那一天，判定来源是锁而不是上游。
+
+- 投影：`-Apply` 现在只改写 `cliproxyapi-update.timer` 的
+  `[Timer]` 段（`OnCalendar=*-*-* 04:00:00`、`RandomizedDelaySec=300`），
+  其余行原样保留；备份与回滚同交易（`$BK/cliproxyapi-update.timer`），
+  `daemon-reload` 之前完成写入，rollback 标记 `updater_timer_slot_split`。
+- 抖动上限 300s、start 预算 1200s，保证 04:00 起跑最晚 04:05 进入锁、最晚
+  04:25 结束，不与 04:10 的月度维护抢锁。
+- doctor 新增 `==updater-schedule==`（`scripts/remote/cpa-updater-schedule-check.sh`，
+  `--status` 只读模式始终退出 0）：打印四个锚点、抖动、start 预算与
+  compose/容器前提的判定行。**它是决策读数而不是硬门**：doctor 在 `-Apply`
+  之前运行，硬门会在每次投影变更时先失败、挡住安装拆分的那次事务；
+  严格性留给 `==projection-drift==`（现场 timer 与提交内容不一致才算漂移）。
+  它只证明调度面，不证明某天的更新真的执行过。
+- `==timer==` 同时输出 `timer_on_calendar`、`timer_randomized_delay` 与
+  `timer_last_triggers`（最近触发），供人工判读拆分是否生效。
+
+### CN 车道 INTL 凭据暗置（2026-11-20）
+
+`workbuddy-ai-provider` 插件自 2026-11-17 起关闭暗置（不得注册），但它的 7 份
+auth 文件一直保持启用：插件周期余额扫描仍会读它们，余额耗尽时上游回裸 429
+（24h 窗口内实测 6 次 `passthrough/gemini-4-neon-xhigh` 之外唯一一类 429 面）。
+现在：
+
+- `-Apply` 把 `auth/workbuddyai-*.json` 的 `disabled` 就地改为 `true`
+  （仅这一个键，字节布局与 JSON 键序不变；refresh 物料从不读取或改写），
+  事务前快照到 `$BK/intl-auth/` 并按原名回滚。
+- 前置条件与回读都走 `cpa_policy.py count-intl-disabled`：投影前的
+  `cpa_policy` 没有该动词即 `REFUSE intl_disabled_counter_unavailable`；
+  文件数大于已禁用数即 `REFUSE intl_disabled_expectation_partial`；
+  写入后计数不一致即 `ROLLBACK intl_auth_disabled_readback`。
+- strict doctor 的 `==workbuddy-config==` 段输出
+  `workbuddy-intl-auth-files` / `workbuddy-intl-auth-disabled-guard`：
+  期望值未投影时降级为 `READOUT_ONLY`（首次部署的自举窗口），一旦武装，
+  任何重新启用的 INTL 凭据即 `workbuddy-intl-auth-enabled=PRESENT` 漂移。
+
 ## 版本与字段语义基线
 
 当前 BWG fresh doctor 的运行版本以主机实际镜像 tag/digest 为准（字段语义

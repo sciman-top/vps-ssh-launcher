@@ -240,9 +240,13 @@ docker() {{
         source = read_guardrail_source()
         self.assertIn("projection-copy-orphan=", source)
         self.assertIn("projection-copy-coverage=", source)
+        # The orphan section ends at the next header. The updater-schedule
+        # gate that follows is a separate, hard gate and must not be read as
+        # part of this observation.
         section = source.split("projection-copy-orphan=", 1)[1].split(
-            'echo "==timer=="', 1
+            'echo "==updater-schedule=="', 1
         )[0]
+        self.assertIn("==updater-schedule==", source)
         # Inert, so it must not fail the contract.
         self.assertNotIn("mark_fail", section)
 
@@ -945,21 +949,45 @@ docker() {{
         section = source.split('echo "==workbuddy-config=="', 1)[1].split(
             'echo "==model-substitution=="', 1
         )[0]
-        script = section.split("python3 - \"$DIR/config.yaml\" <<'PY'\n", 1)[1].split(
-            "\nPY\n", 1
-        )[0]
+        script = section.split(
+            'python3 - "$DIR/config.yaml" "$DIR/auth" "$WORKBUDDY_INTL_PREFIX" '
+            "\"$INTL_DISABLED_EXPECTED\" <<'PY'\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        # 2026-11-20: the same heredoc also pins the CN-lane rule that every
+        # INTL WorkBuddy credential stays disabled while its plugin is closed
+        # dark. The count comes from cpa_policy, so the harness passes it the
+        # same way the doctor does instead of hard-coding an expectation.
+        self.assertIn("count-intl-disabled", section)
+        self.assertIn("WORKBUDDY_INTL_PREFIX=workbuddyai-", source)
 
-        def run_case(config: dict[str, Any] | str) -> subprocess.CompletedProcess[str]:
+        def run_case(
+            config: dict[str, Any] | str,
+            intl_disabled_expected: int = 0,
+            auth_files: dict[str, Any] | None = None,
+        ) -> subprocess.CompletedProcess[str]:
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "config.yaml"
                 if isinstance(config, str):
                     path.write_text(config, encoding="utf-8")
                 else:
                     path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                auth_dir = Path(tmp) / "auth"
+                auth_dir.mkdir()
+                for name, payload in (auth_files or {}).items():
+                    target = auth_dir / name
+                    if isinstance(payload, str):
+                        target.write_text(payload, encoding="utf-8")
+                    else:
+                        target.write_text(json.dumps(payload), encoding="utf-8")
                 harness = (
                     "import sys\n"
                     "sys.argv = ['workbuddy-config', "
                     + repr(str(path))
+                    + ", "
+                    + repr(str(auth_dir))
+                    + ", 'workbuddyai-', "
+                    + repr(str(intl_disabled_expected))
                     + "]\n"
                     + script
                 )
@@ -1155,6 +1183,248 @@ docker() {{
         unreadable = run_case("{not yaml: [")
         self.assertEqual(unreadable.returncode, 1, unreadable.stdout)
         self.assertIn("workbuddy-config=UNREADABLE", unreadable.stdout)
+
+        # 2026-11-20 CN-lane protection. The INTL plugin is closed dark, but
+        # its auth files stayed enabled and the plugin's credit sweep kept
+        # reading them (an exhausted balance answers a bare 429). The guard is
+        # armed only once the projection actually disabled a credential, so the
+        # first deploy degrades to a readout instead of failing itself.
+        intl_auth = {
+            "workbuddyai-aaa.json": {"type": "workbuddy", "disabled": True},
+            "workbuddyai-bbb.json": {"type": "workbuddy", "disabled": True},
+            "workbuddy-ccc.json": {"type": "workbuddy", "disabled": True},
+        }
+        armed = run_case(healthy_config(), 1, intl_auth)
+        self.assertEqual(armed.returncode, 0, armed.stdout)
+        # Only the INTL prefix is counted; the CN-named file stays invisible.
+        self.assertIn("workbuddy-intl-auth-files=2 disabled=2 enabled=0", armed.stdout)
+        self.assertIn(
+            "workbuddy-intl-auth-disabled-guard=armed expected=1", armed.stdout
+        )
+        self.assertIn("workbuddy-intl-auth-enabled=none", armed.stdout)
+
+        # A re-enabled INTL credential is the regression the guard exists for.
+        reopened = dict(intl_auth)
+        reopened["workbuddyai-bbb.json"] = {"type": "workbuddy", "disabled": False}
+        result = run_case(healthy_config(), 1, reopened)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("workbuddy-intl-auth-files=2 disabled=1 enabled=1", result.stdout)
+        self.assertIn(
+            "workbuddy-intl-auth-enabled=PRESENT workbuddyai-bbb.json", result.stdout
+        )
+        self.assertIn("intl_auth_enabled:workbuddyai-bbb.json", result.stdout)
+
+        # A missing `disabled` key is not evidence of a closed credential.
+        absent_flag = dict(intl_auth)
+        absent_flag["workbuddyai-ccc.json"] = {"type": "workbuddy"}
+        absent_flag["workbuddy-ccc.json"] = {"type": "workbuddy", "disabled": True}
+        result = run_case(healthy_config(), 1, absent_flag)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("intl_auth_enabled:workbuddyai-ccc.json", result.stdout)
+
+        # CN-named credentials are outside this rule: the guard counts only the
+        # INTL prefix, so a CN account that happens to be enabled is not drift
+        # for a closed INTL plugin.
+        result = run_case(
+            healthy_config(),
+            1,
+            {
+                "workbuddyai-aaa.json": {"disabled": True},
+                "workbuddyai-bbb.json": {"disabled": False},
+                "workbuddy-ccc.json": {"disabled": False},
+            },
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "workbuddy-intl-auth-enabled=PRESENT workbuddyai-bbb.json", result.stdout
+        )
+        self.assertNotIn("workbuddy-ccc.json", result.stdout)
+
+        # Before the projection lands the expectation is not armed: a healthy
+        # closed-dark host reads as READOUT_ONLY and the reviewed deploy
+        # transaction (whose precondition is a clean strict doctor) can run.
+        readout = run_case(
+            healthy_config(),
+            1,
+            {
+                "workbuddyai-aaa.json": {"disabled": False},
+                "workbuddyai-bbb.json": {"disabled": False},
+            },
+        )
+        self.assertEqual(readout.returncode, 0, readout.stdout)
+        self.assertIn(
+            "workbuddy-intl-auth-disabled-guard=READOUT_ONLY expected=1 disabled=0",
+            readout.stdout,
+        )
+
+        # Readout-only is distinguishable from armed drift, so a doctor reading
+        # an unprojected host never reports a green guard it has not proven.
+        self.assertIn("note=expectation_not_projected_yet", readout.stdout)
+        self.assertNotIn("workbuddy-intl-auth-disabled-guard=armed", readout.stdout)
+
+    def test_apply_projects_intl_disabled_with_readback(self) -> None:
+        source = read_guardrail_source()
+        apply_source = (
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        # The apply refuses to guess: without the counter it cannot tell which
+        # credentials must stay disabled, and rewriting auth bytes blind is
+        # exactly the mistake the refresh rotation owns.
+        self.assertIn("REFUSE intl_disabled_counter_unavailable", apply_source)
+        self.assertIn("REFUSE intl_disabled_expectation_partial", apply_source)
+        self.assertIn(
+            'INTL_AFTER_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth"',
+            apply_source,
+        )
+        self.assertIn("ROLLBACK intl_auth_disabled_readback", apply_source)
+        # Auth files are snapshotted before the first rewrite and restored to
+        # their original names, so rollback also covers this new write surface.
+        self.assertIn(
+            'cp -a "$intl_auth" "$BK/intl-auth/$intl_backup_index.json"', apply_source
+        )
+        self.assertIn(
+            'cp -a "$BK/intl-auth/$intl_restore_index.json" "$DIR/auth/$intl_restore_name"',
+            apply_source,
+        )
+        # The projection only ever lowers disabled to true and never touches
+        # refresh material.
+        projection = apply_source.split("# CN-lane protection (2026-11-20).", 1)[
+            1
+        ].split('updater_path = Path("/opt/cliproxyapi/auto-update.sh")', 1)[0]
+        self.assertIn("re.subn(", projection)
+        self.assertIn("(false|true|null|[0-9]+)", projection)
+        self.assertIn("intl_text,", projection)
+        self.assertNotIn("refreshToken", projection)
+        self.assertNotIn("accessToken", projection)
+        self.assertIn("atomic_write(intl_path, intl_new, 0o600)", projection)
+        self.assertIn('"disabled":true}', projection)
+        # Observability usage values are CPA defaults, pinned so an absent key
+        # cannot silently return after a management reserialization.
+        self.assertIn(
+            'usage_after["usage-statistics-enabled"] = True',
+            source,
+        )
+        self.assertIn(
+            'usage_after["redis-usage-queue-retention-seconds"] = 3600',
+            source,
+        )
+
+    def test_updater_schedule_split_is_projected_and_gated(self) -> None:
+        root = Path(__file__).parents[1]
+        source = read_guardrail_source()
+        apply_source = (root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        wrapper = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        schedule = (root / "scripts/remote/cpa-updater-schedule-check.sh").read_text(
+            encoding="utf-8"
+        )
+        # The gate ships inside the doctor payload and the apply transaction
+        # owns the schedule, so both templates must carry the marker and the
+        # wrapper must substitute it at both call sites.
+        self.assertIn('echo "==updater-schedule=="', source)
+        # Projected-then-reloaded: the doctor runs BEFORE -Apply, so a hard
+        # gate here would block the very transaction that installs the split.
+        # The section is a decision readout; the drift hashes stay strict.
+        self.assertNotIn("mark_fail updater-schedule", source)
+        self.assertIn('"$UPDATER_SCHEDULE_CHECK --status"', source)
+        self.assertIn("'__CPA_UPDATER_SCHEDULE_CHECK_B64__'", source)
+        self.assertEqual(
+            wrapper.count('.Replace("__CPA_UPDATER_SCHEDULE_CHECK_B64__"'), 2
+        )
+        self.assertIn('"scripts/remote/cpa-updater-schedule-check.sh"', wrapper)
+        self.assertIn(
+            '"scripts/remote/cpa-updater-schedule-check.sh" = $updaterScheduleCheckText',
+            wrapper,
+        )
+        # Four anchors, one per background transaction, each owned by exactly
+        # one job; a randomized delay that could spill into the next slot and
+        # a start budget that could overrun it are both refused.
+        for anchor in ("04:00", "04:10", "04:20", "04:30"):
+            self.assertIn(anchor, schedule)
+        self.assertIn("updater-schedule=OK anchors=4", schedule)
+        self.assertIn("updater-schedule-jitter", schedule)
+        self.assertIn("updater-schedule-budget", schedule)
+        self.assertIn("--status", schedule)
+        self.assertIn(
+            "updater-schedule-compose=UNVERIFIED reason=no_docker_or_compose", schedule
+        )
+
+        # Apply projects the timer between the timeout drop-in and the
+        # daemon-reload that activates it, and backs up the original unit.
+        timer_projection = apply_source.split(
+            'python3 - "$UPDATER_TIMER_UNIT" "-*-*-* 04:00:00" "300" <<\'PY\' || {',
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        self.assertIn('stripped == "[Timer]"', timer_projection)
+        self.assertIn('"OnCalendar=" + target_oncalendar', timer_projection)
+        self.assertIn('"RandomizedDelaySec=" + target_randomized', timer_projection)
+        self.assertIn("updater timer unit has no [Timer] section", timer_projection)
+        self.assertIn("ROLLBACK updater_timer_slot_split", apply_source)
+        self.assertIn(
+            'cp -a "$UPDATER_TIMER_UNIT" "$BK/cliproxyapi-update.timer"', apply_source
+        )
+        self.assertIn(
+            'cp -a "$BK/cliproxyapi-update.timer" "$UPDATER_TIMER_UNIT"', apply_source
+        )
+        apply_projection_at = apply_source.index("ROLLBACK updater_timer_slot_split")
+        daemon_reload_at = apply_source.index("ROLLBACK admission_daemon_reload")
+        self.assertLess(apply_projection_at, daemon_reload_at)
+
+        # The rewrite is key-order preserving and idempotent: run the embedded
+        # block against a stock unit and against an already-projected one.
+        with tempfile.TemporaryDirectory() as tmp:
+            unit = Path(tmp) / "cliproxyapi-update.timer"
+            blocked = "[Timer]\nOnCalendar=*-*-* 04:00:00\nRandomizedDelaySec=30min\nPersistent=true\n"
+            for payload in (
+                "[Unit]\nDescription=t\n\n"
+                + blocked
+                + "\n[Install]\nWantedBy=timers.target\n",
+                "[Unit]\nDescription=t\n\n"
+                + blocked.replace("30min", "300")
+                + "\n[Install]\nWantedBy=timers.target\n",
+            ):
+                unit.write_text(payload, encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        timer_projection.strip(),
+                        str(unit),
+                        "*-*-* 04:00:00",
+                        "300",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = unit.read_text(encoding="utf-8")
+                self.assertIn("OnCalendar=*-*-* 04:00:00", rendered)
+                self.assertIn("RandomizedDelaySec=300", rendered)
+                self.assertEqual(rendered.count("RandomizedDelaySec="), 1)
+                self.assertEqual(rendered.count("OnCalendar="), 1)
+                self.assertIn("Persistent=true", rendered)
+                self.assertIn("WantedBy=timers.target", rendered)
+
+            unit.write_text("[Unit]\nDescription=t\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    timer_projection.strip(),
+                    str(unit),
+                    "*-*-* 04:00:00",
+                    "300",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("no [Timer] section", result.stderr)
 
     def test_apply_regenerates_antigravity_sensitive_words(self) -> None:
         import runpy

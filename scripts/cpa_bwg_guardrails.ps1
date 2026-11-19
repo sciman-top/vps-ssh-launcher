@@ -64,6 +64,9 @@ $admissionIntegrityPinPath = Join-Path $scriptDir "remote\cpa-admission-integrit
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 $workBuddyVersionCheckPath = Join-Path $scriptDir "remote\cpa-guardrail-workbuddy-version-check.sh"
+# Read-only schedule gate for the daily updater: the four scheduled
+# transactions share one flock, and the updater never waits for it.
+$updaterScheduleCheckPath = Join-Path $scriptDir "remote\cpa-updater-schedule-check.sh"
 
 function Read-ProjLeafText {
   param(
@@ -133,6 +136,7 @@ $admissionIntegrityPinText = Read-ProjLeafText -Path $admissionIntegrityPinPath 
 $fail2banFilterText = Read-ProjLeafText -Path $fail2banFilterPath -Description "CPA fail2ban filter source"
 $fail2banJailText = Read-ProjLeafText -Path $fail2banJailPath -Description "CPA fail2ban jail source"
 $workBuddyVersionCheckText = Read-ProjLeafText -Path $workBuddyVersionCheckPath -Description "CPA WorkBuddy version check source"
+$updaterScheduleCheckText = Read-ProjLeafText -Path $updaterScheduleCheckPath -Description "CPA updater schedule check source"
 
 function Get-LfNormalizedSha256 {
   param([Parameter(Mandatory = $true)][string]$Text)
@@ -181,6 +185,7 @@ function Get-CpaGuardrailTemplate {
 
 $fail2banFilterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banFilterText))
 $workBuddyVersionCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($workBuddyVersionCheckText))
+$updaterScheduleCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($updaterScheduleCheckText))
 $fail2banFilterSha256 = Get-LfNormalizedSha256 -Text $fail2banFilterText
 # Fail closed on the source of truth, not just on the deployed copy: nginx
 # reaches CPA over 127.0.0.1:8317, so a projected jail without the loopback
@@ -353,7 +358,7 @@ if ($AuditProjection) {
     $doctorForAudit = $guardrailTemplateTexts["doctor"].Replace(
       "__CPA_WORKBUDDY_VERSION_CHECK_B64__",
       $workBuddyVersionCheckBase64
-    )
+    ).Replace("__CPA_UPDATER_SCHEDULE_CHECK_B64__", $updaterScheduleCheckBase64)
     $applyForAudit = Get-CpaGuardrailTemplate -Name "apply"
     [IO.File]::WriteAllText(
       $pythonPath,
@@ -552,7 +557,10 @@ $projectionSources = [ordered]@{
   "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterText
   "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailText
   "scripts/remote/cpa-guardrail-workbuddy-version-check.sh" = $workBuddyVersionCheckText
+  "scripts/remote/cpa-updater-schedule-check.sh" = $updaterScheduleCheckText
 }
+# The schedule check ships inside the doctor payload (base64), so it has no
+# destination file of its own and stays out of doctor_targets.
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
   $projectionSources[$entry.Value] = $guardrailTemplateTexts[$entry.Key]
 }
@@ -793,7 +801,7 @@ if ($Observe) {
 $doctorScript = $doctorScript.Replace(
   "__CPA_WORKBUDDY_VERSION_CHECK_B64__",
   $workBuddyVersionCheckBase64
-)
+).Replace("__CPA_UPDATER_SCHEDULE_CHECK_B64__", $updaterScheduleCheckBase64)
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
     -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna -and

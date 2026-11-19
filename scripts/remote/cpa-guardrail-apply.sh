@@ -15,6 +15,15 @@ ADMISSION_REQUEST_GUARD=/usr/local/libexec/cpa_request_guard.py
 ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
 ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
 UPDATER_TIMEOUT_DROPIN=/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf
+# 2026-11-20 slot split. Every scheduled transaction on this host shares
+# /run/vps-ssh-launcher-maintenance.lock and the updater never waits for it
+# (`flock -n`), so its daily 04:00 UTC start decided which job actually ran:
+# 2026-11-19T04:13:29Z "DEFER: no-update readiness failed" was the lock, not
+# the upstream. The unit now starts at 04:00 and the other three jobs own
+# 04:10/04:20/04:30.
+UPDATER_TIMER_UNIT=/etc/systemd/system/cliproxyapi-update.timer
+UPDATER_TIMER_EXPECTED_ONT="*-*-* 04:00:00
+RandomizedDelaySec=300"
 EXPECTED_ADMISSION_SHA256="__CPA_ADMISSION_SHA256__"
 # -Apply recomputes the OAuth exclusion list from the route manifest, which
 # would silently re-expose a quarantined lane. Refuse instead of undoing an
@@ -58,6 +67,27 @@ LEGACY_ADMISSION_SCRIPT="$DIR/cpa-luna-admission.py"
 LEGACY_ADMISSION_CONFIG="$DIR/cpa-luna-admission.json"
 LEGACY_ADMISSION_UNIT=/etc/systemd/system/cpa-luna-admission.service
 BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
+# 2026-11-20 CN-lane protection: every INTL WorkBuddy credential stays disabled
+# while its plugin is closed dark. count_workbuddy_intl_disabled is the same
+# counter the strict doctor uses, so the precondition here and the expectation
+# there cannot drift apart. Nothing may tighten an auth file by rewriting it
+# (refresh rotation owns those bytes), so the projection only ever lowers
+# disabled to true.
+INTL_EXPECTED_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
+case "$INTL_EXPECTED_DISABLED" in
+  ''|*[!0-9]*)
+    echo "REFUSE intl_disabled_counter_unavailable projected cpa_policy predates count-intl-disabled; re-projection cannot prove which INTL credentials must stay disabled"
+    exit 1
+    ;;
+esac
+# Zero is a valid count only on a host that has no INTL credentials at all.
+# With files present the expectation must cover every one of them, otherwise a
+# half-projected set would read back as satisfied.
+INTL_AUTH_TOTAL=$(find "$DIR/auth" -maxdepth 1 -type f -name 'workbuddyai-*.json' 2>/dev/null | wc -l)
+if [ "$INTL_AUTH_TOTAL" -gt 0 ] && [ "$INTL_EXPECTED_DISABLED" -lt "$INTL_AUTH_TOTAL" ]; then
+  echo "REFUSE intl_disabled_expectation_partial files=$INTL_AUTH_TOTAL disabled=$INTL_EXPECTED_DISABLED"
+  exit 1
+fi
 
 prune_backup_history() {
   local keep=8 entry removed=0
@@ -192,6 +222,18 @@ if [ -e "$RISK_STATE_DIR/workbuddy-intl-risk.json" ]; then
 else
   : > "$BK/workbuddy-intl-risk.json.missing"
 fi
+if [ "$INTL_EXPECTED_DISABLED" -gt 0 ]; then
+  mkdir -m 700 "$BK/intl-auth"
+  intl_backup_index=0
+  for intl_auth in "$DIR"/auth/workbuddyai-*.json; do
+    [ -f "$intl_auth" ] || continue
+    intl_backup_index=$((intl_backup_index + 1))
+    cp -a "$intl_auth" "$BK/intl-auth/$intl_backup_index.json"
+    printf '%s\n' "$(basename "$intl_auth")" > "$BK/intl-auth/$intl_backup_index.name"
+  done
+  printf '%s\n' "$intl_backup_index" > "$BK/intl-auth/count"
+  echo "BACKUP scope=intl_auth files=$intl_backup_index"
+fi
 if [ -f "$ADMISSION_UNIT" ]; then
   cp -a "$ADMISSION_UNIT" "$BK/cpa-admission.service"
 else
@@ -231,6 +273,13 @@ if [ -f "$UPDATER_TIMEOUT_DROPIN" ]; then
   cp -a "$UPDATER_TIMEOUT_DROPIN" "$BK/cpa-update-timeout.conf"
 else
   : > "$BK/cpa-update-timeout.conf.missing"
+fi
+# Optional on older hosts: a missing timer means nothing to project, not a
+# refusal, and the doctor's ==updater-schedule== gate reports the absence.
+if [ -f "$UPDATER_TIMER_UNIT" ]; then
+  cp -a "$UPDATER_TIMER_UNIT" "$BK/cliproxyapi-update.timer"
+else
+  : > "$BK/cliproxyapi-update.timer.missing"
 fi
 if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then
   cp -a "$LEGACY_ADMISSION_SCRIPT" "$BK/cpa-luna-admission.py"
@@ -302,10 +351,35 @@ restore_all() {
   elif [ -f "$BK/workbuddy-intl-risk.json.missing" ]; then
     rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" || rollback_failed=1
   fi
+  # Restore each snapshot to its original filename. The snapshot copy exists
+  # because the projection may rewrite an auth file's bytes (disabled flag);
+  # a file the project did not touch is written back byte-for-byte anyway.
+  if [ -f "$BK/intl-auth/count" ]; then
+    intl_restore_index=0
+    intl_restore_total=$(cat "$BK/intl-auth/count")
+    while [ "$intl_restore_index" -lt "$intl_restore_total" ]; do
+      intl_restore_index=$((intl_restore_index + 1))
+      intl_restore_name=$(cat "$BK/intl-auth/$intl_restore_index.name")
+      case "$intl_restore_name" in
+        workbuddyai-*.json) ;;
+        *)
+          echo "ROLLBACK_FAILED intl_auth_name_unexpected"
+          rollback_failed=1
+          continue
+          ;;
+      esac
+      cp -a "$BK/intl-auth/$intl_restore_index.json" "$DIR/auth/$intl_restore_name" || rollback_failed=1
+    done
+  fi
   if [ -f "$BK/cpa-admission.service" ]; then
     cp -a "$BK/cpa-admission.service" "$ADMISSION_UNIT" || rollback_failed=1
   else
     rm -f "$ADMISSION_UNIT" || rollback_failed=1
+  fi
+  if [ -f "$BK/cliproxyapi-update.timer" ]; then
+    cp -a "$BK/cliproxyapi-update.timer" "$UPDATER_TIMER_UNIT" || rollback_failed=1
+  elif [ -f "$BK/cliproxyapi-update.timer.missing" ]; then
+    rm -f "$UPDATER_TIMER_UNIT" || rollback_failed=1
   fi
   if [ -f "$BK/cpa-admission-launch.sh" ]; then
     cp -a "$BK/cpa-admission-launch.sh" "$ADMISSION_LAUNCHER" || rollback_failed=1
@@ -689,6 +763,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import os
+import re
 import tempfile
 import yaml
 from fnmatch import fnmatchcase
@@ -1096,6 +1171,17 @@ if not isinstance(logs_after, dict):
     raise SystemExit("REFUSE observability.logs must be a mapping")
 logs_after["error-logs-max-files"] = 5
 logs_after["logs-max-total-size-mb"] = 32
+usage_after = observability_after.get("usage")
+if usage_after is None:
+    usage_after = observability_after["usage"] = {}
+if not isinstance(usage_after, dict):
+    raise SystemExit("REFUSE observability.usage must be a mapping")
+# Both values are CPA's defaults, pinned so the declared posture is
+# machine-visible: nothing on this host consumes a Redis usage queue, and an
+# unpinned absent key silently returns to the default after any management
+# reserialization. No behavior change on a config that never set them.
+usage_after["usage-statistics-enabled"] = True
+usage_after["redis-usage-queue-retention-seconds"] = 3600
 routing_after.update({
     # round-robin, not fill-first (2026-11-06): fill-first kept every WorkBuddy
     # turn on the first ready credential of an eight-account pool. Round-robin
@@ -1983,6 +2069,53 @@ if parsed_candidate != config_after:
     raise SystemExit("candidate YAML semantic round-trip failed")
 atomic_write(config_path, candidate, 0o600)
 
+# CN-lane protection (2026-11-20). Lower disabled to true on every
+# workbuddyai-* auth file: the INTL plugin is closed dark, so those credentials
+# cannot be routed, but the plugin's periodic credit sweep still reads them and
+# a sweep over an exhausted balance answers a bare 429 (measured six times in
+# the 24h window). Only the "disabled" key is set, in place, so JSON key order
+# and byte layout stay intact; refresh material is never read or rewritten.
+# Snapshotting is the backup step's job, not this one.
+import glob
+
+intl_changed = 0
+intl_already = 0
+for intl_path_str in sorted(glob.glob("/opt/cliproxyapi/auth/workbuddyai-*.json")):
+    intl_path = Path(intl_path_str)
+    intl_payload = json.loads(intl_path.read_text(encoding="utf-8"))
+    if not isinstance(intl_payload, dict):
+        raise SystemExit("REFUSE intl_auth_not_a_mapping name=" + intl_path.name)
+    if intl_payload.get("disabled") is True:
+        intl_already += 1
+        continue
+    intl_text = intl_path.read_text(encoding="utf-8")
+    intl_new, intl_subs = re.subn(
+        r'("disabled"\s*:\s*)(false|true|null|[0-9]+)',
+        r"\g<1>true",
+        intl_text,
+        count=1,
+    )
+    if intl_subs == 0:
+        # Absent key: insert it as the final member so every existing byte
+        # keeps its position and the file stays valid JSON.
+        intl_body = intl_text.rstrip()
+        if not intl_body.endswith("}"):
+            raise SystemExit("REFUSE intl_auth_not_an_object name=" + intl_path.name)
+        intl_head = intl_body[:-1].rstrip()
+        intl_separator = "" if intl_head.endswith("{") else ","
+        intl_new = intl_head + intl_separator + '"disabled":true}'
+        if intl_text.endswith("\n"):
+            intl_new += "\n"
+    intl_recheck = json.loads(intl_new)
+    if not isinstance(intl_recheck, dict) or intl_recheck.get("disabled") is not True:
+        raise SystemExit("REFUSE intl_auth_rewrite_unverified name=" + intl_path.name)
+    atomic_write(intl_path, intl_new, 0o600)
+    intl_changed += 1
+print(
+    "INTL_AUTH_DISABLED changed=%d already=%d"
+    % (intl_changed, intl_already)
+)
+
 updater_path = Path("/opt/cliproxyapi/auto-update.sh")
 updater = updater_path.read_text(encoding="utf-8")
 old_key_line = (
@@ -2357,6 +2490,59 @@ write_base64_file "__CPA_UPDATER_TIMEOUT_CONF_B64__" "$UPDATER_TIMEOUT_DROPIN" 6
   echo "ROLLBACK updater_timeout_projection"
   exit 1
 }
+# Slot split (2026-11-20): the updater starts at 04:00 UTC and the monthly and
+# two kernel wrappers own 04:10/04:20/04:30, so the four background jobs stop
+# racing for the one maintenance lock. Only Directory/Timer keys are rewritten;
+# every other line of the unit stays where the host operator left it.
+if [ -f "$UPDATER_TIMER_UNIT" ]; then
+  python3 - "$UPDATER_TIMER_UNIT" "-*-*-* 04:00:00" "300" <<'PY' || {
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target_oncalendar = sys.argv[2]
+target_randomized = sys.argv[3]
+lines = path.read_text(encoding="utf-8").splitlines()
+out = []
+in_timer = False
+seen_timer = False
+seen_oncalendar = False
+seen_randomized = False
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_timer = stripped == "[Timer]"
+        seen_timer = seen_timer or in_timer
+        out.append(line)
+        continue
+    if in_timer and stripped.startswith("OnCalendar="):
+        if not seen_oncalendar:
+            out.append("OnCalendar=" + target_oncalendar)
+            seen_oncalendar = True
+        continue
+    if in_timer and stripped.startswith("RandomizedDelaySec="):
+        if not seen_randomized:
+            out.append("RandomizedDelaySec=" + target_randomized)
+            seen_randomized = True
+        continue
+    out.append(line)
+if not seen_timer:
+    raise SystemExit("updater timer unit has no [Timer] section")
+if not seen_oncalendar:
+    out.append("OnCalendar=" + target_oncalendar)
+if not seen_randomized:
+    # Right after the schedule line, so the pair reads as one decision.
+    for index, line in enumerate(out):
+        if line.strip() == "OnCalendar=" + target_oncalendar:
+            out.insert(index + 1, "RandomizedDelaySec=" + target_randomized)
+            break
+path.write_text("\n".join(out) + "\n", encoding="utf-8")
+PY
+    restore_all
+    echo "ROLLBACK updater_timer_slot_split"
+    exit 1
+  }
+fi
 if ! "$ADMISSION_INTEGRITY_CHECK" >"$BK/cpa-admission-integrity.log" 2>&1; then
   restore_all
   echo "ROLLBACK admission_integrity_check"
@@ -2560,6 +2746,15 @@ if ! python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >"$BK/cpa-policy-test.log" 
   restore_all
   echo "ROLLBACK semantic_policy"
   tail -n 20 "$BK/cpa-policy-test.log"
+  exit 1
+fi
+# Read the projection back through the same counter the doctor arms against:
+# a partially rewritten auth set must roll back here, not surface later as a
+# strict-doctor failure with the transaction already committed.
+INTL_AFTER_DISABLED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
+if [ "$INTL_AFTER_DISABLED" != "$INTL_EXPECTED_DISABLED" ]; then
+  restore_all
+  echo "ROLLBACK intl_auth_disabled_readback want=$INTL_EXPECTED_DISABLED got=$INTL_AFTER_DISABLED"
   exit 1
 fi
 
