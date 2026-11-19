@@ -82,6 +82,12 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # written down. Complements the absence of `request-retry` (0) at the lane
     # level: bootstrap retries stop once bytes are on the wire.
     ("requests", "streaming", "bootstrap-retries"): 1,
+    # Bound upstream uTLS ClientHello handshakes (Codex Chrome transport and
+    # Claude Code Anthropic transport). Upstream defaults to 0 (no timeout),
+    # which allows a stalled TLS handshake to pin an OAuth max_inflight slot
+    # until Nginx's 300s timeout. 15s bounds only the handshake and is lifted
+    # once TLS succeeds, so reasoning and long streams are unaffected.
+    ("requests", "tls-handshake-timeout-seconds"): 15,
     # Error request dumps can contain prompts, headers, and client keys. Keep
     # CPA's own retained-file cap small; the updater also enforces a 24h age
     # bound independently.
@@ -1928,6 +1934,9 @@ def _provider_transport_issues(
             issues.append(f"{label}.{key} transport override must be absent")
     if provider.get("headers", {}) != expected_headers:
         issues.append(f"{label}.headers transport override must be absent")
+    conn_pool = provider.get("connection-pool")
+    if not isinstance(conn_pool, dict) or conn_pool.get("enabled") is False:
+        issues.append(f"{label}.connection-pool must be an enabled mapping (or {{}})")
 
     entries = provider.get("keys")
     if not isinstance(entries, list) or len(entries) != 1:

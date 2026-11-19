@@ -1013,6 +1013,8 @@ def build_provider(existing, name, base_url, api_key, models, route_headers):
     provider["request-retry"] = 0
     provider["disable-cooling"] = False
     provider["support-prompt-cache-key"] = False
+    if not isinstance(provider.get("connection-pool"), dict) or provider["connection-pool"].get("enabled") is False:
+        provider["connection-pool"] = {}
     if route_headers:
         provider["headers"] = deepcopy(route_headers)
     else:
@@ -1834,6 +1836,9 @@ requests_streaming_after = requests_after.setdefault("streaming", {})
 if not isinstance(requests_streaming_after, dict):
     raise SystemExit("REFUSE requests.streaming must be a mapping")
 requests_streaming_after["bootstrap-retries"] = 1
+# Bound upstream uTLS ClientHello handshakes so a stalled cross-ocean TLS
+# handshake cannot hold an OAuth max_inflight slot for 300s.
+requests_after["tls-handshake-timeout-seconds"] = 15
 requests_after["payload"] = {
     "override": [
         {

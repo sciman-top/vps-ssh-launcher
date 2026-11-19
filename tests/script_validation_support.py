@@ -297,6 +297,7 @@ class ScriptValidationMixin:
                 "request-retry": 0,
                 "disable-cooling": False,
                 "support-prompt-cache-key": False,
+                "connection-pool": {},
                 **(
                     {"headers": dict(provider["headers"])}
                     if provider.get("headers")
@@ -315,6 +316,7 @@ class ScriptValidationMixin:
                 "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
                 "requests": {
                     "payload": _expected_payload_tool_rules(),
+                    "tls-handshake-timeout-seconds": 15,
                     "streaming": {
                         "keepalive-seconds": 15,
                         "send-keepalive-before-ft": True,

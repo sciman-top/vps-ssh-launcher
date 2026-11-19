@@ -1549,6 +1549,45 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             ),
         )
 
+    def test_tls_handshake_timeout_and_connection_pool_are_pinned(self) -> None:
+        """uTLS handshake timeout and openai-compat connection-pool must be enforced."""
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+
+        config["requests"]["tls-handshake-timeout-seconds"] = 0
+        issues = policy["validate_config"](config)
+        self.assertTrue(
+            any("tls-handshake-timeout-seconds" in issue for issue in issues), issues
+        )
+        config["requests"]["tls-handshake-timeout-seconds"] = 15
+
+        compat_entry = config["api-keys"]["openai-compatibility"][0]
+        compat_entry.pop("connection-pool", None)
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("connection-pool" in issue for issue in issues), issues)
+
+        compat_entry["connection-pool"] = {"enabled": False}
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("connection-pool" in issue for issue in issues), issues)
+
+        compat_entry["connection-pool"] = {}
+        self.assertEqual(policy["validate_config"](config), [])
+
+    def test_antigravity_fingerprint_swap_covers_claude_models_too(self) -> None:
+        """Antigravity payload.replace must cover Claude models on the same endpoint."""
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        manifest = policy["ROUTE_MANIFEST"]
+        swap_models = set(manifest["antigravity_fingerprint_swap"]["models"])
+        self.assertIn("claude-opus-5-5-high", swap_models)
+        self.assertIn("claude-sonnet-5-5-high", swap_models)
+
 
 class CpaPolicyProbeTests(unittest.TestCase):
     """The on-demand probe must work without any external linter installed.
