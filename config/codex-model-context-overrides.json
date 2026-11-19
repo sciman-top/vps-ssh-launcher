@@ -80,6 +80,12 @@
       "auto_compact_token_limit": 256000
     },
     {
+      "slug": "gemini-4-neon-xhigh",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "auto_compact_token_limit": 256000
+    },
+    {
       "slug": "claude-opus-5-5-high",
       "context_window": 1000000,
       "max_context_window": 1000000,

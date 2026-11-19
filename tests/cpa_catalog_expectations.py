@@ -53,6 +53,9 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     # registers each credential's own catalog, so an alias served by a subset
     # of the pool schedules only onto those credentials.
     "gemini-4-argon-high",
+    # gemini-4-neon-xhigh opened 2026-11-19 (user directive): Google released
+    # the model today, auto-registered on active pro credentials.
+    "gemini-4-neon-xhigh",
     "claude-opus-5-5-high",
     "claude-sonnet-5-5-high",
 ]

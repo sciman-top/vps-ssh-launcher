@@ -29,7 +29,8 @@
     "models": [
       "gemini-3.8-flash-high",
       "gemini-4-hydrogen-xhigh",
-      "gemini-4-argon-high"
+      "gemini-4-argon-high",
+      "gemini-4-neon-xhigh"
     ],
     "replacements": [
       ["ChatGPT", "Chatservice"],
@@ -151,6 +152,10 @@
           "alias": "gemini-4-argon-high"
         },
         {
+          "name": "gemini-4-neon-xhigh",
+          "alias": "gemini-4-neon-xhigh"
+        },
+        {
           "name": "claude-opus-5-5-high",
           "alias": "claude-opus-5-5-high"
         },
@@ -195,6 +200,10 @@
       },
       {
         "name": "gemini-4-argon-high",
+        "max-context-length": 1048576
+      },
+      {
+        "name": "gemini-4-neon-xhigh",
         "max-context-length": 1048576
       },
       {
@@ -255,6 +264,7 @@
     "gemini-4-argon-high",
     "gemini-4-carbon-high",
     "gemini-4-hydrogen-xhigh",
+    "gemini-4-neon-xhigh",
     "gpt-oss-120b-medium"
   ],
   "oauth_exclusions": [
@@ -316,6 +326,7 @@
     "gemini-3.8-flash-high",
     "gemini-4-carbon-high",
     "gemini-4-hydrogen-xhigh",
+    "gemini-4-neon-xhigh",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium",

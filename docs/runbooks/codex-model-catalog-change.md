@@ -32,7 +32,7 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 | 500000 | 256000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
 | 1000000 | 200000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high` |
 | 1000000 | 256000 | `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc` |
-| 1048576 | 256000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high` |
+| 1048576 | 256000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high`, `gemini-4-neon-xhigh` |
 
 200000（272K 档与 Antigravity Claude 档）与 256000（500K/1M 档）为按通道特性分层的自动压缩阈值：`gpt-6.2-astra` 已纳入 `config/codex-model-context-overrides.json` 显式钉定（消除默认生成时 `max_context_window=872000` 的漂移），`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
 两条 DeepSeek 分别使用 WorkBuddy 与 OpenCode Go，按入口验证实际输入与配额。

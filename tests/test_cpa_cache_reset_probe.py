@@ -79,6 +79,7 @@ def test_provider_variant_is_not_a_model_switch() -> None:
     assert probe.normalise_model("gemini-4-carbon") == "gemini-4-carbon-high"
     assert probe.normalise_model("gemini-4-argon") == "gemini-4-argon-high"
     assert probe.normalise_model("gemini-4-argon-trial") == "gemini-4-argon-high"
+    assert probe.normalise_model("gemini-4-neon") == "gemini-4-neon-xhigh"
     # 2026-11-17: the luode cutover serves hy4flash-free upstream (echoed
     # bare); the retired hy4free upstream echoed hy4-free and keeps its
     # historical label so old journal windows stay stable.

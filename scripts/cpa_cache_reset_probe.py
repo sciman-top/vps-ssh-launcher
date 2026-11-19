@@ -77,6 +77,7 @@ _PROVIDER_MODEL_ALIASES = (
     (re.compile(r"^(gemini-4-hydrogen)$"), r"\1-xhigh"),
     (re.compile(r"^(gemini-4-carbon)$"), r"\1-high"),
     (re.compile(r"^(gemini-4-argon)(?:-trial)?$"), r"\1-high"),
+    (re.compile(r"^(gemini-4-neon)$"), r"\1-xhigh"),
     # 2026-11-17: the luode cutover put hy4flash-free upstream (echoed bare);
     # the hy4-free line stays for journal rows from the retired hy4free
     # upstream so historical windows keep a stable label.
