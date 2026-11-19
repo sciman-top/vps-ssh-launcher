@@ -913,6 +913,12 @@ doctor 读到 `claude-opus-5-5-high`，上下文为 `1000000`，`MODEL_IDS_UNKNO
 运行中 v8.0.77 的二进制台账，但还包含未随本次投影部署的其他改动；本次验收结论仅
 对应实际投影源 `1287209`。
 2026-11-19 Google 发布 `gemini-4-neon`（上游以 `gemini-4-neon-xhigh` 注册，1M 统一窗口）；按用户指令将 `gemini-4-neon-xhigh` 纳入 `antigravity-oauth` 路由与准入车道，加入 `antigravity_fingerprint_swap` 防 WAF 身份词过滤（假 429），配置 1,048,576 上下文窗口，加入 `codex_api_key_exclusions` 防抢注，并同步 apply/doctor 与预言机契约。
+同日按用户指令完成 `v8.0.77-gemini-raw → v8.0.78-gemini-raw` 换芯（binary `bf1e8fb5…`、
+image_id `7bb4b400…`、base index digest `9ee2d808…` 钉定；`AUTH_BYTES_UNCHANGED`、
+`LANE_HOLD_DELTA=none`、strict doctor `DOCTOR_CONTRACT_OK` + `runtime_binary_hash=MATCH`；
+workbuddy 插件无新版本，CN 0.21.27 继续注册、INTL 保持 closed dark；cache-canary
+0.9956 与基线一致）。全过程与观察项见
+[20261119-bwg-cpa-v8078-swap.md](../change-evidence/20261119-bwg-cpa-v8078-swap.md)。
 共享订阅 OAuth 通道按仓库不变量挂
 `antigravity-oauth` admission lane（inflight=2/pending=4，与 ChatGPT
 OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`

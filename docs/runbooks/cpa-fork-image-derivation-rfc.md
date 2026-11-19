@@ -2,10 +2,12 @@
 
 **状态**：已实施（2026-11-09，用户授权后落地；回执
 [20261109-bwg-cpa-fork-image-convergence.md](../change-evidence/20261109-bwg-cpa-fork-image-convergence.md)）。
-当前生产 = 派生镜像 `cli-proxy-api-fork:v8.0.75-gemini-raw`（2026-11-16 换芯，回执
-[20261116-bwg-cpa-v8075-fork-swap.md](../change-evidence/20261116-bwg-cpa-v8075-fork-swap.md)），bind-mount 已移除，
-`CLIProxyAPI-patched` 保留为只读留档。实施偏差（source 门禁降为报告项、tag+hash
-门禁替代 digest 钉定、canary 扩展为 fork 时代全拒）见回执 §4。
+当前生产 = 派生镜像 `cli-proxy-api-fork:v8.0.78-gemini-raw`（2026-11-19 换芯，回执
+[20261119-bwg-cpa-v8078-swap.md](../change-evidence/20261119-bwg-cpa-v8078-swap.md)），
+bind-mount 已移除，`CLIProxyAPI-patched` 保留为只读留档。实施偏差（source 门禁降为
+报告项、tag+hash 门禁替代 digest 钉定、canary 扩展为 fork 时代全拒）见回执 §4。
+换代链：v8.0.75（2026-11-16）→ v8.0.77（2026-11-18/19，台账 `3555bfb`）→ v8.0.78
+（2026-11-19，image_id `7bb4b400…`，binary `bf1e8fb5…`）。
 
 **决策定案（2026-11-09，用户明确）**：§7 的"是否推送私有 registry"一项，
 用户已答复 **不做**。镜像只存在于 bwg 本地；换机或重建按

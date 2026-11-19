@@ -893,7 +893,7 @@ class RetryClassificationTests(unittest.TestCase):
             cases = [
                 FakeSSHAuthException("Authentication failed."),
                 FakeSSHHostKeyException("Host key ed25519 could not be verified."),
-                FakeSSHException("Indecipherable protocol version \"HTTP/1.1\""),
+                FakeSSHException('Indecipherable protocol version "HTTP/1.1"'),
             ]
             for exc in cases:
                 with self.subTest(exc=str(exc)):
