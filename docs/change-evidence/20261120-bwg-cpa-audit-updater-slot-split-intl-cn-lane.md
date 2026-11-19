@@ -97,6 +97,25 @@ passthrough/gemini-4-neon-xhigh/HTTP429/noncapacity:6`）。doctor 现读数
 已核实这次回滚是**干净**的：`disabled=6/7`、timer 仍 `RandomizedDelaySec=30min`、
 `cpa-admission active`、`cli-proxy-api Up`。
 
+第五次 `-Apply` 报 `GUARDRAILS_APPLIED`，但**受控验收立刻抓到事故**：
+`/etc/systemd/system/cliproxyapi-update.timer` 被写成
+`OnCalendar=-*-*-* 04:00:00`（首字符 `*` 丢失），systemd 记
+`Failed to parse calendar specification … Timer unit lacks value setting. Refusing.`，
+定时器停在 `Active: active (elapsed)`、`Trigger: n/a` —— **每日更新器会彻底停摆**。
+该文件写法可被 systemd 加载，所以 `daemon-reload`、doctor 的
+`is-active` 与 `projection-drift` 都没报错。
+
+根因三层，全部已修：
+
+1. `python3 - "$UPDATER_TIMER_UNIT" "-*-*-* 04:00:00" "300"` 在 apply 自身运行时
+   被 glob 展开（`-*-*-*` → `-`），改成单引号字面量 `'*-*-* 04:00:00'`。
+2. 回归测试把**损坏的字面量原样抄了进去**，所以测试"通过"却什么都没证明；
+   改为钉定应写出的精确调度 `SIX_FIELD_CALENDAR = "*-*-* 04:00:00"`。
+3. 事务缺少回读：新增投影后 `UPDATER_TIMER_READBACK`（逐字比对
+   `OnCalendar`/`RandomizedDelay`）与 `daemon-reload` 后的
+   `UPDATER_TIMER_SCHEDULED`（`systemctl show TimersCalendar` 必须含该日历），
+   任一不符即 `restore_all`。
+
 > **工作树污染（本轮插入）**：检查期间发现 `scripts/remote/cpa_policy.py` 与
 > `scripts/remote/cpa_provider_routes.json` 被**本任务之外的并发编辑**写入了
 > `oauth_settings_contract`（引用了未定义的 `EFFORT_LEVELS`，`ruff` F821，且指向

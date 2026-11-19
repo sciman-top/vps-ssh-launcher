@@ -22,8 +22,6 @@ UPDATER_TIMEOUT_DROPIN=/etc/systemd/system/cliproxyapi-update.service.d/cpa-upda
 # the upstream. The unit now starts at 04:00 and the other three jobs own
 # 04:10/04:20/04:30.
 UPDATER_TIMER_UNIT=/etc/systemd/system/cliproxyapi-update.timer
-UPDATER_TIMER_EXPECTED_ONT="*-*-* 04:00:00
-RandomizedDelaySec=300"
 EXPECTED_ADMISSION_SHA256="__CPA_ADMISSION_SHA256__"
 # -Apply recomputes the OAuth exclusion list from the route manifest, which
 # would silently re-expose a quarantined lane. Refuse instead of undoing an
@@ -615,9 +613,18 @@ def contains_enabled(value):
 config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8'))
 if contains_enabled(config):
     raise SystemExit(1)
-for path in Path(sys.argv[2]).glob('*.json'):
-    if contains_enabled(json.loads(path.read_text(encoding='utf-8'))):
+# The scan must not rewrite what it reads: run it unreachable, then require
+# every byte to be unchanged (2026-11-20: a mangled lambda emptied
+# config.yaml here and the guard still reported success because the parse saw
+# fewer bytes).
+snapshot = {}
+for path in sorted(Path(sys.argv[2]).glob('*.json')):
+    snapshot[path] = path.read_bytes()
+for path, before in snapshot.items():
+    if contains_enabled(json.loads(before.decode('utf-8'))):
         raise SystemExit(1)
+    if path.read_bytes() != before:
+        raise SystemExit(2)
 PY
 then
   :
@@ -2510,7 +2517,7 @@ write_base64_file "__CPA_UPDATER_TIMEOUT_CONF_B64__" "$UPDATER_TIMEOUT_DROPIN" 6
 # racing for the one maintenance lock. Only Directory/Timer keys are rewritten;
 # every other line of the unit stays where the host operator left it.
 if [ -f "$UPDATER_TIMER_UNIT" ]; then
-  python3 - "$UPDATER_TIMER_UNIT" "-*-*-* 04:00:00" "300" <<'PY' || {
+  python3 - "$UPDATER_TIMER_UNIT" '*-*-* 04:00:00' '300' <<'PY' || {
 import sys
 from pathlib import Path
 
@@ -2557,6 +2564,21 @@ PY
     echo "ROLLBACK updater_timer_slot_split"
     exit 1
   }
+  # Read the projection back before anything activates it. 2026-11-20: the
+  # first version of this block lost the leading '*' on OnCalendar, daemon-
+  # reload accepted the file, and systemd quietly stopped scheduling the
+  # updater ("Failed to parse calendar specification ... Timer unit lacks
+  # value setting. Refusing."). A unit file that loads is not a schedule that
+  # exists, so the exact schedule text is asserted here, and the loaded unit
+  # is asked to echo the same value after the reload later in this transaction.
+  UPDATER_TIMER_ONCALENDAR=$(awk -F= '/^OnCalendar=/ {print $2; exit}' "$UPDATER_TIMER_UNIT")
+  UPDATER_TIMER_DELAY=$(awk -F= '/^RandomizedDelaySec=/ {print $2; exit}' "$UPDATER_TIMER_UNIT")
+  if [ "$UPDATER_TIMER_ONCALENDAR" != '*-*-* 04:00:00' ] || [ "$UPDATER_TIMER_DELAY" != '300' ]; then
+    restore_all
+    echo "ROLLBACK updater_timer_readback want=*-*-* 04:00:00/300 got=$UPDATER_TIMER_ONCALENDAR/$UPDATER_TIMER_DELAY"
+    exit 1
+  fi
+  echo "UPDATER_TIMER_READBACK on_calendar=$UPDATER_TIMER_ONCALENDAR randomized_delay=$UPDATER_TIMER_DELAY"
 fi
 if ! "$ADMISSION_INTEGRITY_CHECK" >"$BK/cpa-admission-integrity.log" 2>&1; then
   restore_all

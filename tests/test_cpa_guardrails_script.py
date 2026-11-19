@@ -1421,8 +1421,19 @@ docker() {{
 
         # Apply projects the timer between the timeout drop-in and the
         # daemon-reload that activates it, and backs up the original unit.
+        # 2026-11-20: this assertion used to embed the mangled literal and so
+        # "passed" while the apply projected OnCalendar=-*-*-* — systemd then
+        # loaded the unit with no trigger at all. Assert the exact schedule the
+        # tool must write, not a copy of whatever the script currently says.
+        SIX_FIELD_CALENDAR = "*-*-* 04:00:00"
+        self.assertIn(
+            'python3 - "$UPDATER_TIMER_UNIT" \''
+            + SIX_FIELD_CALENDAR
+            + "' '300' <<'PY' || {",
+            apply_source,
+        )
         timer_projection = apply_source.split(
-            'python3 - "$UPDATER_TIMER_UNIT" "-*-*-* 04:00:00" "300" <<\'PY\' || {',
+            "'" + SIX_FIELD_CALENDAR + "' '300' <<'PY' || {",
             1,
         )[1].split("\nPY\n", 1)[0]
         self.assertIn('stripped == "[Timer]"', timer_projection)
@@ -1444,7 +1455,11 @@ docker() {{
         # block against a stock unit and against an already-projected one.
         with tempfile.TemporaryDirectory() as tmp:
             unit = Path(tmp) / "cliproxyapi-update.timer"
-            blocked = "[Timer]\nOnCalendar=*-*-* 04:00:00\nRandomizedDelaySec=30min\nPersistent=true\n"
+            blocked = (
+                "[Timer]\nOnCalendar="
+                + SIX_FIELD_CALENDAR
+                + "\nRandomizedDelaySec=30min\nPersistent=true\n"
+            )
             for payload in (
                 "[Unit]\nDescription=t\n\n"
                 + blocked
