@@ -606,9 +606,12 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
 - 现役五条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
-  `gpt-6.1-sol` / `gpt-6.1-terra`——后两名 2026-11-13 退役（上游 400
+  `gpt-6.1-sol` / `gpt-6.1-terra` / `gpt-6.2-sol`；其中 `gpt-6.1-sol` /
+  `gpt-6.1-terra` 2026-11-13 退役（上游 400
   `model_not_found`）、2026-11-14 上游目录复活实证后恢复，墓碑已摘）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
-  `antigravity-oauth`（`gemini-3.8-flash-high`）、CN `workbuddy-oauth`
+  `antigravity-oauth`（`gemini-3.8-flash-high` / `gemini-4-hydrogen-xhigh` /
+  `gemini-4-argon-high` / `gemini-4-neon-xhigh` / `claude-opus-5-5-high` /
+  `claude-sonnet-5-5-high`，2026-11-16..19 扩池）、CN `workbuddy-oauth`
   （`deepseek-v4.1-flash`）与 INTL `workbuddy-intl-oauth`
   （`deepseek-v4.1-flash-intl`、`deepseek-v4.1-flash-sg`）。
   `deepseek-v4.1-flash-intl` 是指向同一上游模型的 fork alias；`sg` 保留为
