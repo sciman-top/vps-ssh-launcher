@@ -59,15 +59,12 @@ def _lane_script(root: Path, lane: str) -> Path:
     return root / "scripts" / f"{lane}.ps1"
 
 
-# gpt-6.1-sol-input retired 2026-11-11. 2026-11-14 re-admission: the aliased
-# OpenCode slot entry relays the upstream body verbatim, so the probe
-# response echoes the upstream model name. 2026-11-20: the GLM-5.3 family
-# aliases on the same slot behave identically.
-CPA_TEST_PROVIDER_ALIASES: dict[str, str] = {
-    "deepseek-v4.1-flash-oc": "deepseek-v4.1-flash",
-    "glm-5.3-oc": "glm-5.3",
-    "glm-5.3-flash-oc": "glm-5.3-flash",
-}
+# Aliased provider routes relay the upstream body verbatim, so a probe
+# response can echo the upstream model name instead of the client-facing
+# alias. Empty since 2026-11-20: the OpenCode slot (deepseek-v4.1-flash-oc,
+# glm-5.3-oc, glm-5.3-flash-oc) retired with the user-cancelled OpenCode Go
+# subscription. Repopulate when an aliased provider route returns.
+CPA_TEST_PROVIDER_ALIASES: dict[str, str] = {}
 
 # Codex-family routes answer over the Responses API, so health fixtures must
 # shape their replies by protocol, not uniformly as chat completions.

@@ -66,43 +66,6 @@
       ]
     },
     {
-      "slot": 2,
-      "name": "opencode",
-      "host": "opencode.ai",
-      "path": "/zen/go/v1",
-      "headers": {
-        "x-opencode-session": "cpa-bwg-gateway-01",
-        "user-agent": "cpa-bwg-gateway/1.0"
-      },
-      "request-scoped-errors": [
-        {
-          "status": 403,
-          "match": [
-            "1010"
-          ],
-          "action": "stop"
-        }
-      ],
-      "models": [
-        {
-          "name": "deepseek-v4.1-flash",
-          "alias": "deepseek-v4.1-flash-oc",
-          "max-context-length": 1000000
-        },
-        {
-          "name": "glm-5.3",
-          "alias": "glm-5.3-oc",
-          "max-context-length": 1000000
-        },
-        {
-          "name": "glm-5.3-flash",
-          "alias": "glm-5.3-flash-oc",
-          "max-context-length": 1000000
-        }
-      ],
-      "optional_models": []
-    },
-    {
       "slot": 4,
       "name": "zhipu-plan",
       "host": "open.bigmodel.cn",
@@ -269,7 +232,8 @@
     "codex.ciii.club",
     "api.deepseek.com",
     "ai.input.im",
-    "35.213.82.91"
+    "35.213.82.91",
+    "opencode.ai"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",

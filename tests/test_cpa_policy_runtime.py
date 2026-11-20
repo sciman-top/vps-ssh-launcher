@@ -887,7 +887,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ):
             self.assertIsNone(codex_pattern.search(real_codex_429), real_codex_429)
 
-    def test_cpa_policy_pins_opencode_cf1010_headers_and_request_scoped_errors(
+    def test_cpa_policy_retires_opencode_slot_and_keeps_rse_rules_validated(
         self,
     ) -> None:
         import runpy
@@ -898,48 +898,53 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config = self._valid_cpa_policy_config(policy)
         self.assertEqual(policy["validate_config"](config), [])
 
-        opencode = next(
-            item
-            for item in config["api-keys"]["openai-compatibility"]
-            if item["name"] == "opencode"
-        )
-        self.assertEqual(
-            opencode["headers"],
-            {
-                "x-opencode-session": "cpa-bwg-gateway-01",
-                "user-agent": "cpa-bwg-gateway/1.0",
-            },
-        )
-        self.assertEqual(
-            opencode["request-scoped-errors"],
-            [{"status": 403, "match": ["1010"], "action": "stop"}],
+        # 2026-11-20: the user cancelled the OpenCode Go subscription and the
+        # slot retired (opencode.ai sits in retired_hosts), so no manifest
+        # provider carries pinned headers or request-scoped errors any more.
+        self.assertFalse(
+            [
+                item
+                for item in config["api-keys"]["openai-compatibility"]
+                if item["name"] == "opencode"
+            ]
         )
 
-        for label, mutation in (
-            ("missing-rse", lambda entry: entry.pop("request-scoped-errors", None)),
-            (
-                "wrong-action",
-                lambda entry: entry.__setitem__(
-                    "request-scoped-errors",
-                    [{"status": 403, "match": ["1010"], "action": "continue"}],
-                ),
-            ),
-            (
-                "missing-ua",
-                lambda entry: entry["headers"].pop("user-agent", None),
-            ),
+        # The request-scoped-errors normalization stays a generic manifest
+        # rule; exercise it on a synthetic carrier the way the retired slot
+        # carried its rules.
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["providers"].append(
+            {
+                "slot": 2,
+                "name": "opencode",
+                "host": "opencode.example.invalid",
+                "path": "/v1",
+                "models": [
+                    {
+                        "name": "carrier-model",
+                        "alias": "carrier-model",
+                        "max-context-length": 1000000,
+                    }
+                ],
+                "request-scoped-errors": [
+                    {"status": 403, "match": ["1010"], "action": "stop"}
+                ],
+            }
+        )
+        self.assertEqual(policy["_route_manifest_issues"](manifest), [])
+        for label, rules in (
+            ("wrong-action", [{"status": 403, "match": ["1010"], "action": "pause"}]),
+            ("missing-matcher", [{"status": 403, "action": "stop"}]),
+            ("bad-status", [{"status": "403", "match": ["1010"], "action": "stop"}]),
+            ("empty-list", []),
         ):
             with self.subTest(case=label):
-                mutated = json.loads(json.dumps(config))
-                target = next(
-                    item
-                    for item in mutated["api-keys"]["openai-compatibility"]
-                    if item["name"] == "opencode"
-                )
-                mutation(target)
-                issues = policy["validate_config"](mutated)
+                mutated = json.loads(json.dumps(manifest))
+                mutated["providers"][-1]["request-scoped-errors"] = rules
+                issues = policy["_route_manifest_issues"](mutated)
                 self.assertTrue(
-                    issues, f"expected validation failure for opencode {label}"
+                    any("request-scoped-errors" in issue for issue in issues),
+                    issues,
                 )
 
     def test_cpa_policy_rejects_oauth_setting_manifest_drift(self) -> None:

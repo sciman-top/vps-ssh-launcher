@@ -2262,11 +2262,24 @@ except Exception as exc:
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
             # Slot 3 (http-bridge-8003) deleted 2026-11-18 (user directive).
-            [1, 2, 4],
+            # Slot 2 (opencode) retired 2026-11-20 with the user-cancelled
+            # OpenCode Go subscription; the number stays unused so the
+            # providers.env BASE_URL_2/API_KEY_2 mapping survives a renewal
+            # re-add.
+            [1, 4],
         )
         self.assertEqual(
             route_manifest["retired_hosts"],
-            ["codex.ciii.club", "api.deepseek.com", "ai.input.im", "35.213.82.91"],
+            [
+                "codex.ciii.club",
+                "api.deepseek.com",
+                "ai.input.im",
+                "35.213.82.91",
+                # 20540ac lesson: the retired host must be registered so the
+                # apply prunes the orphaned live provider instead of rolling
+                # back on POLICY_FAILED.
+                "opencode.ai",
+            ],
         )
         retired_aliases = {
             "codex-auto-review",
@@ -2278,8 +2291,16 @@ except Exception as exc:
         self.assertTrue(
             retired_aliases <= set(route_manifest["codex_api_key_exclusions"])
         )
+        # Slot-2 aliases tombstoned with the 2026-11-20 retirement stay in
+        # the OAuth-side exclusion list so neither lane can re-claim them.
+        oc_tombstones = {
+            "deepseek-v4.1-flash-oc",
+            "glm-5.3-oc",
+            "glm-5.3-flash-oc",
+        }
+        self.assertTrue(oc_tombstones <= set(route_manifest["oauth_exclusions"]))
         self.assertFalse(
-            retired_aliases
+            oc_tombstones
             & {
                 model["alias"]
                 for provider in route_manifest["providers"]
@@ -2331,62 +2352,18 @@ except Exception as exc:
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)
         # Slot 2 was retired 2026-10-18, re-activated 2026-10-24, retired again
-        # 2026-11-11 (the OpenCode Go subscription lapsed and the dead deepseek
-        # fallback leg was turning every all-candidates-exhausted workbuddy
-        # request into an auth-class 403 that latched the whole lane), and
-        # re-admitted 2026-11-14 after the subscription renewal. The renewal
-        # returns under a user directive that narrows the slot to ONLY the
-        # single-homed deepseek-v4.1-flash-oc alias: no bare-name dual-home
-        # (deepseek-v4.1-flash stays on the workbuddy plugin lane alone, still
-        # matrix-probe-exempt) and no priority ordering. OpenCode Go rejects
-        # un-sessioned calls with 400 MissingSessionID, so the route pins
-        # x-opencode-session. The zen claude-family route (added 2026-10-16
-        # for the same slot-2 credential) was retired on 2026-10-17: the
-        # Claude subscription OAuth lane now claims claude-haiku-5-5 (with
-        # claude-opus-5-5 / claude-sonnet-5-5) directly from the account's
-        # native Anthropic catalog, so the family list stays empty and the
-        # projected api-keys.claude group is removed by the apply.
-        slot2_route = next(
-            route for route in route_manifest["providers"] if route["slot"] == 2
+        # 2026-11-11 (lapsed subscription), re-admitted 2026-11-14 after the
+        # renewal (single-homed deepseek-v4.1-flash-oc, GLM-5.3 family joined
+        # 2026-11-20 morning), and retired for good the same day when the
+        # user cancelled the OpenCode Go subscription. No slot-2 route may
+        # exist in the manifest; opencode.ai sits in retired_hosts so the
+        # apply prunes the live leg instead of rolling back on
+        # POLICY_FAILED (20540ac). A renewal re-add restores the slot from
+        # git history plus -Apply; the providers.env BASE_URL_2/API_KEY_2
+        # mapping stays unused meanwhile.
+        self.assertFalse(
+            [route for route in route_manifest["providers"] if route["slot"] == 2]
         )
-        self.assertEqual(slot2_route["name"], "opencode")
-        self.assertEqual(slot2_route["host"], "opencode.ai")
-        self.assertEqual(slot2_route["path"], "/zen/go/v1")
-        self.assertEqual(
-            slot2_route["headers"],
-            {
-                "x-opencode-session": "cpa-bwg-gateway-01",
-                "user-agent": "cpa-bwg-gateway/1.0",
-            },
-        )
-        self.assertEqual(
-            slot2_route["request-scoped-errors"],
-            [{"status": 403, "match": ["1010"], "action": "stop"}],
-        )
-        self.assertEqual(
-            slot2_route["models"],
-            [
-                {
-                    "name": "deepseek-v4.1-flash",
-                    "alias": "deepseek-v4.1-flash-oc",
-                    "max-context-length": 1000000,
-                },
-                # 2026-11-20 user directive: the GLM-5.3 family joins the
-                # slot as single-homed aliases (upstream glm-5.3 /
-                # glm-5.3-flash), same tombstone rule as the deepseek alias.
-                {
-                    "name": "glm-5.3",
-                    "alias": "glm-5.3-oc",
-                    "max-context-length": 1000000,
-                },
-                {
-                    "name": "glm-5.3-flash",
-                    "alias": "glm-5.3-flash-oc",
-                    "max-context-length": 1000000,
-                },
-            ],
-        )
-        self.assertEqual(slot2_route["optional_models"], [])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {

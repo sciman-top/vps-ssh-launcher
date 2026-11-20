@@ -30,14 +30,14 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 | ---: | ---: | --- |
 | 272000 | 200000 | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
 | 500000 | 320000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | 320000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high`, `glm-5.3`, `glm-5.3-flash`, `glm-5.3-oc`, `glm-5.3-flash-oc`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-oc` |
+| 1000000 | 320000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash` |
 | 1048576 | 320000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high`, `gemini-4-neon-xhigh` |
 
 272K 路由维持 200000，其余 12 款采用 320000 作为待验证的真实任务试验阈值。目录容量保持原值。该分组是统一试验起点，不代表不同模型已经证实有相同的最优压缩点；每款模型需按完成质量、返工、耗时和可取得的配额数据独立评估。`gpt-6.2-astra` 继续显式钉定目录窗口，以消除默认生成时 `max_context_window=872000` 的漂移。`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
-两条 DeepSeek 分别使用 WorkBuddy 与 OpenCode Go，按入口验证实际输入与配额。GLM 族同理：
-`glm-5.3` / `glm-5.3-flash` 走 BigModel Coding Plan（slot 4），`glm-5.3-oc` /
-`glm-5.3-flash-oc` 走 OpenCode Go（slot 2，2026-11-20 增补），上下游是同一模型，
-按入口验证实际输入与配额。
+`deepseek-v4.1-flash` 由 WorkBuddy 插件 lane 承载，按入口验证实际输入与配额。
+其 oc 兜底腿与 GLM oc 别名（`glm-5.3-oc` / `glm-5.3-flash-oc`，2026-11-20 上午
+增补）已随同日用户退订 OpenCode Go 整槽退役，别名留 `oauth_exclusions` 墓碑，
+桌面 override 清单同步摘除。GLM 走 BigModel Coding Plan（slot 4）单通道。
 
 2026-11-18 BWG 观测中，WorkBuddy `deepseek-v4.1-flash` 在 200–272K 和
 400–500K 的缓存 token 占比分别为 99.3%（261 次）和 99.6%（297 次）。

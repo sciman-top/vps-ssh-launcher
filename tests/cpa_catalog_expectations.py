@@ -159,18 +159,13 @@ PROVIDER_MATRIX_TAIL = [
     # stays in oauth_exclusions and codex_api_key_exclusions as a tombstone,
     # so an accidental re-registration fails the readiness catalog gate.
     "glm-5.3-flash",
-    # slot-2 OpenCode single-homed aliases. deepseek-v4.1-flash-oc was
-    # re-admitted 2026-11-14 after the OpenCode Go subscription renewal
-    # (user directive: opencode exposes ONLY that alias); the GLM-5.3
-    # family joined 2026-11-20 by user directive (upstream glm-5.3 /
-    # glm-5.3-flash, same single-homed alias rule and oauth_exclusions
-    # tombstones). The bare deepseek-v4.1-flash name stays OUT of the
-    # provider matrix: it rides the workbuddy plugin lane (shared-
-    # subscription policy, matrix probes forbidden; cpa-health.py skips
-    # it explicitly).
-    "deepseek-v4.1-flash-oc",
-    "glm-5.3-oc",
-    "glm-5.3-flash-oc",
+    # Slot-2 OpenCode retired 2026-11-20 (user cancelled the OpenCode Go
+    # subscription and directed the slot closed; same auth-class 403 poison
+    # risk as the 2026-11-11 lapse). deepseek-v4.1-flash-oc /
+    # glm-5.3-oc / glm-5.3-flash-oc stay in oauth_exclusions as tombstones.
+    # The bare deepseek-v4.1-flash name stays OUT of the provider matrix:
+    # it rides the workbuddy plugin lane (shared-subscription policy,
+    # matrix probes forbidden; cpa-health.py skips it explicitly).
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.
     # muse-spark-1.3-contributor retired 2026-10-18 with the slot-2 channel

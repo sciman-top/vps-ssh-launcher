@@ -1541,38 +1541,15 @@ opencode_routes = [
     for route in routes
     if isinstance(route, dict) and route.get("host") == "opencode.ai"
 ]
-# 2026-11-14: the OpenCode Go subscription was renewed and slot 2 returns
-# under a user directive that narrows it to a single public surface: the
-# deepseek-v4.1-flash-oc alias. The bare deepseek-v4.1-flash name stays
-# workbuddy-only (no dual-home) and the old priority ordering is gone; the
-# exact model set below is the whole manifest contract. 2026-11-20 user
-# directive adds the GLM-5.3 family as single-homed aliases on the same
-# slot (upstream glm-5.3 / glm-5.3-flash); the set below stays exhaustive.
-expected_opencode_models = [
-    {
-        "name": "deepseek-v4.1-flash",
-        "alias": "deepseek-v4.1-flash-oc",
-        "max-context-length": 1000000,
-    },
-    {
-        "name": "glm-5.3",
-        "alias": "glm-5.3-oc",
-        "max-context-length": 1000000,
-    },
-    {
-        "name": "glm-5.3-flash",
-        "alias": "glm-5.3-flash-oc",
-        "max-context-length": 1000000,
-    },
-]
-if (
-    len(opencode_routes) != 1
-    or opencode_routes[0].get("models") != expected_opencode_models
-):
-    print("deepseek-manifest-opencode-models=DRIFT expected=deepseek+glm-oc")
+# 2026-11-20: the user cancelled the OpenCode Go subscription and directed
+# the slot retired. A live opencode route is drift; restoring it after a
+# renewal is a revert of the retirement commit plus -Apply (the
+# providers.env BASE_URL_2/API_KEY_2 mapping stays unused meanwhile).
+if opencode_routes:
+    print("deepseek-manifest-opencode-models=DRIFT expected=removed")
     failed = True
 else:
-    print("deepseek-manifest-opencode-models=deepseek+glm-oc")
+    print("deepseek-manifest-opencode-models=removed")
 
 compatibility = (
     config.get("api-keys", {}).get("openai-compatibility", [])
@@ -1596,15 +1573,11 @@ live_opencode_pairs = [
     for model in provider["models"]
     if isinstance(model, dict)
 ]
-if len(live_opencode) != 1 or live_opencode_pairs != [
-    ("deepseek-v4.1-flash", "deepseek-v4.1-flash-oc"),
-    ("glm-5.3", "glm-5.3-oc"),
-    ("glm-5.3-flash", "glm-5.3-flash-oc"),
-]:
-    print("deepseek-live-opencode-models=DRIFT expected=deepseek+glm-oc")
+if live_opencode:
+    print("deepseek-live-opencode-models=DRIFT expected=removed")
     failed = True
 else:
-    print("deepseek-live-opencode-models=deepseek+glm-oc")
+    print("deepseek-live-opencode-models=removed")
 
 auth_dir = Path(sys.argv[3])
 # 2026-11-17 luode0320 cutover: INTL auth files carry the workbuddyai-
@@ -1639,7 +1612,7 @@ else:
 print("workbuddy-realm-order=PLUGIN_LOCAL note=each_realm_has_its_own_scheduler")
 
 if not failed:
-    print("deepseek-provider-order=WB_BARE_ONLY_OC_ALIAS")
+    print("deepseek-provider-order=WORKBUDDY_ONLY")
 raise SystemExit(1 if failed else 0)
 PY
 then

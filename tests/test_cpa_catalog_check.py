@@ -195,17 +195,18 @@ def test_retired_name_in_an_entry_point_choice_is_reported(
 def test_local_cockpit_policy_cannot_retire_a_live_alias(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # The probe alias must be a still-live one: deepseek-v4.1-flash-oc
+    # retired with the OpenCode slot on 2026-11-20 and would silently pass.
     policy = tmp_path / "cockpit_local_provider_policy.json"
     policy.write_text(
-        json.dumps({"retired_hosts": [], "retired_models": ["deepseek-v4.1-flash-oc"]}),
+        json.dumps({"retired_hosts": [], "retired_models": ["glm-5.3"]}),
         encoding="utf-8",
     )
     monkeypatch.setattr(cpa_catalog_check, "COCKPIT_POLICY", policy)
     errors = cpa_catalog_check.check()
-    assert any(
-        "deepseek-v4.1-flash-oc" in error and "retired_models" in error
-        for error in errors
-    ), errors
+    assert any("glm-5.3" in error and "retired_models" in error for error in errors), (
+        errors
+    )
 
 
 def test_context_overrides_must_match_live_manifest_windows(
@@ -283,7 +284,10 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
                 "schema_version": 1,
                 "models": [
                     {
-                        "slug": "deepseek-v4.1-flash-oc",
+                        # Still-live alias: deepseek-v4.1-flash-oc retired with
+                        # the OpenCode slot on 2026-11-20 and would take the
+                        # not-a-live-alias path instead of the ceiling one.
+                        "slug": "glm-5.3-flash",
                         "context_window": 1000000,
                         "max_context_window": 1000000,
                         "auto_compact_token_limit": 900001,
@@ -308,11 +312,10 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
     monkeypatch.setattr(cpa_catalog_check, "CONTEXT_OVERRIDES", overrides)
     errors = cpa_catalog_check.check()
     assert any(
-        "deepseek-v4.1-flash-oc" in error and "between 1 and 900000" in error
-        for error in errors
+        "glm-5.3-flash" in error and "between 1 and 900000" in error for error in errors
     ), errors
     assert any(
-        "glm-5.3" in error and "auto_compact_token_limit='256000'" in error
+        "auto_compact_token_limit='256000'" in error and "glm-5.3'" in error
         for error in errors
     ), errors
     assert not any(

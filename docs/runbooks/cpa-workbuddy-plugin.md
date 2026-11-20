@@ -390,11 +390,15 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   死 oc 腿回 JSON 403 `permission_error`，admission 按认证类分层落持久锁，
   把配额窗故障放大成整车道人工停摆。**2026-11-14 订阅续订后按用户指令
   重新收录并收窄：slot 2 只开放 `deepseek-v4.1-flash-oc` 单宿别名，裸名
-  `deepseek-v4.1-flash` 不回 oc 槽、仍属 workbuddy 插件车道独占，旧
-  dual-home 与 priority 主备排序不恢复**（doctor `deepseek-route-order`
-  期望 oc 别名集，2026-11-20 起 pin 值 `deepseek+glm-oc`，终行
-  `WB_BARE_ONLY_OC_ALIAS`）。
-  providers.env 的 BASE_URL_2/API_KEY_2 映射两次退役期间均保留未动，
+  `deepseek-v4.1-flash` 不回 oc 槽、仍属 workbuddy 插件车道独占**；
+  2026-11-20 上午 GLM 族（`glm-5.3-oc` / `glm-5.3-flash-oc`）按用户指令
+  增补，**同日用户退订 OpenCode Go，slot 2 连同三个 oc 别名最终退役**：
+  manifest 删 slot 2、`opencode.ai` 入 `retired_hosts`（20540ac 教训：不
+  入册则 apply 以 POLICY_FAILED 孤儿 provider 回滚）、三个别名留
+  `oauth_exclusions` 墓碑；deepseek 车道回到 wb 单腿，wb 全候选耗尽时按
+  容量类阶梯窗自探自愈，无认证类持久锁（doctor `deepseek-route-order`
+  期望 `removed`，终行 `WORKBUDDY_ONLY`）。
+  providers.env 的 BASE_URL_2/API_KEY_2 映射历次退役期间均保留未动，
   续订沿用原 key。WorkBuddy 插件凭据保持默认 `priority=0`；priority 变更
   热加载不生效，须重启容器。
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取

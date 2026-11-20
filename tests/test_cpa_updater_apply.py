@@ -1894,21 +1894,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             transformed["oauth"]["request-scoped-errors"],
             policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"],
         )
-        transformed_opencode = next(
-            provider
-            for provider in transformed["api-keys"]["openai-compatibility"]
-            if provider["name"] == "opencode"
-        )
-        self.assertEqual(
-            transformed_opencode["headers"],
-            {
-                "x-opencode-session": "cpa-bwg-gateway-01",
-                "user-agent": "cpa-bwg-gateway/1.0",
-            },
-        )
-        self.assertEqual(
-            transformed_opencode["request-scoped-errors"],
-            [{"status": 403, "match": ["1010"], "action": "stop"}],
+        # Slot 2 (opencode) retired 2026-11-20: the manifest no longer
+        # declares it, so the transform neither declares nor rebuilds a
+        # provider for the retired host.
+        self.assertFalse(
+            [
+                provider
+                for provider in transformed["api-keys"]["openai-compatibility"]
+                if provider["name"] == "opencode"
+            ]
         )
         self.assertEqual(
             transformed["oauth"]["settings"],
@@ -1974,8 +1968,6 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_cpa_apply_upgrades_opencode_subset_headers_and_refuses_tampered(
         self,
     ) -> None:
-        import runpy
-
         text = read_guardrail_source()
         apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
         embedded_python = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
@@ -1991,10 +1983,17 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         }
         exec(build_src, ns)  # nosec B102
         build_provider = ns["build_provider"]
-        policy = runpy.run_path(
-            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
-        )
-        slot2 = next(r for r in policy["ROUTE_MANIFEST"]["providers"] if r["slot"] == 2)
+        # Synthetic carrier: slot 2 (opencode) retired 2026-11-20, so no real
+        # manifest provider carries pinned headers or request-scoped errors
+        # any more. build_provider is manifest-driven and generic; these
+        # constants reproduce the retired slot's shape to keep the
+        # strict-subset upgrade mechanism covered.
+        carrier_headers = {
+            "x-opencode-session": "cpa-bwg-gateway-01",
+            "user-agent": "cpa-bwg-gateway/1.0",
+        }
+        carrier_rse = [{"status": 403, "match": ["1010"], "action": "stop"}]
+        carrier_models: list[dict[str, Any]] = []
         # Live host pre-upgrade shape: only x-opencode-session, no user-agent,
         # and missing request-scoped-errors.
         existing_subset = {
@@ -2009,14 +2008,12 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "opencode",
             "https://opencode.ai/zen/go/v1",
             "NEW",
-            slot2["models"],
-            slot2["headers"],
-            slot2["request-scoped-errors"],
+            carrier_models,
+            carrier_headers,
+            carrier_rse,
         )
-        self.assertEqual(upgraded["headers"], slot2["headers"])
-        self.assertEqual(
-            upgraded["request-scoped-errors"], slot2["request-scoped-errors"]
-        )
+        self.assertEqual(upgraded["headers"], carrier_headers)
+        self.assertEqual(upgraded["request-scoped-errors"], carrier_rse)
         # Any undeclared or tampered existing header must still fail closed.
         for bad_headers in (
             {"x-opencode-session": "tampered"},
@@ -2030,9 +2027,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                         "opencode",
                         "https://opencode.ai/zen/go/v1",
                         "NEW",
-                        slot2["models"],
-                        slot2["headers"],
-                        slot2["request-scoped-errors"],
+                        carrier_models,
+                        carrier_headers,
+                        carrier_rse,
                     )
                 self.assertIn("REFUSE", str(ctx.exception))
 
