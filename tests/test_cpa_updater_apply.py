@@ -1882,6 +1882,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             )
         issues = policy["validate_config"](transformed)
         self.assertEqual(issues, [], issues)
+        self.assertEqual(transformed["oauth"]["auth-auto-refresh-workers"], 1)
+        self.assertEqual(transformed["requests"]["streaming"]["keepalive-seconds"], 15)
+        self.assertIs(
+            transformed["requests"]["streaming"]["send-keepalive-before-ft"], True
+        )
         self.assertEqual(
             transformed["oauth"]["providers"]["antigravity"]["connection-pool"],
             {

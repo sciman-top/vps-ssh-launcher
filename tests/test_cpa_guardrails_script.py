@@ -1563,6 +1563,9 @@ docker() {{
                 self.assertEqual(result.returncode, 0, result.stderr)
                 generated = json.loads(result.stdout)
                 expected = json.loads(json.dumps(fixture))
+                expected.setdefault("oauth", {})["auth-auto-refresh-workers"] = policy[
+                    "EXPECTED_CONFIG_PATHS"
+                ][("oauth", "auth-auto-refresh-workers")]
                 expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
                     "antigravity", {}
                 )["sensitive-words"] = policy["EXPECTED_CONFIG_PATHS"][

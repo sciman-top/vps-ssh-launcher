@@ -1065,6 +1065,72 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             self.assertNotIn("antigravity-one", result.stdout)
             self.assertNotIn("SECRET_MUST_NOT_APPEAR", result.stdout)
 
+    def test_oauth_monitor_parses_antigravity_top_level_timestamp_ms(self) -> None:
+        import datetime as dt
+        import hashlib
+        import json
+        import tempfile
+
+        block = (
+            read_guardrail_source()
+            .split('echo "==oauth-monitor=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        recent_ms = int(
+            (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=30)).timestamp()
+            * 1000
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = (
+                (
+                    "antigravity-a@gmail.com.json",
+                    {
+                        "type": "antigravity",
+                        "expired": "2035-01-01T00:00:00Z",
+                        "timestamp": recent_ms,
+                    },
+                ),
+                (
+                    "antigravity-b@gmail.com.json",
+                    {
+                        "type": "antigravity",
+                        "expired": "2035-01-01T00:00:00Z",
+                        "nested": {"timestamp": recent_ms},
+                    },
+                ),
+                (
+                    "claude-a@example.com.json",
+                    {
+                        "type": "claude",
+                        "expired": "2035-01-01T00:00:00Z",
+                        "timestamp": recent_ms,
+                    },
+                ),
+            )
+            for name, payload in files:
+                (root / name).write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-", str(root), str(root)],
+                input=block,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            label_a = hashlib.sha256(b"antigravity-a@gmail.com.json").hexdigest()[:8]
+            label_b = hashlib.sha256(b"antigravity-b@gmail.com.json").hexdigest()[:8]
+            self.assertIn(
+                f"oauth_antigravity_credential_{label_a}_refresh_age_hours=0.5",
+                result.stdout,
+            )
+            self.assertIn(
+                f"oauth_antigravity_credential_{label_b}_refresh_age_hours=unknown",
+                result.stdout,
+            )
+            self.assertIn("oauth_claude_refresh_age_hours=unknown", result.stdout)
+
     def test_cpa_doctor_oauth_monitor_block_fails_on_expired_and_refresh_signals(
         self,
     ) -> None:

@@ -1591,6 +1591,10 @@ oauth_alias_sources.update(
 oauth_block_after = config_after.setdefault("oauth", {})
 if not isinstance(oauth_block_after, dict):
     raise SystemExit("REFUSE oauth must be a mapping")
+# Serialize OAuth background auto-refresh workers so sibling credentials on the
+# same BWG IP do not fire concurrent token refreshes in the same second
+# (upstream defaults to 16 workers in conductor_refresh.go).
+oauth_block_after["auth-auto-refresh-workers"] = 1
 # Preserve the system-instruction compatibility fix when regenerating config.
 oauth_providers_after = oauth_block_after.setdefault("providers", {})
 if not isinstance(oauth_providers_after, dict):
@@ -1893,7 +1897,12 @@ oauth_request_scoped_after["antigravity"] = [
         "status": 429,
         "match-regexr": [r'(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$'],
         "action": "stop",
-    }
+    },
+    {
+        "status": 503,
+        "match": ["antigravity pool paused after TOS_VIOLATION"],
+        "action": "stop",
+    },
 ]
 oauth_request_scoped_after["codex"] = [
     {
@@ -2033,6 +2042,8 @@ if not isinstance(requests_after, dict):
 requests_streaming_after = requests_after.setdefault("streaming", {})
 if not isinstance(requests_streaming_after, dict):
     raise SystemExit("REFUSE requests.streaming must be a mapping")
+requests_streaming_after["keepalive-seconds"] = 15
+requests_streaming_after["send-keepalive-before-ft"] = True
 requests_streaming_after["bootstrap-retries"] = 1
 # Bound upstream uTLS ClientHello handshakes so a stalled cross-ocean TLS
 # handshake cannot hold an OAuth max_inflight slot for 300s.
@@ -2752,7 +2763,7 @@ for lane in lanes:
                     "workbuddy-intl-oauth": 18}
     if lane.get("requests_per_minute") != expected_rpm.get(lane.get("name")):
         raise SystemExit(1)
-    if 429 not in lane.get("capacity_statuses", []):
+    if not ({429, 503} <= set(lane.get("capacity_statuses", []))):
         raise SystemExit(1)
 if {lane.get("name") for lane in lanes} != set(expected):
     raise SystemExit(1)

@@ -887,6 +887,65 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ):
             self.assertIsNone(codex_pattern.search(real_codex_429), real_codex_429)
 
+        # Second Antigravity rule stops the #7748 TOS-pause 503 cascade without
+        # intercepting ordinary upstream 503 overload bodies.
+        tos_pause_rule = rules["antigravity"][1]
+        self.assertEqual(tos_pause_rule["status"], 503)
+        self.assertEqual(tos_pause_rule["action"], "stop")
+        tos_pause_needle = tos_pause_rule["match"][0]
+        self.assertIn(tos_pause_needle, "antigravity pool paused after TOS_VIOLATION")
+        for ordinary_503 in (
+            '{"error":{"code":503,"message":"The service is currently unavailable.","status":"UNAVAILABLE"}}',
+            "upstream overloaded",
+            "auth in short cooldown, 12s remaining",
+        ):
+            self.assertNotIn(tos_pause_needle, ordinary_503)
+
+        dropped_tos_rule = json.loads(json.dumps(config))
+        dropped_tos_rule["oauth"]["request-scoped-errors"]["antigravity"] = [
+            rules["antigravity"][0]
+        ]
+        self.assertTrue(
+            any(
+                "request-scoped-errors" in issue
+                for issue in policy["validate_config"](dropped_tos_rule)
+            )
+        )
+
+    def test_cpa_policy_pins_auth_auto_refresh_workers_and_capacity_statuses(
+        self,
+    ) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+
+        for bad_workers in (None, 0, 2, 16, True):
+            with self.subTest(workers=bad_workers):
+                mutated = json.loads(json.dumps(config))
+                if bad_workers is None:
+                    mutated["oauth"].pop("auth-auto-refresh-workers", None)
+                else:
+                    mutated["oauth"]["auth-auto-refresh-workers"] = bad_workers
+                issues = policy["validate_config"](mutated)
+                self.assertTrue(
+                    any("auth-auto-refresh-workers" in issue for issue in issues),
+                    f"expected auth-auto-refresh-workers pin to reject {bad_workers!r}: {issues}",
+                )
+
+        admission = json.loads(json.dumps(policy["ADMISSION_CONFIG"]))
+        admission["lanes"][0]["capacity_statuses"] = [429]
+        admission_issues = policy["_admission_config_issues"](
+            policy["ROUTE_MANIFEST"], admission
+        )
+        self.assertTrue(
+            any("429 and 503" in issue for issue in admission_issues),
+            f"expected missing 503 in capacity_statuses to fail: {admission_issues}",
+        )
+
     def test_cpa_policy_retires_opencode_slot_and_keeps_rse_rules_validated(
         self,
     ) -> None:

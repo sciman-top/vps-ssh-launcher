@@ -365,6 +365,7 @@ class ScriptValidationMixin:
                     "switch-preview-model": False,
                 },
                 "oauth": {
+                    "auth-auto-refresh-workers": 1,
                     "providers": {
                         "antigravity": {
                             "antigravity-credits": False,

@@ -769,6 +769,24 @@ def values_for_keys(value, wanted):
     return found
 
 
+def refresh_time_for_record(provider_name, record):
+    refresh = next(
+        (
+            parsed
+            for value in values_for_keys(record, refresh_keys)
+            if (parsed := parse_time(value))
+        ),
+        None,
+    )
+    if refresh is None and provider_name == "antigravity":
+        # Antigravity auth files persist top-level `timestamp` (Unix ms) on
+        # token refresh instead of `last_refresh` (antigravity_executor_auth.go).
+        # Restrict fallback to the top-level field so nested payloads never
+        # shadow refresh visibility.
+        refresh = parse_time(record.get("timestamp"))
+    return refresh
+
+
 active = []
 active_providers = set()
 provider_records = {"claude": [], "antigravity": []}
@@ -840,10 +858,7 @@ for provider, records in provider_records.items():
                 (parsed for value in values_for_keys(record, expiry_keys)
                  if (parsed := parse_time(value))), None,
             )
-            refresh = next(
-                (parsed for value in values_for_keys(record, refresh_keys)
-                 if (parsed := parse_time(value))), None,
-            )
+            refresh = refresh_time_for_record(provider, record)
             known = "true" if expiry else "false"
             print(f"{prefix}_credential_{label}_expiry_known={known}")
             age = (
@@ -864,10 +879,7 @@ for provider, records in provider_records.items():
             (parsed for value in values_for_keys(record, expiry_keys)
              if (parsed := parse_time(value))), None,
         )
-        refresh = next(
-            (parsed for value in values_for_keys(record, refresh_keys)
-             if (parsed := parse_time(value))), None,
-        )
+        refresh = refresh_time_for_record(provider, record)
         print(f"{prefix}_expiry_known={'true' if expiry else 'false'}")
         print(f"{prefix}_refresh_age_hours=" + (
             f"{max(0.0, (now - refresh).total_seconds() / 3600):.1f}"

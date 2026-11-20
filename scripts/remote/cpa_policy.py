@@ -94,6 +94,13 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("observability", "logs", "error-logs-max-files"): 5,
     # Bound aggregate log storage as well as the number of retained dumps.
     ("observability", "logs", "logs-max-total-size-mb"): 32,
+    # Serialize core OAuth auto-refresh and force-refresh-all workers. Upstream
+    # defaults to 16 concurrent workers (conductor_refresh.go), which caused
+    # four Antigravity accounts on the same BWG IP to fire OAuth token refreshes
+    # within the same second every 30 minutes. One worker still refreshes the
+    # full pool in a few seconds well inside the 30-minute lead window without
+    # lockstep bursts to oauth2.googleapis.com.
+    ("oauth", "auth-auto-refresh-workers"): 1,
     # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
     # antigravity OAuth provider block (config_v8.go buildV8Paths).
     ("oauth", "providers", "antigravity", "antigravity-credits"): False,
@@ -251,7 +258,20 @@ EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS: dict[str, list[dict[str, Any]]] = {
             "status": 429,
             "match-regexr": [r'(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$'],
             "action": "stop",
-        }
+        },
+        # CLIProxyAPI #7748 (unpatched in v8.0.79 and v8.0.80): while
+        # tos-pause-window is armed, AntigravityExecutor returns a plain
+        # non-request-scoped 503 "antigravity pool paused after TOS_VIOLATION".
+        # Without a stop rule, conductor_execution.go cools and marks every
+        # healthy sibling credential StatusError/Unavailable across retries.
+        # `action: "stop"` marks the result RequestScoped (zero cooldown on
+        # healthy accounts) and halts fan-out on credential #1, while
+        # cpa-admission still enforces 503 lane backoff against client retries.
+        {
+            "status": 503,
+            "match": ["antigravity pool paused after TOS_VIOLATION"],
+            "action": "stop",
+        },
     ],
     # CLIProxyAPI #7691: ChatGPT-Codex occasionally emits a bare
     # `{"detail":"Rate limit exceeded"}` 429 without `usage_limit_reached` or
@@ -1571,8 +1591,8 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
             )
         ):
             issues.append(f"{label}.capacity_statuses must contain HTTP statuses")
-        elif 429 not in statuses:
-            issues.append(f"{label}.capacity_statuses must include 429")
+        elif not ({429, 503} <= set(statuses)):
+            issues.append(f"{label}.capacity_statuses must include 429 and 503")
         markers = lane.get("capacity_markers")
         if (
             not isinstance(markers, list)
