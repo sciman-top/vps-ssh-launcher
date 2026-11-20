@@ -47,6 +47,19 @@
   `cooldown_state=none`；lanes 表与 manifest 对账 MATCH。
 - **第一手目录读回**（8317 `/v1/models` 带鉴权）：14 模型，`gpt-5.6-luna` **不在册**，
   lane 四别名与 zhipu/workbuddy 面完好，三个 oc 墓碑名不在册（前次退役保持）。
+- **受控实战单发**（8318 回环，经 admission 全链，`/v1/responses` 非流式，各一发不
+  重试，同 20261114 sol/terra 复活验收形态）：
+
+```text
+gpt-5.6-luna HTTP=400 LATENCY_MS=42
+  BODY={"error":{"message":"unknown provider for model gpt-5.6-luna",
+        "type":"invalid_request_error","code":"model_not_found","param":"model"}}
+gpt-6-luna   HTTP=200 LATENCY_MS=1040 SERVED_MODEL=gpt-6-luna
+  STATUS=completed OUTPUT_PRESENT=True SNIPPET=OK
+```
+
+  负向：退役名确定性不路由（`model_not_found`）；正向：lane 凭据经 apply 重启后
+  照常服务，`gpt-6-luna` LIVE_ACCEPTED（200/completed/回显正确/输出 "OK"）。
 
 ## 回滚入口
 
