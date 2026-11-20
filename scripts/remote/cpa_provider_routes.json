@@ -71,8 +71,18 @@
       "host": "opencode.ai",
       "path": "/zen/go/v1",
       "headers": {
-        "x-opencode-session": "cpa-bwg-gateway-01"
+        "x-opencode-session": "cpa-bwg-gateway-01",
+        "user-agent": "cpa-bwg-gateway/1.0"
       },
+      "request-scoped-errors": [
+        {
+          "status": 403,
+          "match": [
+            "1010"
+          ],
+          "action": "stop"
+        }
+      ],
       "models": [
         {
           "name": "deepseek-v4.1-flash",

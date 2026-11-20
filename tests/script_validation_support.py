@@ -320,6 +320,15 @@ class ScriptValidationMixin:
                     if provider.get("headers")
                     else {}
                 ),
+                **(
+                    {
+                        "request-scoped-errors": json.loads(
+                            json.dumps(provider["request-scoped-errors"])
+                        )
+                    }
+                    if provider.get("request-scoped-errors")
+                    else {}
+                ),
             }
             for provider in route_manifest["providers"]
         ]

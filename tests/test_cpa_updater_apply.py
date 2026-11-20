@@ -1894,6 +1894,22 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             transformed["oauth"]["request-scoped-errors"],
             policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"],
         )
+        transformed_opencode = next(
+            provider
+            for provider in transformed["api-keys"]["openai-compatibility"]
+            if provider["name"] == "opencode"
+        )
+        self.assertEqual(
+            transformed_opencode["headers"],
+            {
+                "x-opencode-session": "cpa-bwg-gateway-01",
+                "user-agent": "cpa-bwg-gateway/1.0",
+            },
+        )
+        self.assertEqual(
+            transformed_opencode["request-scoped-errors"],
+            [{"status": 403, "match": ["1010"], "action": "stop"}],
+        )
         self.assertEqual(
             transformed["oauth"]["settings"],
             route_manifest["oauth_settings"],
@@ -1954,6 +1970,71 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             self.assertEqual(group["models"], route["models"])
             self.assertEqual(group["keys"][0]["api-key"], "SLOT2_KEY")
             self.assertNotIn(SLOT_API_KEY_HEADER_TOKEN, json.dumps(group))
+
+    def test_cpa_apply_upgrades_opencode_subset_headers_and_refuses_tampered(
+        self,
+    ) -> None:
+        import runpy
+
+        text = read_guardrail_source()
+        apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        embedded_python = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
+            "\nPY\nthen", 1
+        )[0]
+        start = embedded_python.index("def build_provider(")
+        end = embedded_python.index("\ntarget_hosts = ")
+        build_src = embedded_python[start:end]
+        ns: dict[str, Any] = {
+            "deepcopy": __import__("copy").deepcopy,
+            "forbidden_provider_keys": {"headers", "proxy-url"},
+            "model_entry": lambda m: dict(m),
+        }
+        exec(build_src, ns)  # nosec B102
+        build_provider = ns["build_provider"]
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        slot2 = next(r for r in policy["ROUTE_MANIFEST"]["providers"] if r["slot"] == 2)
+        # Live host pre-upgrade shape: only x-opencode-session, no user-agent,
+        # and missing request-scoped-errors.
+        existing_subset = {
+            "name": "opencode",
+            "base-url": "https://opencode.ai/zen/go/v1",
+            "keys": [{"api-key": "OLD"}],
+            "headers": {"x-opencode-session": "cpa-bwg-gateway-01"},
+            "models": [],
+        }
+        upgraded = build_provider(
+            existing_subset,
+            "opencode",
+            "https://opencode.ai/zen/go/v1",
+            "NEW",
+            slot2["models"],
+            slot2["headers"],
+            slot2["request-scoped-errors"],
+        )
+        self.assertEqual(upgraded["headers"], slot2["headers"])
+        self.assertEqual(
+            upgraded["request-scoped-errors"], slot2["request-scoped-errors"]
+        )
+        # Any undeclared or tampered existing header must still fail closed.
+        for bad_headers in (
+            {"x-opencode-session": "tampered"},
+            {"x-opencode-session": "cpa-bwg-gateway-01", "x-evil": "1"},
+        ):
+            with self.subTest(bad_headers=bad_headers):
+                tampered = dict(existing_subset, headers=bad_headers)
+                with self.assertRaises(SystemExit) as ctx:
+                    build_provider(
+                        tampered,
+                        "opencode",
+                        "https://opencode.ai/zen/go/v1",
+                        "NEW",
+                        slot2["models"],
+                        slot2["headers"],
+                        slot2["request-scoped-errors"],
+                    )
+                self.assertIn("REFUSE", str(ctx.exception))
 
     def test_cpa_apply_ensure_nginx_directive_repairs_missing_status(self) -> None:
         text = read_guardrail_source()

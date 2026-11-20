@@ -887,6 +887,61 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ):
             self.assertIsNone(codex_pattern.search(real_codex_429), real_codex_429)
 
+    def test_cpa_policy_pins_opencode_cf1010_headers_and_request_scoped_errors(
+        self,
+    ) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+
+        opencode = next(
+            item
+            for item in config["api-keys"]["openai-compatibility"]
+            if item["name"] == "opencode"
+        )
+        self.assertEqual(
+            opencode["headers"],
+            {
+                "x-opencode-session": "cpa-bwg-gateway-01",
+                "user-agent": "cpa-bwg-gateway/1.0",
+            },
+        )
+        self.assertEqual(
+            opencode["request-scoped-errors"],
+            [{"status": 403, "match": ["1010"], "action": "stop"}],
+        )
+
+        for label, mutation in (
+            ("missing-rse", lambda entry: entry.pop("request-scoped-errors", None)),
+            (
+                "wrong-action",
+                lambda entry: entry.__setitem__(
+                    "request-scoped-errors",
+                    [{"status": 403, "match": ["1010"], "action": "continue"}],
+                ),
+            ),
+            (
+                "missing-ua",
+                lambda entry: entry["headers"].pop("user-agent", None),
+            ),
+        ):
+            with self.subTest(case=label):
+                mutated = json.loads(json.dumps(config))
+                target = next(
+                    item
+                    for item in mutated["api-keys"]["openai-compatibility"]
+                    if item["name"] == "opencode"
+                )
+                mutation(target)
+                issues = policy["validate_config"](mutated)
+                self.assertTrue(
+                    issues, f"expected validation failure for opencode {label}"
+                )
+
     def test_cpa_policy_rejects_oauth_setting_manifest_drift(self) -> None:
         import runpy
 

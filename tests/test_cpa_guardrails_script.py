@@ -2354,7 +2354,14 @@ except Exception as exc:
         self.assertEqual(slot2_route["path"], "/zen/go/v1")
         self.assertEqual(
             slot2_route["headers"],
-            {"x-opencode-session": "cpa-bwg-gateway-01"},
+            {
+                "x-opencode-session": "cpa-bwg-gateway-01",
+                "user-agent": "cpa-bwg-gateway/1.0",
+            },
+        )
+        self.assertEqual(
+            slot2_route["request-scoped-errors"],
+            [{"status": 403, "match": ["1010"], "action": "stop"}],
         )
         self.assertEqual(
             slot2_route["models"],

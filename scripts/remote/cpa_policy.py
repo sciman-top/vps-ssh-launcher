@@ -269,6 +269,57 @@ EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+_VALID_REQUEST_SCOPED_ACTIONS = frozenset(
+    {"stop", "stop-and-cooldown", "continue", "continue-and-cooldown"}
+)
+_ALLOWED_REQUEST_SCOPED_RULE_KEYS = frozenset(
+    {"status", "match", "match-regexr", "action"}
+)
+
+
+def _normalize_request_scoped_error_rules(
+    raw_rules: Any,
+) -> list[dict[str, Any]] | None:
+    """Normalize a CPA request-scoped-errors list or return None when malformed."""
+    if not isinstance(raw_rules, list) or not raw_rules:
+        return None
+    normalized: list[dict[str, Any]] = []
+    for entry in raw_rules:
+        if (
+            not isinstance(entry, dict)
+            or not set(entry) <= _ALLOWED_REQUEST_SCOPED_RULE_KEYS
+        ):
+            return None
+        status = entry.get("status")
+        action = entry.get("action")
+        if (
+            type(status) is not int
+            or status <= 0
+            or not isinstance(action, str)
+            or action.strip().lower() not in _VALID_REQUEST_SCOPED_ACTIONS
+        ):
+            return None
+        clean: dict[str, Any] = {
+            "status": status,
+            "action": action.strip().lower(),
+        }
+        has_matcher = False
+        for field in ("match", "match-regexr"):
+            if field not in entry or entry[field] in (None, []):
+                continue
+            values = entry[field]
+            if not isinstance(values, list) or not all(
+                isinstance(item, str) and item.strip() for item in values
+            ):
+                return None
+            clean[field] = list(values)
+            has_matcher = True
+        if not has_matcher:
+            return None
+        normalized.append(clean)
+    return normalized
+
+
 EXPECTED_CODEX = {
     # Disabled on 2026-09-28 after measuring what the hold actually cost. While
     # bootstrap buffering is on, CPA keeps the downstream response headers
@@ -728,6 +779,15 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             issues.append(
                 f"{label}.headers must be a mapping of lowercase header names "
                 "to non-empty values when present"
+            )
+        route_rse = provider.get("request-scoped-errors")
+        if (
+            route_rse is not None
+            and _normalize_request_scoped_error_rules(route_rse) is None
+        ):
+            issues.append(
+                f"{label}.request-scoped-errors must be a non-empty list of "
+                "valid request-scoped error rules when present"
             )
     if set(raw_apply_patch_filter_models) - provider_model_names:
         issues.append(
@@ -2315,29 +2375,13 @@ def validate_config(
     if not isinstance(oauth_request_scoped_errors, dict):
         issues.append("oauth.request-scoped-errors must be a mapping")
     else:
-        allowed_rule_keys = {"status", "match", "match-regexr", "action"}
         for channel, expected_rules in EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS.items():
             actual_rules = oauth_request_scoped_errors.get(channel)
             if not isinstance(actual_rules, list):
                 issues.append(f"oauth.request-scoped-errors.{channel} must be a list")
                 continue
-            normalized_actual = []
-            valid_shape = True
-            for entry in actual_rules:
-                if not isinstance(entry, dict) or not set(entry) <= allowed_rule_keys:
-                    valid_shape = False
-                    break
-                if type(entry.get("status")) is not int:
-                    valid_shape = False
-                    break
-                normalized_actual.append(
-                    {
-                        key: value
-                        for key, value in entry.items()
-                        if value not in (None, "", [])
-                    }
-                )
-            if not valid_shape or normalized_actual != expected_rules:
+            normalized_actual = _normalize_request_scoped_error_rules(actual_rules)
+            if normalized_actual is None or normalized_actual != expected_rules:
                 issues.append(f"oauth.request-scoped-errors.{channel} rule drift")
     if not isinstance(oauth_exclusions, dict):
         issues.append("oauth.excluded-models must be a mapping")
@@ -2640,6 +2684,13 @@ def validate_config(
                     provider, label, expected_route.get("headers") or {}
                 )
             )
+            expected_rse = expected_route.get("request-scoped-errors")
+            if expected_rse is not None:
+                normalized_provider_rse = _normalize_request_scoped_error_rules(
+                    provider.get("request-scoped-errors")
+                )
+                if normalized_provider_rse != expected_rse:
+                    issues.append(f"{label}.request-scoped-errors rule drift")
             actual_models = _provider_models(provider)
             expected_map = EXPECTED_PROVIDER_MODEL_MAP[host]
             if actual_models != expected_map:

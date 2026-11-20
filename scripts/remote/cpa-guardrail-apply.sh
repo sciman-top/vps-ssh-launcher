@@ -1098,7 +1098,15 @@ def oauth_model_alias(entry):
     return normalized
 
 
-def build_provider(existing, name, base_url, api_key, models, route_headers):
+def build_provider(
+    existing,
+    name,
+    base_url,
+    api_key,
+    models,
+    route_headers,
+    route_request_scoped_errors=None,
+):
     provider = deepcopy(existing) if isinstance(existing, dict) else {}
     if "api-key" in provider:
         raise SystemExit(f"REFUSE {name} uses legacy api-key field")
@@ -1110,10 +1118,18 @@ def build_provider(existing, name, base_url, api_key, models, route_headers):
             continue
         # A manifest-pinned static header is the only reviewed transport
         # carve-out: the exact key set and values come from the route
-        # manifest, so an existing entry may survive only when it already
-        # matches byte-for-byte (it is overwritten below regardless).
-        if normalized_key == "headers" and route_headers and provider.get("headers") == route_headers:
-            continue
+        # manifest. Allow an existing exact match or strict subset of the
+        # manifest's pinned headers so adding a new reviewed header (e.g.
+        # user-agent to prevent Cloudflare 1010) upgrades cleanly while any
+        # undeclared or tampered header still fails closed.
+        if normalized_key == "headers" and route_headers:
+            existing_headers = provider.get("headers")
+            if (
+                isinstance(existing_headers, dict)
+                and set(existing_headers) <= set(route_headers)
+                and all(route_headers[k] == v for k, v in existing_headers.items())
+            ):
+                continue
         raise SystemExit(f"REFUSE {name} has forbidden transport override")
     entries = provider.get("keys")
     if entries is not None and (
@@ -1139,6 +1155,8 @@ def build_provider(existing, name, base_url, api_key, models, route_headers):
         provider["headers"] = deepcopy(route_headers)
     else:
         provider.pop("headers", None)
+    if route_request_scoped_errors:
+        provider["request-scoped-errors"] = deepcopy(route_request_scoped_errors)
     return provider
 
 
@@ -1170,7 +1188,13 @@ for route in provider_slots:
         None,
     )
     projected = build_provider(
-        existing, name, base_url, api_key, models, route.get("headers") or {}
+        existing,
+        name,
+        base_url,
+        api_key,
+        models,
+        route.get("headers") or {},
+        route.get("request-scoped-errors"),
     )
     # Provider priority is part of the route contract when declared.  Keep
     # omitted priorities untouched for legacy slots, while making the reviewed

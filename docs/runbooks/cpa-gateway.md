@@ -1045,13 +1045,16 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   `workbuddy-intl-` 标记）。wb 层内仍由
   priority-reclaim 每请求取文件名序最前 live 候选决定 INTL/CN，不能把它
   描述成带 realm 参数的硬选择器。
-  **Cloudflare 1010 与冷却放大（2026-10-24 复测确认）**：上游对非浏览器
-  指纹（如 `Python-urllib`）回 `403 error code: 1010`，CPA 会把它记成该
-  凭据的 `quota` 冷却（单一凭据即整槽 20 分钟 503 `auth_unavailable`，
-  期间 `/v1/models` 摘除相关模型）。opencode provider 现已钉
+  **Cloudflare 1010 与冷却放大（2026-10-24 复测、2026-11-20 钉入真源）**：
+  上游对非浏览器指纹（如 `Python-urllib`）回 `403 error code: 1010`，CPA
+  会把它记成该凭据的 `quota` 冷却（单一凭据即整槽 20 分钟 503
+  `auth_unavailable`，期间 `/v1/models` 摘除相关模型）；且 2026-11-14 槽位
+  重建后仅靠深拷贝保留的旧手工规则会静默丢失。现已在
+  `scripts/remote/cpa_provider_routes.json` slot 2 中同时钉定
+  `headers.user-agent: cpa-bwg-gateway/1.0`（从源头阻断裸脚本 UA 透传）与
   `request-scoped-errors: [{status: 403, match: ["1010"], action: "stop"}]`
-  让其快速失败而不冷却；该字段由 `-Apply` 深拷贝保留。**不要用重启清冷却
-  换取验收证据**，等自然过期再单发。
+  （纵深兜底防整槽冷却），由 `-Apply` 强制投影并由 `cpa_policy.py` 门禁校验。
+  **不要用重启清冷却换取验收证据**，等自然过期再单发。
   `muse-spark-1.3-contributor` 曾因 Responses-only 协议与 CPA openai-compat
   执行器（只发 `chat/completions`，源码锚点
   `openai_compat_executor.go` `endpoint := "/chat/completions"`）不匹配于
