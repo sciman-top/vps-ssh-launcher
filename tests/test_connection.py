@@ -310,6 +310,34 @@ class ConnectionTests(unittest.TestCase):
             policy.missing_host_key(client, "example.test", key)
             self.assertIn("example.test", client.get_host_keys())
 
+    def test_persistent_policy_default_port_stores_bare_hostname(self) -> None:
+        # Paramiko's SSHClient looks up the bare hostname for the default
+        # port; a bracket-form first-use entry would never match the
+        # strict-mode lookup (2026-11-20 ECS default-port regression).
+        paramiko_module = connection._load_paramiko()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            key = paramiko_module.Ed25519Key(
+                data=bytes.fromhex("0000000b7373682d6564323535313900000020" + "01" * 32)
+            )
+            client = paramiko_module.SSHClient()
+            policy = connection._PersistentAutoAddPolicy(
+                paramiko_module,
+                known_hosts,
+                connect_port=22,
+            )
+            policy.missing_host_key(client, "example.test", key)
+            self.assertIsNotNone(client.get_host_keys().lookup("example.test"))
+            self.assertIsNone(client.get_host_keys().lookup("[example.test]:22"))
+
+            # A second process must resolve the bare entry in strict mode.
+            reloaded = paramiko_module.SSHClient()
+            reloaded.load_host_keys(str(known_hosts))
+            found = reloaded.get_host_keys().lookup("example.test")
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found["ssh-ed25519"], key)
+
     def test_connect_client_rejects_unknown_hosts_when_strict(self) -> None:
         args = SimpleNamespace(
             host="127.0.0.1",

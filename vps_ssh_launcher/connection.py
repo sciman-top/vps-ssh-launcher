@@ -217,6 +217,11 @@ class _PersistentAutoAddPolicy:
         found = host_keys.lookup(naked_name)
         if found is not None:
             return found, naked_name
+        if connect_port == 22:
+            # Paramiko's SSHClient consults the bare hostname for the default
+            # port; a bracket-form entry would never match its strict-mode
+            # lookup, so first-use trust must be stored unqualified here.
+            return None, naked_name
         return None, qualified
 
     def missing_host_key(self, client: Any, hostname: str, key: Any) -> None:
