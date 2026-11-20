@@ -172,6 +172,9 @@ BUILT_SHA=f60ea67e04c3a6bd6785302926e2a2cc7022636c5b6ec0c0843b6c815617bc24
 
 ### 3. Antigravity Claude 模型提示缓存观察（未定性，不改代码）
 
+> **2026-11-20 更正（必读）**：本节的 0% 观察由探针形状造成，见文末「第三轮」第 1 节；
+> 真实 Codex 形状下同一模型命中 99.0%。本节保留为取证过程的原始记录，不作为结论引用。
+
 6 小时自然流量 + 受控复现的一致结果：
 
 | 模型族 | 样本 | 输入 token | 命中 | 命中率 |
@@ -195,6 +198,45 @@ BUILT_SHA=f60ea67e04c3a6bd6785302926e2a2cc7022636c5b6ec0c0843b6c815617bc24
 上游 v8 实际语义与早先笔记相反：`quota` 在 429/403 时**重绑**到另一凭据，`any` 反而不重绑瞬态错误。
 本栈现值为 `quota`，意味着多账号 antigravity 池在限流时会把回合换到另一账号（受 `max-retry-credentials=3`
 约束）。这是"可用性优先"的默认；改为 `any` 属"账号集中度优先"的策略选择，需要用户裁决，本轮不动。
+
+## 2026-11-20 第三轮：缓存结论**更正**与 Gemini 过滤器定性
+
+### 1. 更正：Antigravity Claude 的 0% 命中是探针形状假象，真实形状 99.0%
+
+第二轮记为"Claude 模型两连发 `cached=0`"的观察**不成立**：那条探针用重复填充文本构造前缀，
+没有模拟真实调用形状。补齐三类对照后结论反转：
+
+| 探针形状 | 模型 | 第一次 | 第二次 |
+|---|---|---|---|
+| 重复填充（旧探针） | `claude-sonnet-5-5-high` | in=10208 cached=0 | in=10208 cached=0 |
+| 重复填充 2k/10k/20k 三档 | `claude-sonnet-5-5-high` | 0 | **0（三档全部）** |
+| 自然续打（2 用户轮 + 助手轮） | `gemini-4-argon-high` | 0/5504 | **3455/5505（62.8%）** |
+| 自然续打（同上） | `claude-opus-5-5-high` | 0/7779 | 0/7782 |
+| **真实 Codex 形状**（`instructions` + `tools` + `Session-Id`） | `claude-sonnet-5-5-high` | 0/8972 | **8886/8972（99.0%）** |
+
+读法：Claude 支路的缓存**按会话与工具前缀工作**，对"单条超长用户消息"这种非常规形状不回报命中。
+Codex Desktop 的实际调用带 `instructions`/`tools`/`Session-Id`，命中 99.0%，与第二轮的 0% 判读正好相反。
+
+**结论**：没有缓存缺陷，网关不做任何请求侧改动。这条更正同时说明一条方法学教训——用重复填充文本
+构造的"稳定前缀"会同时改变两条链路的行为（见下节），缓存类探针必须复用真实客户端形状。
+
+### 2. Gemini 内容过滤器：由重复填充文本触发，非生产暴露面
+
+同一批探针中 `gemini-4-argon-high` 出现 `400 upstream_error` 与 HTTP 200 内的 `event: error`，错误体为
+`This request was blocked by Gemini's filters.`。单变量对照：
+
+- 重复填充文本（同一句 ×3000）→ `error: blocked by Gemini's filters`；
+- 同一体量的自然文本（编号不同的句子 ×900）→ `response.completed`。
+
+`journalctl -u cpa-admission --since -30d` 中该错误串**零次**出现，即生产流量从未触发；CPA 也已把该帧
+识别为 `clienterror.GeminiFilterBlockMessage`（`internal/clienterror/client_error.go:157`），属上游既有分类。
+因此**不新增防护**：真实会话不会出现数千次逐字重复的长前缀，为它加规则只会引入新的请求改写。
+
+### 3. 本轮未改动任何生产配置
+
+- 探针全部走公网随机路径与既有 admission，未改 `config.yaml`、未重启、未新增凭据；
+- 三条 OAuth 车道与 `zhipu` 车道在本轮结束时仍 `hold=null`、无冷却；
+- `session-affinity-rebind-on` 维持 `quota`（见第二轮第 4 节）。
 ## 回滚入口
 
 - 仓库：`git revert` 本提交；manifest 契约与 policy 校验均为新增，回滚后运行配置不变。
