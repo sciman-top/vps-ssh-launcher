@@ -142,6 +142,58 @@ BUILT_SHA=f60ea67e04c3a6bd6785302926e2a2cc7022636c5b6ec0c0843b6c815617bc24
   doctor 的 `==model-substitution==` 继续作为观察面）。
 - **OAuth 入站认证面**：之前记录的"provider key 得 200"仍需带上游版本复核；本次未改动认证配置。
 - **`session-affinity-rebind-on: quota`** 的实际重绑语义（多账号 antigravity 池在 429 时会换号）仍属策略决策。
+
+## 2026-11-20 第二轮：思考等级端到端取证、入站认证复核与 Claude 缓存观察
+
+用户授权消耗额度后，以下结论均来自受控实测。
+
+### 1. `xhigh` 钳制已在真实请求上工作（`controlled_live` + 离线取证）
+
+- 公网随机路径单发 `claude-sonnet-5-5-high`，请求带 `reasoning.effort=xhigh`：
+  `status=200 header_ms=9 first_text_ms=1079 terminal=response.completed text=OK`。
+- 离线取证（模块内临时探针，已删除）：同一路径 `xhigh → thinkingLevel=high`、`medium → medium`，
+  即共享思考校验确实读到了信封等级并按模型能力钳制，而不是把 `xhigh` 原样转给上游。
+- 暂开 `debug: true` 的日志窗口没有产生 thinking debug 行（`logs` 目录为空、日志走容器 stdout），
+  因此改用离线探针与线上行为双证；该窗口已还原，`config.yaml` 字节回到开启前。
+
+### 2. 入站认证面复核：已确认强制，先前"provider key 得 200"为代理绕过假象
+
+此前记录的"用 provider 上游 key 访问 `/v1/models` 返回 200"无法解释为鉴权缺陷，原因已定位并实测：
+
+- CPA 的入站鉴权对未命中任何 access 认证器的请求按**缺失凭据**处理；本机 `nginx` 的 8443 车道转发到
+  `127.0.0.1:8318` 时，admission 再把 `Authorization` 原样送进 CPA。
+- 当 `trusted-proxies` 未配置时，CPA 看到非回环来源便忽略 `Authorization`，落到"无凭据"分支。
+- 实测（临时加 `trusted-proxies: ["127.0.0.1", "::1"]` 后立即还原）：`valid-key=200`、`no-key=401`、
+  `wrong-key=401` —— `VERDICT auth_enforced`。也就是说对外入口**确实**按 key 鉴权，
+  "provider key 也 200"是绕过 nginx、直连 `8317` 时宿主回环来源被信任造成的假象，不构成公网绕过。
+- 未保留 `trusted-proxies` 改动：本轮目标是取证，不是改认证策略；是否长期保留由用户裁决（保留后 CPA 可
+  区分真实客户端来源，但也会让本机直连的调用计入真实客户端，属于策略变更）。
+
+### 3. Antigravity Claude 模型提示缓存观察（未定性，不改代码）
+
+6 小时自然流量 + 受控复现的一致结果：
+
+| 模型族 | 样本 | 输入 token | 命中 | 命中率 |
+|---|---|---|---|---|
+| `deepseek-v4.1-flash`（WorkBuddy） | 247 | 97,505,979 | 97,397,504 | 0.9989 |
+| `gemini-4-neon-xhigh`（Antigravity Gemini） | 2 | 13,070 | 4,478 | 0.3426 |
+| `claude-sonnet-5-5-high`（Antigravity Claude） | 14 | 149,123 | 0 | **0.0000** |
+| `claude-opus-5-5-high`（Antigravity Claude） | 2 | 9,016 | 0 | **0.0000** |
+
+受控复现：同一前缀两连发、续打回合，经公网、经 admission、绕过 admission 三种路径，Claude 模型全部
+`cached=0`（`usage_in` 稳定，说明缓存值被真实解析而非缺失字段）。对照 Gemini 模型在同一 6.5k 前缀下
+`cached=4478`，在同一 2.4k 小前缀下为 0（小前缀不命中属预期）。
+
+**边界**：只证明了"在 Claude 模型上未观测到命中"，未证明根因。已排除：admission、payload 改写形状、
+推理等级、凭据轮换（测量窗口内 7 份凭据 17 分钟内未刷新）。**未关闭的前置问题**：Antigravity 对 Claude
+模型是否原生提供 prompt caching。在该问题上游无明确答复前，不改写请求前缀、不注入缓存标记、不动
+`support-prompt-cache-key`——这些改动在"上游本不支持"的前提下只会增加请求差异，不产生收益。
+
+### 4. `session-affinity-rebind-on` 语义复核（不改）
+
+上游 v8 实际语义与早先笔记相反：`quota` 在 429/403 时**重绑**到另一凭据，`any` 反而不重绑瞬态错误。
+本栈现值为 `quota`，意味着多账号 antigravity 池在限流时会把回合换到另一账号（受 `max-retry-credentials=3`
+约束）。这是"可用性优先"的默认；改为 `any` 属"账号集中度优先"的策略选择，需要用户裁决，本轮不动。
 ## 回滚入口
 
 - 仓库：`git revert` 本提交；manifest 契约与 policy 校验均为新增，回滚后运行配置不变。
