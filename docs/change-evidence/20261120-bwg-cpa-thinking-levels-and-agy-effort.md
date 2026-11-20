@@ -21,7 +21,7 @@
 
 ## 改动
 
-### 1. fork 补丁 `agy-effort`（`outputs/cpa-agy-claude-effort.patch`）
+### 1. fork 补丁 `agy-effort`（构建阶段物化；补丁文本本身不入库，SHA-256 见下）
 
 - `internal/thinking/apply.go`：新增 `ExtractReasoningEffortConfigPrefix` /
   `ExtractReasoningEffortConfigPrefixDoc` / `reasoningEffortConfigPrefix`；`applyThinkingDocCore`
@@ -90,6 +90,58 @@ BUILT_SHA=f60ea67e04c3a6bd6785302926e2a2cc7022636c5b6ec0c0843b6c815617bc24
 - **Claude 车道**：`claude` OAuth 已退役（`claude-risk.json` 仍保留 `authentication_required` 墓碑），
   Antigravity 上的 Claude 模型走 provider `antigravity`，本补丁对两者都不改变认证/重绑语义。
 
+
+## 2026-11-20 授权后的连续执行（用户明确要求模拟/受控实战验收并连续自动修复）
+
+### 1. 换芯上线（`agy-effort`）
+
+- 派生镜像：`outputs/build-fork-image-20261109.ps1 -UpstreamTag v8.0.79 -BaseDigest sha256:ce02dd2b…
+  -BinarySha256 f60ea67e… -ForkBinaryPath /root/cpa-v8080-agy-effort-build/CLIProxyAPI-v8079-agy-effort -Apply`
+  → `BUILT_BINARY_SHA_OK`、`LABELS_OK`（base/fork 标签一致），`image_id=sha256:d8f6aad7…`。
+- drain 事务：`outputs/cpa-v8080-agy-effort-swap-transaction-20261120.ps1`（先 `-DryRun` 预演）→
+  `PREFLIGHT_OK`、`DRAIN_OK`、`LANE_HEALTH_OK idle_checked=True`、`IMAGE_ID_READBACK_OK`、
+  `START_LOG_CLEAN`（插件 0.21.27 注册）、`RUNTIME_BINARY_OK sha=f60ea67e…`、`READINESS_OK`、
+  `AUTH_BYTES_UNCHANGED`、`LANE_STATE_DELTA=none`、`SWAP_OK`。
+  备份：`/opt/cliproxyapi/backups/20261119T234106.753473156Z-swap-v8079-gemini-raw-to-agy-effort`。
+  上一二进制 `ec1ad20c…` 只在 `/root/cpa-v8079-gemini-raw-build/` 尚存（7 天保留窗内）；
+  镜像层本身仍保留旧 tag 名，回滚需按备份中的 `new-image-id` 与构建记录重建。
+- 投影：`-Apply` → `GUARDRAILS_APPLIED`；读回 `zhipu-plan` 两个模型均为
+  `thinking.levels=[low,medium,high,xhigh]`；INTL 7 份凭据 `disabled=true` 回读一致。
+- 严格 doctor：`DOCTOR_CONTRACT_OK`（`runtime_binary_hash=MATCH`、五条车道 `OPEN`、
+  `credential_ban_signals_7d=0`、`model_substitution=OK`）。
+
+### 2. 受控实战发现并修复的两个缺陷
+
+**(a) Responses 回合被探测预算截断被误判为路由故障。** 首次 ONE_SHOT 在 `glm-5.3-flash` 上以
+`response.incomplete` 结束（`incomplete_details.reason=max_output_tokens`，32 个输出 token 中 31 个是
+推理），admission 记为 `protocol_result=upstream_error`。chat/completions 分支早有"预算过紧=合同失败"
+注释，Responses 分支没有。修复：`cpa-health.py` 对 `incomplete + max_output_tokens` 输出
+`error_class=probe_budget`（exit 20），测试 `test_cpa_health_generation_reports_incomplete_budget_as_probe_budget`。
+不设预算时同一请求 `response.completed`、text=OK，证明不是上游或补丁问题。
+
+**(b) updater 调度门把 systemd 默认超时读成了 20 分钟。** 服务未设 `TimeoutStartSec`，
+`systemctl show … TimeoutStartUSec` 返回 `20min`（systemd 的默认值渲染），doctor 判
+`updater-schedule-budget=FAIL`。修复：优先读 `DefaultTimeoutStartUSec` 的生效值（显式 per-unit 设置仍优先）。
+修复后 doctor 输出 `updater-schedule-timeout-start=90s`、`updater-schedule-budget=OK`、
+`updater-schedule=OK anchors=4`。测试在 `test_updater_schedule_split_is_projected_and_gated` 内补断言。
+
+### 3. 受控实战验收（`controlled_live`）
+
+- 公网随机路径（`https://127.0.0.1:8443/<cap>/v1/responses`，入站 key，不打印）→ admission → CPA
+  `v8.0.79+agy-effort` → 上游：`status=200 header_ms=9 first_event_ms=1293 first_text_ms=1763
+  terminal=response.completed text=OK total_ms=1822`。
+- 修复前后同形状请求：`response.incomplete` ×2 → `response.completed` ×3（差额全部来自去掉过紧预算）。
+- 受控请求全部落在**非 OAuth 车道**（`zhipu-coding-plan`）；本窗口 OAuth 车道零拒绝、零容量事件、
+  零 hold；`workbuddy-oauth` 98 次请求 97 次 `completed`，唯一非 completed 为 `client_disconnect`
+  （客户端主动断开，非上游失败）。
+
+### 4. 仍未关闭 / 待用户裁决
+
+- **fork 补丁的运行时效果尚未在真实 antigravity 请求上被观测**（见文首"未上线"注记已被本次换芯取代，
+  但 thinking 等级钳制要有 `xhigh` 或显式 `reasoning.effort` 的 antigravity Claude 回合才会触发；
+  doctor 的 `==model-substitution==` 继续作为观察面）。
+- **OAuth 入站认证面**：之前记录的"provider key 得 200"仍需带上游版本复核；本次未改动认证配置。
+- **`session-affinity-rebind-on: quota`** 的实际重绑语义（多账号 antigravity 池在 429 时会换号）仍属策略决策。
 ## 回滚入口
 
 - 仓库：`git revert` 本提交；manifest 契约与 policy 校验均为新增，回滚后运行配置不变。

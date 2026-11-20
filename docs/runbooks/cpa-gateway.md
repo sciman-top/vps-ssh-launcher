@@ -1306,7 +1306,7 @@ Antigravity 车道的客户端面是 codex（Responses）协议：Codex 客户�
 > 早先写入的值（内部 debug 日志 `thinking: no config found, passthrough`）。
 > 因此仅声明能力不足以生效，必须让共享校验读到信封等级。
 
-分层修复（fork 补丁 `outputs/cpa-agy-claude-effort.patch`，台账
+分层修复（fork 补丁，构建与哈希见台账
 [20261120-bwg-cpa-thinking-levels](../change-evidence/20261120-bwg-cpa-thinking-levels-and-agy-effort.md)）：
 
 1. `internal/thinking/apply.go`：新增 `ExtractReasoningEffortConfigPrefix` 与
