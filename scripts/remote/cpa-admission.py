@@ -477,6 +477,7 @@ STANDING_RESTRICTION_REASONS = (
     "SERVICE_DISABLED",
     "ACCOUNT_DISABLED",
     "ACCOUNT_SUSPENDED",
+    "VALIDATION_REQUIRED",
 )
 
 # Gemini-family transports report quota pressure as RESOURCE_EXHAUSTED: in the
@@ -966,6 +967,20 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
                         inner = None
                     if isinstance(inner, dict) and isinstance(inner.get("code"), int):
                         errors.append({"code": inner["code"], "message": candidate})
+            elif lane_name == "chatgpt-oauth":
+                match = re.search(r"\{.*\}", candidate, re.DOTALL)
+                if match:
+                    try:
+                        inner = json.loads(match.group(0))
+                    except ValueError:
+                        inner = None
+                    if isinstance(inner, dict):
+                        if inner.get("error"):
+                            errors.append(inner["error"])
+                        elif inner.get("type") == "error":
+                            errors.append(
+                                {k: inner[k] for k in ("code", "message") if k in inner}
+                            )
             if payload is None:
                 continue
         if isinstance(payload, dict):
@@ -1163,7 +1178,8 @@ def oauth_risk_signal(
             ):
                 return "retry_window_review_required", None
     if lane_name in {"chatgpt-oauth", *WORKBUDDY_LANES}:
-        if status == 403 and edge_denial_body(body):
+        errors = protocol_errors(body, lane_name)
+        if status == 403 and not errors and edge_denial_body(body):
             # A blocked edge hop is transient: cool through the normal ladder
             # instead of parking the lane until an operator releases it.
             return None, None
@@ -1175,7 +1191,6 @@ def oauth_risk_signal(
         # evidence below; a genuinely revoked credential re-triggers with
         # that evidence and latches then.
         hold = None
-        errors = protocol_errors(body, lane_name)
         if lane_name in WORKBUDDY_LANES:
             try:
                 envelope = json.loads(body)
@@ -3878,6 +3893,9 @@ def completed_reset_probe(body: bytes) -> bool:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Streamed SSE chunks are flushed incrementally; disabling Nagle avoids
+    # loopback Delayed-ACK stalls between small chunked frames.
+    disable_nagle_algorithm = True
 
     def _start_request_trace(self) -> None:
         self._request_id = uuid.uuid4().hex
@@ -4622,9 +4640,14 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     with write_lock:
                         if downstream_chunked:
-                            self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
-                            self.wfile.write(payload)
-                            self.wfile.write(b"\r\n")
+                            frame = b"".join(
+                                (
+                                    f"{len(payload):X}\r\n".encode("ascii"),
+                                    payload,
+                                    b"\r\n",
+                                )
+                            )
+                            self.wfile.write(frame)
                         else:
                             self.wfile.write(payload)
                         self.wfile.flush()

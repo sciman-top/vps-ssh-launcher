@@ -3789,6 +3789,51 @@ def test_only_completed_sse_can_heal_half_open_lane(
             running.join(timeout=2)
 
 
+def test_handler_disables_nagle_algorithm_for_sse_chunks() -> None:
+    assert MODULE["Handler"].disable_nagle_algorithm is True
+
+
+def test_antigravity_validation_required_latches_account_restricted() -> None:
+    body = json.dumps(
+        {
+            "error": {
+                "code": 403,
+                "status": "PERMISSION_DENIED",
+                "message": "Verify your account to continue",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "VALIDATION_REQUIRED",
+                    }
+                ],
+            }
+        }
+    ).encode()
+    assert MODULE["oauth_risk_signal"]("antigravity-oauth", 403, body) == (
+        "account_restricted",
+        None,
+    )
+
+
+def test_chatgpt_prose_wrapped_upstream_error_surfaces_risk_signal() -> None:
+    wrapped_quota = (
+        b'upstream 429: {"error":{"code":"insufficient_quota",'
+        b'"message":"You exceeded your current quota"}}'
+    )
+    assert MODULE["oauth_risk_signal"]("chatgpt-oauth", 429, wrapped_quota) == (
+        "retry_window_review_required",
+        None,
+    )
+    wrapped_suspended = (
+        b'upstream 403: {"error":{"code":"account_deactivated",'
+        b'"message":"Account suspended"}}'
+    )
+    assert MODULE["oauth_risk_signal"]("chatgpt-oauth", 403, wrapped_suspended) == (
+        "account_restricted",
+        None,
+    )
+
+
 @pytest.mark.parametrize(
     ("preceding", "expected_fragment"),
     [
