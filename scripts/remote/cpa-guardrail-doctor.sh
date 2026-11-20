@@ -426,7 +426,6 @@ if not isinstance(lanes, dict):
 expected = {
     "chatgpt-oauth": [
         "gpt-6-luna",
-        "gpt-5.6-luna",
         "gpt-6.1-sol",
         "gpt-6.1-terra",
         "gpt-6.2-sol",

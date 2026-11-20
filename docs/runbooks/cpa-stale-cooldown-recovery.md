@@ -33,9 +33,9 @@ ai.input.im）、
   Luna 仍从目录缺席）才进入本页。`active_cooldown` 是正常退避，必须等待，不能
   清除；`unavailable_unclassified` 先按上游或本地目录故障处理。
 - **`available_partial` 不是故障**：在册性按整条 OAuth 路由判断，期望别名集合
-  由路由清单的 `oauth_routes` 派生。上游/账号侧的模型授权会变动，裸名
-  `gpt-6-luna` 可能消失而兼容别名 `gpt-5.6-luna` 仍在服务——此时 lane 可达，
-  缺失项见 `catalog_oauth_missing`，不要按故障处置，也不要据此重启或清冷却。
+  由路由清单的 `oauth_routes` 派生。上游/账号侧的模型授权会变动，个别别名可能消失而
+  同路由其他别名仍在服务（如 2026-11-20 退役的 `gpt-5.6-luna` 退册前的形态）
+  ——此时 lane 可达，缺失项见 `catalog_oauth_missing`，不要按故障处置，也不要据此重启或清冷却。
   只有 `catalog_oauth_aliases=none`（整条路由都不在册）才是真缺席。
 - 2026-09-16 起持久化关闭，`.cds` 数据源消失，`stale_cooldown_suspected` 不再
   出现；滞留的实用判据改为：一次 `docker restart cli-proxy-api`（清空内存冷却）

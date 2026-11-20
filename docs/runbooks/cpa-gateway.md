@@ -28,7 +28,7 @@ doctor 门禁、guardrails 入口与应急开关。README 只保留定位与边�
 ```powershell
 .\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --model gpt-6-luna
 # 上一条结束且结果为 PASS 后，才单发：
-.\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --model gpt-5.6-luna
+.\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --model gpt-6.1-sol
 ```
 
 公网模式只接受 HTTPS；sidecar 模式必须同时提供 `--manifest` 与 `--port`，
@@ -605,8 +605,9 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 执行
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
-- 现役五条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
-  `gpt-6.1-sol` / `gpt-6.1-terra` / `gpt-6.2-sol`；其中 `gpt-6.1-sol` /
+- 现役五条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` /
+  `gpt-6.1-sol` / `gpt-6.1-terra` / `gpt-6.2-sol`；`gpt-5.6-luna` 于 2026-11-20 退役、
+  排除清单留墓碑；其中 `gpt-6.1-sol` /
   `gpt-6.1-terra` 2026-11-13 退役（上游 400
   `model_not_found`）、2026-11-14 上游目录复活实证后恢复，墓碑已摘）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
   `antigravity-oauth`（`gemini-3.8-flash-high` / `gemini-4-hydrogen-xhigh` /
@@ -892,9 +893,9 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 ## 路由清单与目录契约
 
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
-`gpt-6-luna` / `gpt-5.6-luna` 的 ChatGPT Plus OAuth lane
+`gpt-6-luna` 的 ChatGPT Plus OAuth lane
 （`gpt-6-sol` 已于 2026-09-30 退役，排除清单留墓碑；`gpt-5.6-luna` 曾于
-2026-10-01 退役、2026-10-02 按用户要求恢复；`gpt-6.1-sol` /
+2026-10-01 退役、2026-10-02 按用户要求恢复、**2026-11-20 最终退役**；`gpt-6.1-sol` /
 `gpt-6.1-terra` 2026-11-13 随上游 model_not_found 退役、2026-11-14 上游复活后恢复），以及 2026-10-14 新增的
 Antigravity OAuth lane（Google AI Pro 订阅，当前加载 2 份凭据）。同日按用户决定
 收窄为只开放 `gemini-3.8-flash-high`（antigravity 目录无裸名 `gemini-3.8-flash`，3.8
@@ -1203,7 +1204,7 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 排除与可见模型集合。上游 `/models` 目录响应只用于清单候选核实，不代表生成
 语义已验收；只有显式矩阵模式会向已列出的模型发送生成请求。
 
-`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-5.6-luna`
+`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna`
 显式映射到 ChatGPT Plus OAuth lane（`gpt-6.1-sol` / `gpt-6.1-terra` 同映射
 已于 2026-11-13 退役）；它们不属于
 `openai-compatibility` provider。
@@ -1440,8 +1441,9 @@ strict doctor 扫描活动 `type=codex` OAuth JSON 的到期元数据、保留�
 `cooldown_next_retry_after`、`catalog_gpt6_luna`、`catalog_oauth_aliases`、
 `catalog_oauth_missing` 与 `luna_state`。**在册性按整条 OAuth 路由判断**，期望
 别名集合由 `cpa_provider_routes.json` 的 `oauth_routes` 派生（当前为
-`gpt-6-luna` 与 `gpt-5.6-luna`），而不是只看规范名 `gpt-6-luna`：上游/账号侧
-的模型授权会变动，裸名可能消失而兼容别名仍在服务。因此：
+`gpt-6-luna` / `gpt-6.1-sol` / `gpt-6.1-terra` / `gpt-6.2-sol`），而不是只看规范名
+`gpt-6-luna`：上游/账号侧的模型授权会变动，个别别名可能消失而同路由其他别名
+仍在服务。因此：
 
 - `available`：期望别名全部在册；
 - `available_partial`：只有部分在册（lane 仍可达，不是故障），缺失项见
@@ -1650,8 +1652,8 @@ systemd 以 `nobody` 运行，并使用 mode 0700 的 `StateDirectory=cpa-admiss
   逐项相等（不等即 `REFUSE OAuth quarantine config drift detected`），然后写回
   `previous_codex_exclusions`。因此隔离期间任何第三方对排除清单的改动都会被
   拒绝而不是被静默覆盖。
-- **整账号语义**：标记必须列全该 provider 的 OAuth 别名（当前是 `gpt-6-luna` 与
-  `gpt-5.6-luna`）。只列一部分的标记会被 `cpa_policy.py` 判为
+- **整账号语义**：标记必须列全该 provider 的 OAuth 别名（按路由清单现派生，
+  2026-11-20 起不含已退役的 `gpt-5.6-luna`）。只列一部分的标记会被 `cpa_policy.py` 判为
   `must name every configured OAuth alias`，不允许用它授权更宽的阻断。
 - **凭据边界**：只读取拓扑，不修改、不复制、不删除、不回放凭据 JSON；后台 token 刷新继续
   运行，slot 不会因静默期过期；不调用 `reset-quota`，不清除冷却状态。输出

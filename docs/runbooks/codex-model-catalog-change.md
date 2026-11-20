@@ -28,7 +28,7 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 
 | 容量 | 自动压缩阈值 | 模型 |
 | ---: | ---: | --- |
-| 272000 | 200000 | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
+| 272000 | 200000 | `gpt-6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
 | 500000 | 320000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
 | 1000000 | 320000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash` |
 | 1048576 | 320000 | `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`, `gemini-4-argon-high`, `gemini-4-neon-xhigh` |

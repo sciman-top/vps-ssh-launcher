@@ -25,7 +25,8 @@ literals.
 # (docs/runbooks/cpa-catalog-change-checklist.md 前置铁律).
 OAUTH_ROUTE_ALIASES = [
     "gpt-6-luna",
-    "gpt-5.6-luna",
+    # gpt-5.6-luna retired 2026-11-20 (user directive); it stays in
+    # oauth_exclusions and codex_api_key_exclusions as a tombstone.
     "gpt-6.1-sol",
     "gpt-6.1-terra",
     # gpt-6.2-sol opened 2026-11-18 (user directive): the ChatGPT OAuth

@@ -1423,7 +1423,8 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
     [
         ("gpt-6-luna(high)", "chatgpt-oauth", "gpt-6-luna"),
         ("gpt-6.1-sol(low)", "chatgpt-oauth", "gpt-6.1-sol"),
-        ("gpt-5.6-luna(8192)", "chatgpt-oauth", "gpt-5.6-luna"),
+        # gpt-5.6-luna row removed 2026-11-20: the model retired from the
+        # chatgpt-oauth lane and no longer classifies into it.
         ("GLM-5.3-FLASH (HIGH)", "zhipu-coding-plan", "glm-5.3-flash"),
         ("gpt-6-luna()", "chatgpt-oauth", "gpt-6-luna"),
     ],

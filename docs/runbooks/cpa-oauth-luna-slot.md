@@ -4,8 +4,10 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live names `gpt-6-luna`, the compatibility alias `gpt-5.6-luna`, and
-`gpt-6.1-sol` / `gpt-6.1-terra` (terra adopted 2026-10-27; both 6.1 names
+The live names `gpt-6-luna` and
+`gpt-6.1-sol` / `gpt-6.1-terra` (`gpt-5.6-luna` served again from the
+2026-10-02 restoration until its final retirement on 2026-11-20, tombstone
+in `oauth_exclusions`) (terra adopted 2026-10-27; both 6.1 names
 retired 2026-11-13 when the ChatGPT-Codex upstream rejected them with
 400 `model_not_found`, restored 2026-11-14 after a
 GET /backend-api/codex/models probe served both slugs again)
@@ -65,7 +67,7 @@ is required; do not place a newly issued token on the VPS until re-enrollment.
 ## Re-enroll
 
 The retained slot is metadata only: provider `codex`, intended bare models
-`gpt-6-luna` and `gpt-5.6-luna`, and the original
+`gpt-6-luna` and the rest of the live route aliases, and the original
 OAuth route. Re-enrollment creates a fresh
 OAuth credential through the supported interactive device-login flow, then
 restores the existing OAuth-only Luna route in a reviewed BWG-only change.
@@ -113,8 +115,9 @@ Slot 3 keeps only `gpt-5.6-terra` since 2026-10-11 (`gpt-6.1-sol-91`
 retired), and the DeepSeek official channel (`deepseek-flash`,
 `api.deepseek.com`) was retired the same day with its shared admission lane.
 The
-ChatGPT Plus OAuth lane serves `gpt-6-luna` and `gpt-5.6-luna` (restored on
-2026-10-02 after the 2026-10-01 retirement) and `gpt-6.1-sol` /
+ChatGPT Plus OAuth lane serves `gpt-6-luna` (restored on
+2026-10-02 after the 2026-10-01 retirement; `gpt-5.6-luna` rode the same
+restoration until its 2026-11-20 retirement) and `gpt-6.1-sol` /
 `gpt-6.1-terra` (retired 2026-11-13 on upstream model_not_found, restored
 2026-11-14 after the upstream catalog re-advertised both);
 `gpt-6-sol` remains retired (2026-09-30).

@@ -2464,7 +2464,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-6-astra=excluded retired=gpt-6.1-sol-input")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-5.6-luna=retired gpt-6-astra=excluded retired=gpt-6.1-sol-input")
 print(
     "CODEX_OAUTH_ALIASES_READY "
     + "/".join(
@@ -2698,7 +2698,6 @@ if config.get("retry_after_max_seconds") != 86400:
 expected = {
     "chatgpt-oauth": [
         "gpt-6-luna",
-        "gpt-5.6-luna",
         "gpt-6.1-sol",
         "gpt-6.1-terra",
         "gpt-6.2-sol",
@@ -3235,7 +3234,7 @@ ids = [item.get("id", "") for item in d.get("data", [])]
 print("models=" + str(len(ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
-print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
+print("has_retired_bare_luna=" + str("gpt-5.6-luna" not in ids))
 print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
 print("has_retired_gpt_6_1_sol_input=" + str("gpt-6.1-sol-input" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
