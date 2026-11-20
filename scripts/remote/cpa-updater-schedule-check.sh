@@ -155,8 +155,36 @@ esac
 # A start budget longer than the slot cannot overlap the next owner's 04:10
 # anchor. systemd renders a large USec value as a duration on some builds and
 # as raw microseconds on others; both shapes are normalised to seconds.
+# 2026-11-20: the service sets no TimeoutStartSec, so systemd's own default
+# (DefaultTimeoutStartSec, 90s unless an override drop-in changes it) is what
+# actually bounds a trigger. Read the effective value instead of the raw unit
+# property, otherwise a default of 90s was reported as 1200s and failed a
+# budget the reviewer had already sized to the slot. An explicit per-unit
+# TimeoutStartSec still wins here, because systemctl show resolves it.
 start_usec_raw="$(systemctl show cliproxyapi-update.service -p TimeoutStartUSec --value 2>/dev/null || true)"
+systemd_default_raw="$(systemctl show -p DefaultTimeoutStartUSec --value 2>/dev/null || true)"
 start_seconds="$(normalize_seconds "$start_usec_raw")"
+# A configured 0/infinity renders as a huge USec value on older builds and as
+# "infinity" on newer ones; both mean "no start budget" and stay unreadable.
+case "$systemd_default_raw" in
+  ''|infinity) : ;;
+  *)
+    existing_default_seconds="$(normalize_seconds "$systemd_default_raw")"
+    case "$existing_default_seconds" in
+      ''|*[!0-9]*) : ;;
+      *)
+        case "$start_seconds" in
+          ''|*[!0-9]*) start_seconds="$existing_default_seconds" ;;
+          *)
+            if [ "$start_seconds" -ge "$existing_default_seconds" ]; then
+              start_seconds="$existing_default_seconds"
+            fi
+            ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
 case "$start_seconds" in
   ''|*[!0-9]*)
     echo "updater-schedule-timeout-start=UNVERIFIED raw=${start_usec_raw:-ABSENT}"

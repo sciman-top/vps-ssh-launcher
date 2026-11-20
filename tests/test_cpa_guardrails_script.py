@@ -1418,6 +1418,12 @@ docker() {{
         self.assertIn(
             "updater-schedule-compose=UNVERIFIED reason=no_docker_or_compose", schedule
         )
+        # 2026-11-20: the service sets no TimeoutStartSec, and systemd reports
+        # its 90s default as 20min through the unit property. The budget gate
+        # must fall back to DefaultTimeoutStartUSec or it fails a schedule the
+        # reviewer already sized to the slot.
+        self.assertIn("systemctl show -p DefaultTimeoutStartUSec --value", schedule)
+        self.assertIn("existing_default_seconds", schedule)
 
         # Apply projects the timer between the timeout drop-in and the
         # daemon-reload that activates it, and backs up the original unit.

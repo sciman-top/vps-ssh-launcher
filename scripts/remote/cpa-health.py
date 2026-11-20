@@ -1290,6 +1290,25 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             if mode == "quality-canary":
                 semantic_result = _parse_quality_payload(content)
                 content_matches = semantic_result == {"sum": 42, "word": "canary"}
+            if finish == "incomplete":
+                # 2026-11-20: a Responses turn cut by max_output_tokens is
+                # a probe-budget verdict, not a route fault; the flat budget
+                # comment above documents the same case for chat/completions.
+                reason = (data.get("incomplete_details") or {}).get("reason") or ""
+                if reason == "max_output_tokens":
+                    _emit_generation_report(
+                        report,
+                        model,
+                        started,
+                        200,
+                        finish=finish,
+                        error_class="probe_budget",
+                        output_state=output_state,
+                    )
+                    result = max(result, 20)
+                    if not continue_after_failure:
+                        return result
+                    continue
             if (
                 not content_matches
                 or finish != "stop"

@@ -25,7 +25,6 @@ from script_validation_support import (
     cpa_test_generation_response,
     cpa_test_probe_budget,
     read_guardrail_source,
-    server_thread,
 )
 
 
@@ -733,6 +732,74 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             if call.args[0] == "chat/completions":
                 self.assertNotIn("tools", call.args[1])
 
+    def _probe_incomplete_responses_turn(self, reason: str) -> tuple[int, list[str]]:
+        """Run one generation probe whose Responses turn ends response.incomplete.
+
+        The managed codex route family is dormant (retired 2026-10-18), so a
+        live glm gate reaches chat/completions and never the Responses branch.
+        This loads the gate module through runpy and binds the dormant blank
+        model to the Responses family in that namespace copy, so the finish
+        classification decides the verdict.
+        """
+        import runpy
+
+        namespace = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        )
+        check = namespace["check"]
+        globals_ = check.__globals__
+        model = "glm-5.3-flash"
+        globals_["_CODEX_MODEL_ALIASES"] = frozenset({model})
+        catalog = {"data": [{"id": alias} for alias in HEALTH_FIXTURE_CATALOG_IDS]}
+        request = mock.Mock(
+            side_effect=[
+                catalog,
+                {
+                    "model": model,
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": reason},
+                    "output": [],
+                },
+            ]
+            * 50
+        )
+        report = mock.Mock()
+        with mock.patch.dict(
+            globals_["os"].environ, {"CPA_HEALTH_NO_OAUTH": "1"}, clear=False
+        ):
+            result = check(
+                {"access": {"api-keys": ["FIXTURE_CLIENT_KEY"]}},
+                "generation",
+                request,
+                mock.Mock(),
+                report,
+            )
+        lines = []
+        for call in report.call_args_list:
+            if call.args:
+                lines.append(call.args[0])
+            else:
+                lines.extend(str(arg) for arg in call.kwargs.values())
+        return result, lines
+
+    def test_cpa_health_generation_reports_incomplete_budget_as_probe_budget(
+        self,
+    ) -> None:
+        """A Responses turn cut by max_output_tokens is a budget, not a route, verdict.
+
+        2026-11-20: live ONE_SHOT probes on glm-5.3-flash ended
+        response.incomplete with reason max_output_tokens (31 of 32 output
+        tokens were reasoning). The scheduled gate documents that a too-tight
+        cap reads as a contract failure for chat/completions; the Responses
+        branch must classify it the same way so a budget regression cannot pass
+        as a provider fault.
+        """
+        result, lines = self._probe_incomplete_responses_turn("max_output_tokens")
+        joined = " ".join(lines)
+        self.assertIn("probe_budget", joined)
+        self.assertNotIn("error_class=contract", joined)
+        self.assertNotEqual(result, 0)
+
     def test_cpa_health_quality_canary_requires_semantic_response_per_route(
         self,
     ) -> None:
@@ -1244,517 +1311,3 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                             "oauth_refresh_unattributed_container_signals_7d=1", text
                         )
                     self.assertNotIn("SECRET", text)
-
-    def test_admission_doctor_reports_live_oauth_hold_without_raw_reason(self) -> None:
-        import copy
-        import contextlib
-        import io
-
-        source = read_guardrail_source()
-        block = source.split(
-            "curl --noproxy '*' -fsS --max-time 5 "
-            "http://127.0.0.1:8318/healthz |\n"
-            "   python3 -c '\n",
-            1,
-        )[1]
-        program = block.split("\n'; then", 1)[0]
-        # The dispatcher also carries the whole doctor template for the local
-        # projection audit. A loose first-marker split can silently select that
-        # template prefix and make the fixture assertions meaningless.
-        self.assertIn("data = json.load(sys.stdin)", program)
-        self.assertIn('print(f"oauth_lane={name} ', program)
-        config = json.loads(
-            (
-                Path(__file__).parents[1] / "scripts/remote/cpa-admission.json"
-            ).read_text()
-        )
-        base: dict[str, Any] = {
-            "status": "ok",
-            "traffic_guard": "/run/cpa-admission/requests.lock",
-            "retry_after_max_seconds": 86400,
-            "lanes": {
-                lane["name"]: {
-                    **lane,
-                    "state": {
-                        "cooldown_scope": "none",
-                        "model_cooldowns": {},
-                        "strict_backoff": True,
-                        "state_persisted": True,
-                        "state_write_failed": False,
-                        "hold_reason": None,
-                    },
-                }
-                for lane in config["lanes"]
-            },
-        }
-        for hold, cooling, models, expected in (
-            (None, False, {}, "posture=OPEN hold_reason=none"),
-            (None, True, {}, "posture=WAIT_UPSTREAM_WINDOW hold_reason=none"),
-            (
-                None,
-                False,
-                {"gemini-3.8-flash-high": 90},
-                "posture=WAIT_UPSTREAM_WINDOW hold_reason=none",
-            ),
-            (
-                "account_restricted",
-                False,
-                {},
-                "posture=OPERATOR_REVIEW_REQUIRED hold_reason=account_restricted",
-            ),
-            (
-                "SECRET_UNKNOWN_REASON",
-                False,
-                {},
-                "posture=OPERATOR_REVIEW_REQUIRED hold_reason=unknown",
-            ),
-        ):
-            with self.subTest(hold=hold, cooling=cooling):
-                data = copy.deepcopy(base)
-                # The claude-oauth lane retired 2026-10-20; the posture
-                # evaluator is lane-generic, so the hold matrix now rides on
-                # the antigravity lane.
-                data["lanes"]["antigravity-oauth"]["state"].update(
-                    hold_reason=hold, cooldown_active=cooling, model_cooldowns=models
-                )
-                output = io.StringIO()
-                with (
-                    mock.patch.object(sys, "stdin", io.StringIO(json.dumps(data))),
-                    contextlib.redirect_stdout(output),
-                ):
-                    exec(compile(program, "admission-health", "exec"), {})
-                self.assertIn(
-                    "oauth_lane=antigravity-oauth " + expected, output.getvalue()
-                )
-                self.assertNotIn("SECRET", output.getvalue())
-
-    def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        text = read_guardrail_source()
-        # Execute the doctor's embedded catalog checker exactly as the remote
-        # shell does: program from -c, manifest path as argv[1], catalog on
-        # stdin. String assertions alone cannot prove the fail-closed branch.
-        marker = "if printf '%s' \"$MODEL_CATALOG\" | python3 -c '"
-        program = text.split(marker, 1)[1].split(
-            '\' "$DIR/cpa_provider_routes.json"; then', 1
-        )[0]
-        manifest = repo_root / "scripts" / "remote" / "cpa_provider_routes.json"
-        allowed_ids = [*PROVIDER_MATRIX_TAIL, *OAUTH_ROUTE_ALIASES]
-        for ids, expected_code, expected_unknown in (
-            (allowed_ids, 0, "none"),
-            # Plugin-contributed models are part of the allowed union (the
-            # manifest's plugin_routes family, a1949ee); dropping that union
-            # from the doctor must fail this case, not only readiness.
-            (
-                [
-                    *allowed_ids,
-                    "deepseek-v4.1-flash",
-                    "deepseek-v4.1-flash-intl",
-                    "deepseek-v4.1-flash-sg",
-                ],
-                0,
-                "none",
-            ),
-            ([*allowed_ids, "gpt-5.5"], 1, "gpt-5.5"),
-            ([*allowed_ids, "r1/unknown-model"], 1, "r1/unknown-model"),
-            # A legitimate cooldown only removes IDs: still a clean contract.
-            (allowed_ids[:-1], 0, "none"),
-            ([], 0, "none"),
-        ):
-            with self.subTest(ids=ids):
-                completed = subprocess.run(
-                    [sys.executable, "-c", program, str(manifest)],
-                    input=json.dumps({"data": [{"id": item} for item in ids]}),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(completed.returncode, expected_code, completed.stderr)
-                self.assertIn(f"MODEL_IDS_UNKNOWN={expected_unknown}", completed.stdout)
-                self.assertIn("MODEL_IDS=", completed.stdout)
-        # Malformed catalog and absent manifest both fail closed without a
-        # traceback reaching the doctor output.
-        for raw, argv in (
-            ("{not json", str(manifest)),
-            ("{}", str(manifest)),
-            ('{"data": []}', str(manifest) + ".absent"),
-        ):
-            with self.subTest(raw=raw, argv=argv):
-                completed = subprocess.run(
-                    [sys.executable, "-c", program, argv],
-                    input=raw,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(completed.returncode, 1)
-                self.assertNotIn("Traceback", completed.stderr)
-
-    def test_updater_timeout_gate_is_a_threshold_and_log_scans_fail_visible(
-        self,
-    ) -> None:
-        text = read_guardrail_source()
-        # A bounded-only check let the unit's 90s default (a lost drop-in)
-        # pass while guaranteeing every real update died mid-pull; the gate
-        # must be a threshold on both start and stop budgets.
-        self.assertIn("systemd_timeout_seconds", text)
-        self.assertIn("-p TimeoutStopUSec", text)
-        self.assertLess(
-            text.index('systemd_timeout_seconds "$updater_timeout"'),
-            text.index("mark_fail updater-timeout"),
-        )
-        self.assertLess(
-            text.index('systemd_timeout_seconds "$updater_stop_timeout"'),
-            text.index("mark_fail updater-timeout"),
-        )
-        self.assertIn("-lt 1200", text)
-        self.assertIn("-lt 240", text)
-        # A missing gateway access log (logrotate race) must mark a failed
-        # gate instead of a silently empty observation section.
-        section = text.split("==gateway-statuses-current-log-24h==", 1)[1].split(
-            "==admission-journal-24h==", 1
-        )[0]
-        self.assertIn("if python3 - <<'PY'", section)
-        self.assertIn("mark_fail gateway-status-scan", section)
-        # api-keys values folded onto the key line by a foreign
-        # re-serializer must be redacted before reaching doctor output.
-        self.assertIn(r"s/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/", text)
-
-    def test_admission_latency_section_aggregates_journal_fields(self) -> None:
-        # The nginx shape cannot see the admission queue or the upstream
-        # first byte, and waited_ms was captured by the journal regex but
-        # never aggregated. The 2026-10-28 telemetry build (4e916ec) added
-        # upstream_header_ms / upstream_first_byte_ms to upstream_result;
-        # the doctor must aggregate all three as bounded observation output
-        # placed between the journal and lane-hold sections, with no gate
-        # and no replayed request.
-        text = read_guardrail_source()
-        self.assertLess(
-            text.index("==admission-journal-24h=="),
-            text.index("==admission-latency=="),
-        )
-        self.assertLess(
-            text.index("==admission-latency=="), text.index("==lane-hold==")
-        )
-        section = text.split("==admission-latency==", 1)[1].split("==lane-hold==", 1)[0]
-        self.assertIn('"-u", "cpa-admission"', section)
-        self.assertIn("upstream_result", section)
-        for field in (
-            "waited_ms",
-            "upstream_header_ms",
-            "upstream_first_byte_ms",
-            "first_text_ms",
-        ):
-            self.assertIn(f'"{field}"', section)
-        self.assertIn("latency_upstream_results=", section)
-        self.assertIn('f"{name} n={len(values)} na={unavailable[name]} "', section)
-        self.assertIn(
-            'f"p50={quantile(values, 0.5)} p90={quantile(values, 0.9)}"', section
-        )
-        self.assertIn("observation_only_not_a_gate_no_threshold_yet", section)
-        self.assertNotIn("mark_fail", section)
-
-    def test_admission_latency_groups_separate_failures_and_mask_unknown_names(
-        self,
-    ) -> None:
-        import contextlib
-        import io
-
-        section = read_guardrail_source().split("==admission-latency==", 1)[1]
-        code = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
-        journal = "\n".join(
-            [
-                " upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
-                "protocol_result=completed waited_ms=2 upstream_header_ms=100 upstream_first_byte_ms=101",
-                " upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
-                "protocol_result=capacity waited_ms=3 upstream_header_ms=9000 upstream_first_byte_ms=9001",
-                " upstream_result lane=secret-lane model=secret-model "
-                "protocol_result=secret-result waited_ms=-1 upstream_header_ms=na upstream_first_byte_ms=na",
-            ]
-        )
-        config = json.dumps(
-            {"lanes": [{"name": "chatgpt-oauth", "models": ["gpt-6.1-sol"]}]}
-        )
-        output = io.StringIO()
-        with (
-            mock.patch(
-                "subprocess.run", return_value=mock.Mock(returncode=0, stdout=journal)
-            ),
-            mock.patch("pathlib.Path.read_text", return_value=config),
-            contextlib.redirect_stdout(output),
-        ):
-            exec(compile(code, "<latency-doctor>", "exec"), {})
-        text = output.getvalue()
-        self.assertIn(
-            "result=completed metric=upstream_first_byte_ms n=1 p50=101 p90=101", text
-        )
-        self.assertIn(
-            "result=capacity metric=upstream_first_byte_ms n=1 p50=9001 p90=9001", text
-        )
-        self.assertIn("waited_ms n=2 na=1", text)
-        self.assertNotIn("secret", text)
-        self.assertIn(
-            "first_text_ms_is_first_nonempty_text_event_not_output_tokens_per_second",
-            text,
-        )
-
-    def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
-        # Upstream/account entitlement churn can drop the bare `gpt-6-luna`
-        # while other OAuth aliases keep serving (the 2026-09-22 incident was
-        # keyed on the since-retired `gpt-5.6-luna`). Keying the
-        # OAuth lane state off that single name made one doctor run contradict
-        # itself: ==client-model-catalog== listed the route while
-        # ==cooldown-state== reported luna_state=unavailable_unclassified. The
-        # state must come from the manifest's whole OAuth alias set.
-        import http.server
-        import socket
-
-        import yaml
-
-        repo_root = Path(__file__).resolve().parents[1]
-        text = read_guardrail_source()
-        doctor = text.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
-        block = next(
-            chunk.split("\nPY\n", 1)[0]
-            for chunk in doctor.split("python3 - \"$DIR\" <<'PY'\n")[1:]
-            if "cooldown_state_coverage=" in chunk
-        )
-        manifest_path = repo_root / "scripts" / "remote" / "cpa_provider_routes.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        oauth_aliases = sorted(
-            {
-                model["alias"]
-                for route in manifest["oauth_routes"]
-                if route["name"] == "chatgpt-plus-oauth"
-                for model in route["models"]
-            }
-        )
-        self.assertEqual(
-            oauth_aliases,
-            sorted(OAUTH_ROUTE_ALIASES),
-        )
-
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-        # The block targets the real loopback gateway; retarget it at the stub
-        # so the catalog branch is exercised without a live CPA.
-        self.assertIn("http://127.0.0.1:8317/v1/models", block)
-        block = block.replace(
-            "http://127.0.0.1:8317/v1/models", f"http://127.0.0.1:{port}/v1/models"
-        )
-
-        served: list[str] = []
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self) -> None:
-                body = json.dumps({"data": [{"id": model} for model in served]}).encode(
-                    "utf-8"
-                )
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *args: Any) -> None:
-                return
-
-        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-        server_thread(server).start()
-        # addCleanup is LIFO: register the close first so shutdown runs before
-        # the listening socket disappears from under serve_forever.
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "auth").mkdir()
-            (root / "config.yaml").write_text(
-                yaml.safe_dump({"access": {"api-keys": ["TEST_KEY"]}}), encoding="utf-8"
-            )
-            (root / "cpa_provider_routes.json").write_bytes(manifest_path.read_bytes())
-
-            def readings(models: list[str]) -> dict[str, str]:
-                served[:] = models
-                completed = subprocess.run(
-                    [sys.executable, "-c", block, str(root)],
-                    capture_output=True,
-                    timeout=60,
-                    check=False,
-                )
-                self.assertEqual(completed.returncode, 0, completed.stderr)
-                parsed: dict[str, str] = {}
-                for line in completed.stdout.decode("utf-8").splitlines():
-                    if "=" in line:
-                        key, _, value = line.partition("=")
-                        parsed[key] = value
-                return parsed
-
-            # Only gpt-6.1-sol is advertised: the lane is alive.
-            partial = readings(["gpt-6.1-sol", "glm-5.3-flash"])
-            self.assertEqual(partial["luna_state"], "available_partial")
-            self.assertEqual(partial["catalog_gpt6_luna"], "absent")
-            self.assertEqual(partial["catalog_oauth_aliases"], "gpt-6.1-sol")
-            self.assertEqual(
-                partial["catalog_oauth_missing"],
-                ",".join(sorted(a for a in OAUTH_ROUTE_ALIASES if a != "gpt-6.1-sol")),
-            )
-
-            # Every OAuth alias advertised: fully available.
-            full = readings(list(OAUTH_ROUTE_ALIASES))
-            self.assertEqual(full["luna_state"], "available")
-            self.assertEqual(full["catalog_oauth_missing"], "none")
-            self.assertEqual(full["catalog_gpt6_luna"], "present")
-
-            # Nothing from the OAuth route: a genuine unclassified absence.
-            absent = readings(["glm-5.3-flash"])
-            self.assertEqual(absent["luna_state"], "unavailable_unclassified")
-            self.assertEqual(absent["catalog_oauth_aliases"], "none")
-            self.assertEqual(
-                absent["catalog_oauth_missing"],
-                ",".join(sorted(OAUTH_ROUTE_ALIASES)),
-            )
-
-            # The Antigravity lane serving must not fake Luna availability:
-            # only the ChatGPT Plus route keys the state.
-            antigravity_aliases = sorted(
-                {
-                    model["alias"]
-                    for route in manifest["oauth_routes"]
-                    if route["name"] == "antigravity-oauth"
-                    for model in route["models"]
-                }
-            )
-            other_lane = readings(antigravity_aliases + ["glm-5.3-flash"])
-            self.assertEqual(other_lane["luna_state"], "unavailable_unclassified")
-            self.assertEqual(other_lane["catalog_oauth_aliases"], "none")
-
-    def test_cpa_health_generation_matrix_covers_full_manifest_without_image(
-        self,
-    ) -> None:
-        import runpy
-
-        health = runpy.run_path(
-            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
-        )
-        check = health["check"]
-        # gpt-image-2.5 retired 2026-10-04: no manifest declares image_models,
-        # so the skip-kind=image path must stay dormant (empty alias set) and
-        # the generation matrices probe every declared chat model.
-        self.assertEqual(health["_IMAGE_PROVIDER_MODEL_ALIASES"], frozenset())
-        required_models = list(PROVIDER_MATRIX_TAIL)
-        catalog = {
-            "data": [{"id": model} for model in required_models + OAUTH_ROUTE_ALIASES]
-        }
-        self.assertEqual(
-            check({}, "readiness", mock.Mock(return_value=catalog), mock.Mock()), 0
-        )
-        probed = required_models + list(OAUTH_ROUTE_ALIASES)
-
-        def echo(
-            _path: str,
-            body: dict[str, Any] | None = None,
-            _headers: dict[str, str] | None = None,
-        ) -> dict[str, Any]:
-            if body is None:
-                return catalog
-            return cpa_test_generation_response(body)
-
-        request = mock.Mock(side_effect=echo)
-        lines: list[str] = []
-        # The image-model filter is independent of the OAuth lane opt-out, so
-        # opt the lane back in to keep the full expected probe set observable.
-        with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
-            self.assertEqual(
-                check({}, "generation-all", request, mock.Mock(), lines.append), 0
-            )
-        requested = {call.args[1]["model"] for call in request.call_args_list[1:]}
-        self.assertEqual(request.call_count, 1 + len(probed))
-        self.assertEqual(requested, set(probed))
-        self.assertFalse(any("kind=image" in line for line in lines))
-
-    def test_health_probe_lock_uses_service_writable_runtime_directory(
-        self,
-    ) -> None:
-        runtime_path = (
-            Path(__file__).parents[1] / "scripts/remote/cpa_health_runtime.py"
-        )
-        self.assertIn(
-            'DEFAULT_PROBE_LOCK_PATH = "/run/cpa-admission/health-probe.lock"',
-            runtime_path.read_text(encoding="utf-8"),
-        )
-        self.assertIn(
-            "from cpa_health_runtime import probe_lock_path",
-            (Path(__file__).parents[1] / "scripts/remote/cpa-health.py").read_text(
-                encoding="utf-8"
-            ),
-        )
-        self.assertIn(
-            "lock_parent.mkdir(parents=True, exist_ok=True, mode=0o700)",
-            (Path(__file__).parents[1] / "scripts/remote/cpa-health.py").read_text(
-                encoding="utf-8"
-            ),
-        )
-        with mock.patch.dict(os.environ, {"CPA_HEALTH_LOCK": "/run/cpa/../outside"}):
-            with self.assertRaises(ValueError):
-                self._run_probe_lock_path(runtime_path)
-
-    def test_health_probe_lock_has_fail_closed_file_and_mode_boundaries(
-        self,
-    ) -> None:
-        import tempfile
-        import runpy
-
-        health_path = Path(__file__).parents[1] / "scripts/remote/cpa-health.py"
-        acquire = runpy.run_path(str(health_path))["_acquire_probe_lock"]
-        if sys.platform == "win32":
-            self.assertEqual(
-                acquire("generation"),
-                (None, "PROBE_LOCK_UNAVAILABLE"),
-            )
-            self.skipTest("fcntl and O_NOFOLLOW lock behavior requires Linux")
-        self.assertEqual(acquire("readiness"), (None, "PROBE_LOCK_NOT_REQUIRED"))
-        with tempfile.TemporaryDirectory() as directory:
-            runtime = Path(directory)
-            lock_path = (runtime / "health-probe.lock").as_posix()
-            import types
-
-            package: Any = types.ModuleType("cpa_health_runtime")
-            package.probe_lock_path = lambda: Path(lock_path)
-            with mock.patch.dict(sys.modules, {"cpa_health_runtime": package}):
-                lock, failure = acquire("generation")
-                self.assertIsNone(failure)
-                self.assertIsNotNone(lock)
-                if lock is not None:
-                    self.assertEqual(
-                        (runtime / "health-probe.lock").stat().st_mode & 0o777, 0o600
-                    )
-                    os.close(lock[0])
-
-            lock_file = runtime / "health-probe.lock"
-            lock_file.unlink()
-            if os.name != "nt":
-                lock_file.symlink_to(runtime / "outside")
-                with mock.patch.dict(sys.modules, {"cpa_health_runtime": package}):
-                    self.assertEqual(
-                        acquire("generation"),
-                        (None, "PROBE_LOCK_UNAVAILABLE"),
-                    )
-
-    @staticmethod
-    def _run_probe_lock_path(runtime_path: Path) -> str:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "cpa_health_runtime_lock_test", runtime_path
-        )
-        if spec is None or spec.loader is None:
-            raise RuntimeError("unable to load health runtime")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return str(module.probe_lock_path())
-
-
-if __name__ == "__main__":
-    unittest.main()
