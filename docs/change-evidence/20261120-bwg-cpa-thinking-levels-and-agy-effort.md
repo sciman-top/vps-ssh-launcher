@@ -153,7 +153,8 @@ BUILT_SHA=f60ea67e04c3a6bd6785302926e2a2cc7022636c5b6ec0c0843b6c815617bc24
   `status=200 header_ms=9 first_text_ms=1079 terminal=response.completed text=OK`。
 - 离线取证（模块内临时探针，已删除）：同一路径 `xhigh → thinkingLevel=high`、`medium → medium`，
   即共享思考校验确实读到了信封等级并按模型能力钳制，而不是把 `xhigh` 原样转给上游。
-- 暂开 `debug: true` 的日志窗口没有产生 thinking debug 行（`logs` 目录为空、日志走容器 stdout），
+- 受控脚本 `outputs/probe-agy-thinking-20261120.py`（仓外存档，`outputs/` 不入库）记录该轮；
+  暂开 `debug: true` 的日志窗口没有产生 thinking debug 行（`logs` 目录为空、日志走容器 stdout），
   因此改用离线探针与线上行为双证；该窗口已还原，`config.yaml` 字节回到开启前。
 
 ### 2. 入站认证面复核：已确认强制，先前"provider key 得 200"为代理绕过假象
