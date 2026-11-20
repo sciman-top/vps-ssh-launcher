@@ -3156,7 +3156,7 @@ except Exception as exc:
         version_check = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("EXPECTED_CN=0.21.27", version_check)
+        self.assertIn("EXPECTED_CN=0.21.29", version_check)
         self.assertIn("EXPECTED_INTL=0.1.40", version_check)
         self.assertIn("LEGACY_SO_PRESENT", version_check)
         self.assertIn("current_container_process_only", version_check)
@@ -3202,13 +3202,13 @@ except Exception as exc:
                 ),
                 # Closed-dark healthy state: only the CN plugin registers.
                 (
-                    "plugin registered plugin_id=workbuddy-provider version=0.21.27",
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.29",
                     0,
-                    "workbuddy-version=cn:0.21.27 intl:disabled_closed_dark_20261117",
+                    "workbuddy-version=cn:0.21.29 intl:disabled_closed_dark_20261117",
                 ),
                 # An INTL registration while the lane is closed = drift.
                 (
-                    "plugin registered plugin_id=workbuddy-provider version=0.21.27\n"
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.29\n"
                     "plugin registered plugin_id=workbuddy-ai-provider version=0.1.40",
                     1,
                     "workbuddy-version=UNEXPECTED_REGISTRATION plugin=workbuddy-ai-provider got=0.1.40",
