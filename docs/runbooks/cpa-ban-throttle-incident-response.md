@@ -265,6 +265,16 @@ retry_after=300` 循环 = 真 hold（人工复核锁，不自动恢复）。部�
 | 第三方"账号管理器"类工具批量操作凭据 | [Antigravity-Manager #646](https://github.com/lbjlaq/Antigravity-Manager/issues/646)（新号 429 风控与该类工具伴生） | 凭据操作只走本仓 guardrails/面板既有事务，不引入外部管理器 |
 | 账号类型集中（jio/pixel/学生号等定向扫荡传闻） | 2026-11-16 社区传闻（按扩大处理） | 现有池保持多来源分散；传闻并入全池暂停纪律处置，不按类型预防性删号 |
 
+2026-11-20 增补（上游 [CLIProxyAPI #7768](https://github.com/router-for-me/CLIProxyAPI/issues/7768)
+运维报告：另一部署的 agy 凭据池 2026-11-16..20 请求级日志，6 次账号级 403）：
+4/6 封禁前有同短消息 `RESOURCE_EXHAUSTED` 429 风暴，1 例无前置风暴（429 是
+相关项不是必要条件）；其余相关因子=新凭据首用后分钟级即上自动化负载、短时
+高突发（个案 ~177rpm）、多凭据共享机房/关联代理 IP、单客户端批量生成、
+**非配额 429 后自动换凭据把上游指纹扩散全池**。对齐本栈：admission 的 429
+分类+容量标记、per-lane RPM 帽、session 粘性与 TOS 池级暂停已覆盖该报告向上游
+请求的熔断诉求；可执行增量仅一条——**新号入池前几小时保持低量**（补 carbon
+档新号时适用）。
+
 ### 降智检测锚（served-model 观测）
 
 - 服务侧已有：doctor `==model-substitution==`（`upstream served model` warn +

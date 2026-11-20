@@ -706,7 +706,10 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
   上游零 capacity/6004 信号（全 200 completed、峰值 455 请求/小时），证明收紧
   挡的是真实工作而非上游风险，按本段上调判据回调到 18；BWG 在 2026-11-01
   04:32Z 的只读探针仍显示 12，且两次拒绝的 `Retry-After` 仅 6s/4s，进一步
-  证明应排队而不是断流。运行态从
+  证明应排队而不是断流。**2026-11-20 观察**：WorkBuddy 自然完成峰值已达
+  18-19 次/60s（admission 计 18 触帽；自然流量审计同步提示社区 14003 口径
+  13-19 rpm 风险区间的上沿），处置=客户端降突发、勿轮换账号/出口 IP；
+  帽 18 维持——低于自然突发带将重演 2026-10-31 挡真实工作的事故。运行态从
   `/healthz` 的 `lanes.<name>.requests_per_minute` 与 `state.rpm_window_used`
   观察。调值属策略改动，需同步 apply/doctor 契约、
   测试与台账；若出现 `lane_reject reason=rate_limited` 且集中在真实会话，
