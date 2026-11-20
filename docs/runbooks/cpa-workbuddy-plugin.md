@@ -392,7 +392,8 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   重新收录并收窄：slot 2 只开放 `deepseek-v4.1-flash-oc` 单宿别名，裸名
   `deepseek-v4.1-flash` 不回 oc 槽、仍属 workbuddy 插件车道独占，旧
   dual-home 与 priority 主备排序不恢复**（doctor `deepseek-route-order`
-  期望 alias-only 模型集，终行 `WB_BARE_ONLY_OC_ALIAS`）。
+  期望 oc 别名集，2026-11-20 起 pin 值 `deepseek+glm-oc`，终行
+  `WB_BARE_ONLY_OC_ALIAS`）。
   providers.env 的 BASE_URL_2/API_KEY_2 映射两次退役期间均保留未动，
   续订沿用原 key。WorkBuddy 插件凭据保持默认 `priority=0`；priority 变更
   热加载不生效，须重启容器。

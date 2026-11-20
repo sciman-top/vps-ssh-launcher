@@ -78,6 +78,16 @@
           "name": "deepseek-v4.1-flash",
           "alias": "deepseek-v4.1-flash-oc",
           "max-context-length": 1000000
+        },
+        {
+          "name": "glm-5.3",
+          "alias": "glm-5.3-oc",
+          "max-context-length": 1000000
+        },
+        {
+          "name": "glm-5.3-flash",
+          "alias": "glm-5.3-flash-oc",
+          "max-context-length": 1000000
         }
       ],
       "optional_models": []
@@ -283,6 +293,8 @@
     "codex-auto-review",
     "gpt-6.2-astra",
     "deepseek-v4.1-flash-oc",
+    "glm-5.3-oc",
+    "glm-5.3-flash-oc",
     "gpt-5.4-mini",
     "gpt-5.5",
     "gpt-5.5-openai-compact",

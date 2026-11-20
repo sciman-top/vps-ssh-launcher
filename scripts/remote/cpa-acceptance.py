@@ -609,12 +609,12 @@ def main():
             },
             {
                 # OpenCode Go is API-key backed in production. Keep its required
-                # catalog model on the loopback fixture so generation readiness
+                # catalog models on the loopback fixture so generation readiness
                 # sees the same approved model set without reaching the provider.
                 # 2026-11-14 re-admission after the subscription renewal: the
-                # user directive narrows slot 2 to ONLY the single-homed
-                # deepseek-v4.1-flash-oc alias; the pooled DeepSeek name stays
-                # on the WorkBuddy fixture.
+                # user directive narrows slot 2 to single-homed aliases; the
+                # pooled DeepSeek name stays on the WorkBuddy fixture.
+                # 2026-11-20 user directive adds the GLM-5.3 family aliases.
                 "name": "opencode",
                 "base-url": "http://127.0.0.1:18318/zen/go/v1",
                 "api-key-entries": [{"api-key": "fixture-opencode"}],
@@ -623,6 +623,14 @@ def main():
                     {
                         "name": "deepseek-v4.1-flash-oc",
                         "alias": "deepseek-v4.1-flash-oc",
+                    },
+                    {
+                        "name": "glm-5.3-oc",
+                        "alias": "glm-5.3-oc",
+                    },
+                    {
+                        "name": "glm-5.3-flash-oc",
+                        "alias": "glm-5.3-flash-oc",
                     },
                 ],
             },

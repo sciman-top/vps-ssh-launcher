@@ -1578,12 +1578,44 @@ docker() {{
                 )["tos-pause-window"] = policy["EXPECTED_CONFIG_PATHS"][
                     ("oauth", "providers", "antigravity", "tos-pause-window")
                 ]
+                expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
+                    "antigravity", {}
+                )["connection-pool"] = {
+                    "enabled": policy["EXPECTED_CONFIG_PATHS"][
+                        (
+                            "oauth",
+                            "providers",
+                            "antigravity",
+                            "connection-pool",
+                            "enabled",
+                        )
+                    ],
+                    "idle-conn-timeout": policy["EXPECTED_CONFIG_PATHS"][
+                        (
+                            "oauth",
+                            "providers",
+                            "antigravity",
+                            "connection-pool",
+                            "idle-conn-timeout",
+                        )
+                    ],
+                    "max-idle-conns-per-host": policy["EXPECTED_CONFIG_PATHS"][
+                        (
+                            "oauth",
+                            "providers",
+                            "antigravity",
+                            "connection-pool",
+                            "max-idle-conns-per-host",
+                        )
+                    ],
+                }
                 self.assertEqual(generated, expected)
 
         for fixture in (
             {"oauth": None},
             {"oauth": {"providers": []}},
             {"oauth": {"providers": {"antigravity": "invalid"}}},
+            {"oauth": {"providers": {"antigravity": {"connection-pool": "invalid"}}}},
         ):
             with self.subTest(invalid=fixture):
                 result = subprocess.run(
@@ -1597,6 +1629,76 @@ docker() {{
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("REFUSE", result.stderr)
                 self.assertEqual(result.stdout, "")
+
+    def test_apply_regenerates_oauth_request_scoped_errors(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        source = read_guardrail_source()
+        payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        start_marker = 'oauth_request_scoped_after = oauth_block_after.get("request-scoped-errors")\n'
+        end_marker = "\n# The requests.payload block is owned by cpa_policy:"
+        block = start_marker + payload.split(start_marker, 1)[1].split(end_marker, 1)[0]
+        script = (
+            "import json, sys\noauth_block_after = json.loads(sys.stdin.read())\n"
+            + block
+            + "print(json.dumps(oauth_block_after))\n"
+        )
+        fixtures: list[dict[str, Any]] = [
+            {},
+            {"request-scoped-errors": None},
+            {
+                "request-scoped-errors": {
+                    "antigravity": [
+                        {"status": 429, "match": ["stale"], "action": "continue"}
+                    ],
+                    "vertex": [
+                        {
+                            "status": 400,
+                            "match": ["maximum_context_length"],
+                            "action": "stop",
+                        }
+                    ],
+                }
+            },
+        ]
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture):
+                result = subprocess.run(
+                    [sys.executable, "-c", script],
+                    input=json.dumps(fixture),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                generated = json.loads(result.stdout)
+                expected = json.loads(json.dumps(fixture))
+                expected_rse = expected.get("request-scoped-errors") or {}
+                expected_rse["antigravity"] = policy[
+                    "EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"
+                ]["antigravity"]
+                expected_rse["codex"] = policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"][
+                    "codex"
+                ]
+                expected["request-scoped-errors"] = expected_rse
+                self.assertEqual(generated, expected)
+
+        invalid = {"request-scoped-errors": ["not-a-mapping"]}
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            input=json.dumps(invalid),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("REFUSE", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_doctor_policy_summary_never_selects_management_secret(self) -> None:
         source = read_guardrail_source()
@@ -2260,6 +2362,19 @@ except Exception as exc:
                 {
                     "name": "deepseek-v4.1-flash",
                     "alias": "deepseek-v4.1-flash-oc",
+                    "max-context-length": 1000000,
+                },
+                # 2026-11-20 user directive: the GLM-5.3 family joins the
+                # slot as single-homed aliases (upstream glm-5.3 /
+                # glm-5.3-flash), same tombstone rule as the deepseek alias.
+                {
+                    "name": "glm-5.3",
+                    "alias": "glm-5.3-oc",
+                    "max-context-length": 1000000,
+                },
+                {
+                    "name": "glm-5.3-flash",
+                    "alias": "glm-5.3-flash-oc",
                     "max-context-length": 1000000,
                 },
             ],
@@ -3537,6 +3652,116 @@ except Exception as exc:
         self.assertIn("LastTriggerUSec", doctor)
         self.assertIn("timer_last_trigger_age_hours", doctor)
         self.assertIn("timer_last_trigger=STALE", doctor)
+
+    def test_doctor_timer_readout_parses_systemd_durations_and_calendar_triggers(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for doctor timer readout check")
+        doctor = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-doctor.sh"
+        ).read_text(encoding="utf-8")
+        timer_block = doctor.split('echo "==timer=="\n', 1)[1].split(
+            'echo "==timer-result=="', 1
+        )[0]
+        cases = [
+            (
+                "5min-with-journal",
+                "5min",
+                "Fri 2026-11-20 04:02:11 UTC",
+                "2026-11-18T04:01:02+0000 bwg systemd[1]: Starting cliproxyapi-update.service...\n"
+                "2026-11-19T04:03:45+0000 bwg systemd[1]: Starting cliproxyapi-update.service...\n"
+                "2026-11-20T04:02:11+0000 bwg systemd[1]: Starting cliproxyapi-update.service...\n",
+                "timer_randomized_delay_seconds=300",
+                "timer_randomized_delay=5min",
+                "timer_last_triggers=2026-11-18T04:01:02+0000,2026-11-19T04:03:45+0000,2026-11-20T04:02:11+0000",
+            ),
+            (
+                "legacy-usec-fallback-last-trigger",
+                "300000000",
+                "Fri 2026-11-20 04:02:11 UTC",
+                "-- No entries --\n",
+                "timer_randomized_delay_seconds=300",
+                "timer_randomized_delay=5min",
+                "timer_last_triggers=Fri 2026-11-20 04:02:11 UTC",
+            ),
+            (
+                "non-minute-seconds",
+                "90s",
+                "0",
+                "",
+                "timer_randomized_delay_seconds=90",
+                "timer_randomized_delay=90s",
+                "timer_last_triggers=UNKNOWN",
+            ),
+            (
+                "compound-duration",
+                "1h 30min",
+                "n/a",
+                "",
+                "timer_randomized_delay_seconds=5400",
+                "timer_randomized_delay=90min",
+                "timer_last_triggers=UNKNOWN",
+            ),
+            (
+                "infinity-unknown",
+                "infinity",
+                "",
+                "",
+                "timer_randomized_delay_seconds=UNKNOWN",
+                "timer_randomized_delay=UNKNOWN",
+                "timer_last_triggers=UNKNOWN",
+            ),
+        ]
+        for (
+            label,
+            delay_raw,
+            last_trigger,
+            journal_out,
+            want_sec,
+            want_dur,
+            want_triggers,
+        ) in cases:
+            with self.subTest(case=label):
+                harness = (
+                    "set -u\n"
+                    "systemctl() {\n"
+                    '  case "$1" in\n'
+                    "    is-enabled) echo enabled ;;\n"
+                    "    is-active) echo active ;;\n"
+                    "    show)\n"
+                    '      case "$*" in\n'
+                    '        *NextElapseUSecRealtime*) echo "Sat 2026-11-21 04:03:00 UTC" ;;\n'
+                    '        *TimersCalendar*) echo "{ OnCalendar=*-*-* 04:00:00 ; next_elapse=Sat 2026-11-21 04:03:00 UTC }" ;;\n'
+                    '        *RandomizedDelayUSec*) printf "%s\\n" "$STUB_DELAY" ;;\n'
+                    '        *LastTriggerUSec*) printf "%s\\n" "$STUB_LAST_TRIGGER" ;;\n'
+                    "      esac\n"
+                    "      ;;\n"
+                    "  esac\n"
+                    "}\n"
+                    "journalctl() {\n"
+                    '  printf "%s" "$STUB_JOURNAL"\n'
+                    "}\n" + timer_block
+                )
+                completed = subprocess.run(
+                    self._bash_command(bash, "-c", harness),
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "STUB_DELAY": delay_raw,
+                        "STUB_LAST_TRIGGER": last_trigger,
+                        "STUB_JOURNAL": journal_out,
+                    },
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                lines = completed.stdout.splitlines()
+                self.assertIn(want_sec, lines, completed.stdout)
+                self.assertIn(want_dur, lines, completed.stdout)
+                self.assertIn(want_triggers, lines, completed.stdout)
 
     def test_cpa_guardrails_doctor_asserts_443_lane_limiter_contract(self) -> None:
         source = read_guardrail_source()

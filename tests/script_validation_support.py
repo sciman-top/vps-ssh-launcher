@@ -61,9 +61,12 @@ def _lane_script(root: Path, lane: str) -> Path:
 
 # gpt-6.1-sol-input retired 2026-11-11. 2026-11-14 re-admission: the aliased
 # OpenCode slot entry relays the upstream body verbatim, so the probe
-# response echoes the upstream model name.
+# response echoes the upstream model name. 2026-11-20: the GLM-5.3 family
+# aliases on the same slot behave identically.
 CPA_TEST_PROVIDER_ALIASES: dict[str, str] = {
     "deepseek-v4.1-flash-oc": "deepseek-v4.1-flash",
+    "glm-5.3-oc": "glm-5.3",
+    "glm-5.3-flash-oc": "glm-5.3-flash",
 }
 
 # Codex-family routes answer over the Responses API, so health fixtures must
@@ -360,6 +363,11 @@ class ScriptValidationMixin:
                         "antigravity": {
                             "antigravity-credits": False,
                             "tos-pause-window": "2h",
+                            "connection-pool": {
+                                "enabled": True,
+                                "idle-conn-timeout": "30s",
+                                "max-idle-conns-per-host": 2,
+                            },
                             "sensitive-words": ["gpt", "openai", "codex"],
                             "sensitive-words-replace": {
                                 "chatgpt": "chatservice",
@@ -369,6 +377,9 @@ class ScriptValidationMixin:
                             },
                         }
                     },
+                    "request-scoped-errors": json.loads(
+                        json.dumps(policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"])
+                    ),
                     "settings": json.loads(
                         json.dumps(route_manifest["oauth_settings"])
                     ),

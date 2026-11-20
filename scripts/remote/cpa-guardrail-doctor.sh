@@ -1353,7 +1353,7 @@ echo "==cpa-policy=="
 # foreign re-serialization may have folded onto the same line as an api-keys
 # key, so a credential cannot reach doctor output ahead of the fail-closed
 # catalog check below.
-grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-rebind-on:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    model-level-cooling:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|  settings:|    max-context-length:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|  claude:|claude-header-defaults:|  stabilize-device-profile:|config-version:)" "$DIR/config.yaml" | sed -E 's/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/' || true
+grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-rebind-on:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    model-level-cooling:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|  request-scoped-errors:|  settings:|    max-context-length:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|  claude:|claude-header-defaults:|  stabilize-device-profile:|config-version:)" "$DIR/config.yaml" | sed -E 's/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/' || true
 # Remind operator of any HTTP (cleartext) provider slots from the deployed
 # route manifest. The slot-3 http://35.213.82.91:8003 is a user-authorised
 # exception; no mark_fail, but the reminder prevents relying on memory alone.
@@ -1545,22 +1545,34 @@ opencode_routes = [
 # under a user directive that narrows it to a single public surface: the
 # deepseek-v4.1-flash-oc alias. The bare deepseek-v4.1-flash name stays
 # workbuddy-only (no dual-home) and the old priority ordering is gone; the
-# exact model set below is the whole manifest contract.
+# exact model set below is the whole manifest contract. 2026-11-20 user
+# directive adds the GLM-5.3 family as single-homed aliases on the same
+# slot (upstream glm-5.3 / glm-5.3-flash); the set below stays exhaustive.
 expected_opencode_models = [
     {
         "name": "deepseek-v4.1-flash",
         "alias": "deepseek-v4.1-flash-oc",
         "max-context-length": 1000000,
-    }
+    },
+    {
+        "name": "glm-5.3",
+        "alias": "glm-5.3-oc",
+        "max-context-length": 1000000,
+    },
+    {
+        "name": "glm-5.3-flash",
+        "alias": "glm-5.3-flash-oc",
+        "max-context-length": 1000000,
+    },
 ]
 if (
     len(opencode_routes) != 1
     or opencode_routes[0].get("models") != expected_opencode_models
 ):
-    print("deepseek-manifest-opencode-models=DRIFT expected=alias-only")
+    print("deepseek-manifest-opencode-models=DRIFT expected=deepseek+glm-oc")
     failed = True
 else:
-    print("deepseek-manifest-opencode-models=alias-only")
+    print("deepseek-manifest-opencode-models=deepseek+glm-oc")
 
 compatibility = (
     config.get("api-keys", {}).get("openai-compatibility", [])
@@ -1585,12 +1597,14 @@ live_opencode_pairs = [
     if isinstance(model, dict)
 ]
 if len(live_opencode) != 1 or live_opencode_pairs != [
-    ("deepseek-v4.1-flash", "deepseek-v4.1-flash-oc")
+    ("deepseek-v4.1-flash", "deepseek-v4.1-flash-oc"),
+    ("glm-5.3", "glm-5.3-oc"),
+    ("glm-5.3-flash", "glm-5.3-flash-oc"),
 ]:
-    print("deepseek-live-opencode-models=DRIFT expected=alias-only")
+    print("deepseek-live-opencode-models=DRIFT expected=deepseek+glm-oc")
     failed = True
 else:
-    print("deepseek-live-opencode-models=alias-only")
+    print("deepseek-live-opencode-models=deepseek+glm-oc")
 
 auth_dir = Path(sys.argv[3])
 # 2026-11-17 luode0320 cutover: INTL auth files carry the workbuddyai-
@@ -1930,24 +1944,77 @@ case "$TIMER_CALENDAR" in
   ''|*[![:print:]]*) echo "timer_on_calendar=UNKNOWN" ;;
   *) echo "timer_on_calendar=$TIMER_CALENDAR" ;;
 esac
+doctor_duration_seconds() {
+  [ -n "${1:-}" ] || { printf '\n'; return 0; }
+  total=0
+  for token in $1; do
+    case "$token" in
+      ''|infinity|*infinity) printf '\n'; return 0 ;;
+    esac
+    matched=0
+    for suffix in ms us min h s; do
+      case "$token" in
+        *"$suffix")
+          value=${token%"$suffix"}
+          case "$value" in
+            ''|*[!0-9]*) printf '\n'; return 0 ;;
+          esac
+          case "$suffix" in
+            ms) total=$((total + value / 1000)) ;;
+            us) total=$((total + value / 1000000)) ;;
+            min) total=$((total + value * 60)) ;;
+            h) total=$((total + value * 3600)) ;;
+            s) total=$((total + value)) ;;
+          esac
+          matched=1
+          break
+          ;;
+      esac
+    done
+    if [ "$matched" -eq 0 ]; then
+      case "$token" in
+        *[!0-9]*) printf '\n'; return 0 ;;
+        # Bare integer: systemd's raw microsecond format on older builds.
+        *) total=$((total + token / 1000000)) ;;
+      esac
+    fi
+  done
+  printf '%s\n' "$total"
+}
 TIMER_RANDOM_DELAY_USEC=$(systemctl show cliproxyapi-update.timer -p RandomizedDelayUSec --value 2>/dev/null || true)
-case "$TIMER_RANDOM_DELAY_USEC" in
+TIMER_RANDOM_DELAY_SEC=$(doctor_duration_seconds "$TIMER_RANDOM_DELAY_USEC")
+case "$TIMER_RANDOM_DELAY_SEC" in
   ''|*[!0-9]*) echo "timer_randomized_delay_seconds=UNKNOWN" ;;
-  *) echo "timer_randomized_delay_seconds=$(( TIMER_RANDOM_DELAY_USEC / 1000000 ))" ;;
+  *) echo "timer_randomized_delay_seconds=$TIMER_RANDOM_DELAY_SEC" ;;
 esac
 # Same value as a duration (an operator reads "5min" faster than "300") plus
 # the last four triggers, so a slot split that starts deferring becomes
 # visible without opening the journal. Readout only.
-case "$TIMER_RANDOM_DELAY_USEC" in
+case "$TIMER_RANDOM_DELAY_SEC" in
   ''|*[!0-9]*) echo "timer_randomized_delay=UNKNOWN" ;;
-  *) echo "timer_randomized_delay=$(( TIMER_RANDOM_DELAY_USEC / 60000000 ))min" ;;
+  *)
+    if [ $(( TIMER_RANDOM_DELAY_SEC % 60 )) -eq 0 ]; then
+      echo "timer_randomized_delay=$(( TIMER_RANDOM_DELAY_SEC / 60 ))min"
+    else
+      echo "timer_randomized_delay=${TIMER_RANDOM_DELAY_SEC}s"
+    fi
+    ;;
 esac
-TIMER_LAST_TRIGGERS=$(systemctl show cliproxyapi-update.timer -p TimersMonotonic --value 2>/dev/null || true)
+LAST_TRIGGER=$(systemctl show cliproxyapi-update.timer -p LastTriggerUSec --value 2>/dev/null || true)
+# cliproxyapi-update.timer is an OnCalendar= (realtime) timer, so
+# TimersMonotonic is always empty; read the last four SD_MESSAGE_UNIT_STARTING
+# timestamps from journald and fall back to LastTriggerUSec if rotated/absent.
+TIMER_LAST_TRIGGERS=$(journalctl _PID=1 MESSAGE_ID=7d4958e842da4a758f6c1cdc7b36dcc5 UNIT=cliproxyapi-update.service --no-pager --output=short-iso -n 4 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}' | paste -sd ',' - || true)
+if [ -z "$TIMER_LAST_TRIGGERS" ]; then
+  case "$LAST_TRIGGER" in
+    ''|0|no|n/a) TIMER_LAST_TRIGGERS='' ;;
+    *) TIMER_LAST_TRIGGERS="$LAST_TRIGGER" ;;
+  esac
+fi
 case "$TIMER_LAST_TRIGGERS" in
   ''|*[![:print:]]*) echo "timer_last_triggers=UNKNOWN" ;;
   *) echo "timer_last_triggers=$TIMER_LAST_TRIGGERS" ;;
 esac
-LAST_TRIGGER=$(systemctl show cliproxyapi-update.timer -p LastTriggerUSec --value 2>/dev/null || true)
 case "$LAST_TRIGGER" in
   ''|0|no)
     echo "timer_last_trigger=UNKNOWN"
