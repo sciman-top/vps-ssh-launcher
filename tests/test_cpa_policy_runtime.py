@@ -701,6 +701,192 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 f"expected tos-pause-window pin to reject {bad!r}",
             )
 
+    def test_cpa_policy_pins_antigravity_connection_pool(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+
+        mutations: list[tuple[str, Any]] = [
+            ("missing", None),
+            (
+                "disabled",
+                {
+                    "enabled": False,
+                    "idle-conn-timeout": "30s",
+                    "max-idle-conns-per-host": 2,
+                },
+            ),
+            (
+                "int-bool",
+                {
+                    "enabled": 1,
+                    "idle-conn-timeout": "30s",
+                    "max-idle-conns-per-host": 2,
+                },
+            ),
+            (
+                "bad-timeout",
+                {
+                    "enabled": True,
+                    "idle-conn-timeout": "0s",
+                    "max-idle-conns-per-host": 2,
+                },
+            ),
+            (
+                "bad-max-idle",
+                {
+                    "enabled": True,
+                    "idle-conn-timeout": "30s",
+                    "max-idle-conns-per-host": -1,
+                },
+            ),
+            (
+                "bool-max-idle",
+                {
+                    "enabled": True,
+                    "idle-conn-timeout": "30s",
+                    "max-idle-conns-per-host": True,
+                },
+            ),
+        ]
+        for label, pool_value in mutations:
+            with self.subTest(case=label):
+                mutated = json.loads(json.dumps(config))
+                antigravity = mutated["oauth"]["providers"]["antigravity"]
+                if pool_value is None:
+                    antigravity.pop("connection-pool", None)
+                else:
+                    antigravity["connection-pool"] = pool_value
+                issues = policy["validate_config"](mutated)
+                self.assertTrue(
+                    any("connection-pool" in issue for issue in issues),
+                    f"expected connection-pool pin to reject {label}: {issues}",
+                )
+
+    def test_cpa_policy_pins_oauth_request_scoped_errors_and_regex_semantics(
+        self,
+    ) -> None:
+        import re
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+
+        # Unrelated operator channels and empty optional `match` lists from
+        # management-API reserialization must stay accepted.
+        tolerated = json.loads(json.dumps(config))
+        tolerated["oauth"]["request-scoped-errors"]["antigravity"][0]["match"] = []
+        tolerated["oauth"]["request-scoped-errors"]["vertex"] = [
+            {"status": 400, "match": ["maximum_context_length"], "action": "stop"}
+        ]
+        self.assertEqual(policy["validate_config"](tolerated), [])
+
+        # Drift mutations on managed channels must fail closed.
+        bad_cases: list[tuple[str, Any]] = [
+            ("missing-root", None),
+            ("non-mapping-root", []),
+            (
+                "missing-antigravity",
+                {"codex": config["oauth"]["request-scoped-errors"]["codex"]},
+            ),
+            (
+                "missing-codex",
+                {
+                    "antigravity": config["oauth"]["request-scoped-errors"][
+                        "antigravity"
+                    ]
+                },
+            ),
+            (
+                "wrong-action",
+                {
+                    **config["oauth"]["request-scoped-errors"],
+                    "antigravity": [
+                        {
+                            **config["oauth"]["request-scoped-errors"]["antigravity"][
+                                0
+                            ],
+                            "action": "continue",
+                        }
+                    ],
+                },
+            ),
+            (
+                "bool-status",
+                {
+                    **config["oauth"]["request-scoped-errors"],
+                    "codex": [
+                        {
+                            **config["oauth"]["request-scoped-errors"]["codex"][0],
+                            "status": True,
+                        }
+                    ],
+                },
+            ),
+            (
+                "unknown-field",
+                {
+                    **config["oauth"]["request-scoped-errors"],
+                    "codex": [
+                        {
+                            **config["oauth"]["request-scoped-errors"]["codex"][0],
+                            "extra": "unexpected",
+                        }
+                    ],
+                },
+            ),
+        ]
+        for label, value in bad_cases:
+            with self.subTest(drift=label):
+                mutated = json.loads(json.dumps(config))
+                if value is None:
+                    mutated["oauth"].pop("request-scoped-errors", None)
+                else:
+                    mutated["oauth"]["request-scoped-errors"] = value
+                issues = policy["validate_config"](mutated)
+                self.assertTrue(
+                    any("request-scoped-errors" in issue for issue in issues),
+                    f"expected request-scoped-errors pin to reject {label}: {issues}",
+                )
+
+        # Verify actual upstream body matching: stop only bare WAF / detail-only
+        # 429s and never intercept real quota/rate-limit bodies.
+        rules = policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"]
+        agy_pattern = re.compile(rules["antigravity"][0]["match-regexr"][0])
+        for bare_waf_body in (
+            '{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}',
+            '{\n  "error": {\n    "code": 429,\n    "message": "Resource has been exhausted (e.g. check quota).",\n    "status": "RESOURCE_EXHAUSTED"\n  }\n}\n',
+            '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}',
+        ):
+            self.assertIsNotNone(agy_pattern.search(bare_waf_body), bare_waf_body)
+        for real_quota_body in (
+            '{"error":{"code":429,"message":"Rate limit exceeded","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"}]}}',
+            '{\n  "error": {\n    "code": 429,\n    "message": "You have exhausted your capacity on this model.",\n    "status": "RESOURCE_EXHAUSTED",\n    "details": [{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED"}]\n  }\n}\n',
+            '{"error":{"status":"RESOURCE_EXHAUSTED","message":"QUOTA_EXHAUSTED"}}',
+            "auth in short cooldown, 12s remaining",
+        ):
+            self.assertIsNone(agy_pattern.search(real_quota_body), real_quota_body)
+
+        codex_pattern = re.compile(rules["codex"][0]["match-regexr"][0])
+        for bare_codex_429 in (
+            '{"detail":"Rate limit exceeded"}',
+            ' { "detail" : "Rate limit exceeded" } \n',
+        ):
+            self.assertIsNotNone(codex_pattern.search(bare_codex_429), bare_codex_429)
+        for real_codex_429 in (
+            '{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":3600}}',
+            '{"detail":"Rate limit exceeded","resets_in_seconds":300}',
+            '{"error":{"code":"turn_rate_limit_exceeded","message":"Model at capacity"}}',
+        ):
+            self.assertIsNone(codex_pattern.search(real_codex_429), real_codex_429)
+
     def test_cpa_policy_rejects_oauth_setting_manifest_drift(self) -> None:
         import runpy
 

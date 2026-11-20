@@ -1883,6 +1883,18 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["validate_config"](transformed)
         self.assertEqual(issues, [], issues)
         self.assertEqual(
+            transformed["oauth"]["providers"]["antigravity"]["connection-pool"],
+            {
+                "enabled": True,
+                "idle-conn-timeout": "30s",
+                "max-idle-conns-per-host": 2,
+            },
+        )
+        self.assertEqual(
+            transformed["oauth"]["request-scoped-errors"],
+            policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"],
+        )
+        self.assertEqual(
             transformed["oauth"]["settings"],
             route_manifest["oauth_settings"],
         )

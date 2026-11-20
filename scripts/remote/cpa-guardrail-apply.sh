@@ -1580,6 +1580,22 @@ antigravity_provider_after["sensitive-words"] = ["gpt", "openai", "codex"]
 # ban-response posture explicit in the file cpa_policy.py pins and the doctor
 # reads, instead of depending on a CPA default that a later version could move.
 antigravity_provider_after["tos-pause-window"] = "2h"
+# Per-credential isolated HTTP/1.1 connection pool for Antigravity
+# (v8.0.79 antigravity_executor.go scopes transports by auth.ID). Enabling
+# avoids paying a fresh cross-ocean TCP+TLS handshake on every turn without
+# sharing sockets across sibling credentials; 30s stays well under GFE's 240s
+# idle cutoff.
+antigravity_connection_pool_after = antigravity_provider_after.get("connection-pool")
+if antigravity_connection_pool_after is None:
+    antigravity_connection_pool_after = {}
+if not isinstance(antigravity_connection_pool_after, dict):
+    raise SystemExit(
+        "REFUSE oauth.providers.antigravity.connection-pool must be a mapping"
+    )
+antigravity_connection_pool_after["enabled"] = True
+antigravity_connection_pool_after["idle-conn-timeout"] = "30s"
+antigravity_connection_pool_after["max-idle-conns-per-host"] = 2
+antigravity_provider_after["connection-pool"] = antigravity_connection_pool_after
 # Literal replacements supersede the zero-width obfuscation above on the
 # system instruction: the 2026-11-18 probes showed the WAF matches through
 # zero-width-padded words, so this swap table is the effective masking
@@ -1836,6 +1852,33 @@ for channel, entries in oauth_aliases_manifest.items():
         oauth_exclusions[channel] = remaining_exclusions
     oauth_aliases_after[channel.strip()] = normalized_aliases
 oauth_block_after["model-alias"] = oauth_aliases_after
+
+# OAuth request-scoped error rules (v8.0.79, oauth.request-scoped-errors):
+# stop bare Antigravity WAF 429s (no `details`) on credential #1 so flagged
+# payloads do not fan out across sibling accounts (CLIProxyAPI #7614/#7768),
+# and stop bare Codex `{"detail":"Rate limit exceeded"}` 429s from triggering
+# exponential quota cooldown on the single-account lane (CLIProxyAPI #7691).
+# Managed channels are pinned while unrelated channels stay preserved.
+oauth_request_scoped_after = oauth_block_after.get("request-scoped-errors")
+if oauth_request_scoped_after is None:
+    oauth_request_scoped_after = {}
+if not isinstance(oauth_request_scoped_after, dict):
+    raise SystemExit("REFUSE oauth.request-scoped-errors must be a mapping")
+oauth_request_scoped_after["antigravity"] = [
+    {
+        "status": 429,
+        "match-regexr": [r'(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$'],
+        "action": "stop",
+    }
+]
+oauth_request_scoped_after["codex"] = [
+    {
+        "status": 429,
+        "match-regexr": [r'^\s*\{\s*"detail"\s*:\s*"Rate limit exceeded"\s*\}\s*$'],
+        "action": "stop",
+    }
+]
+oauth_block_after["request-scoped-errors"] = oauth_request_scoped_after
 
 # The requests.payload block is owned by cpa_policy: replace it wholesale
 # from the same manifest derivation, so rules from retired lanes cannot

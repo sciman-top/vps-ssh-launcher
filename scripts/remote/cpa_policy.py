@@ -109,6 +109,27 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Deliberately not zero: see the runbook's early-release procedure, which
     # flips the value in place under incident control instead of editing it.
     ("oauth", "providers", "antigravity", "tos-pause-window"): "2h",
+    # Per-credential isolated HTTP/1.1 connection pool for Antigravity
+    # (internal/runtime/executor/antigravity_executor.go). Upstream defaults
+    # `enabled` to false (fresh TCP+TLS handshake per request); enabling with
+    # the documented 30s idle timeout (well below GFE's 240s cutoff) and cap 2
+    # reuses connections strictly inside one auth.ID scope without cross-account
+    # socket sharing, trimming cross-ocean handshake latency.
+    ("oauth", "providers", "antigravity", "connection-pool", "enabled"): True,
+    (
+        "oauth",
+        "providers",
+        "antigravity",
+        "connection-pool",
+        "idle-conn-timeout",
+    ): "30s",
+    (
+        "oauth",
+        "providers",
+        "antigravity",
+        "connection-pool",
+        "max-idle-conns-per-host",
+    ): 2,
     # Claude subscription OAuth lane (2026-10-17): claims only opus-5-5 /
     # sonnet-5-5 / haiku-5-5 per user decision; every other model the
     # credential exposes stays a provider-level exclusion tombstone. The
@@ -210,6 +231,42 @@ EXPECTED_ROUTING = {
 EXPECTED_QUOTA = {
     "switch-project": False,
     "switch-preview-model": False,
+}
+
+# Per-provider OAuth request-scoped error rules (v8.0.79,
+# oauth.request-scoped-errors). Managed channels are pinned strictly while any
+# unrelated operator-added channels remain untouched across -Apply.
+EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS: dict[str, list[dict[str, Any]]] = {
+    # CLIProxyAPI #7614 / #7768 / PR #7701: Google's Antigravity WAF/content
+    # filter returns a bare 429 RESOURCE_EXHAUSTED with no `details` array
+    # (real quota/rate-limit 429s carry google.rpc.ErrorInfo / RetryInfo under
+    # `details`). With max-retry-credentials=3 and
+    # session-affinity-rebind-on=quota, CPA would otherwise cool credential #1
+    # and replay the same flagged payload across up to 3 accounts in one turn.
+    # `action: "stop"` stops immediately on the first account without cooling
+    # or unbinding affinity, while cpa-admission still enforces 60s lane
+    # backoff against rapid client retries.
+    "antigravity": [
+        {
+            "status": 429,
+            "match-regexr": [r'(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$'],
+            "action": "stop",
+        }
+    ],
+    # CLIProxyAPI #7691: ChatGPT-Codex occasionally emits a bare
+    # `{"detail":"Rate limit exceeded"}` 429 without `usage_limit_reached` or
+    # `resets_in_seconds`. On this single-account lane, letting CPA treat it as
+    # a quota cooldown locks the credential behind exponential backoff;
+    # `action: "stop"` skips CPA cooldown and preserves affinity while
+    # cpa-admission applies bounded 60s backoff. Real quota 429s carrying
+    # `usage_limit_reached` do not match and keep model-level cooling.
+    "codex": [
+        {
+            "status": 429,
+            "match-regexr": [r'^\s*\{\s*"detail"\s*:\s*"Rate limit exceeded"\s*\}\s*$'],
+            "action": "stop",
+        }
+    ],
 }
 
 EXPECTED_CODEX = {
@@ -2250,6 +2307,38 @@ def validate_config(
             issues.append(
                 f"oauth.model-alias has undeclared channel(s) {stale_channels!r}"
             )
+    oauth_request_scoped_errors = (
+        oauth_block.get("request-scoped-errors")
+        if isinstance(oauth_block, dict)
+        else None
+    )
+    if not isinstance(oauth_request_scoped_errors, dict):
+        issues.append("oauth.request-scoped-errors must be a mapping")
+    else:
+        allowed_rule_keys = {"status", "match", "match-regexr", "action"}
+        for channel, expected_rules in EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS.items():
+            actual_rules = oauth_request_scoped_errors.get(channel)
+            if not isinstance(actual_rules, list):
+                issues.append(f"oauth.request-scoped-errors.{channel} must be a list")
+                continue
+            normalized_actual = []
+            valid_shape = True
+            for entry in actual_rules:
+                if not isinstance(entry, dict) or not set(entry) <= allowed_rule_keys:
+                    valid_shape = False
+                    break
+                if type(entry.get("status")) is not int:
+                    valid_shape = False
+                    break
+                normalized_actual.append(
+                    {
+                        key: value
+                        for key, value in entry.items()
+                        if value not in (None, "", [])
+                    }
+                )
+            if not valid_shape or normalized_actual != expected_rules:
+                issues.append(f"oauth.request-scoped-errors.{channel} rule drift")
     if not isinstance(oauth_exclusions, dict):
         issues.append("oauth.excluded-models must be a mapping")
     else:
