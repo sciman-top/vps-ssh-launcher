@@ -23,6 +23,7 @@ Full 门禁：`1817 passed, 30 skipped, 893 subtests`；bandit/ruff/mypy 全绿�
 - strict doctor 只读复验：`DOCTOR_CONTRACT_OK` 退出码 0；`admission-integrity=OK`（新 guard 校验生效）；projection-drift 17 项全 MATCH；container `restart=0`；updater timer/schedule/heartbeat OK。
 - OAuth 车道：chatgpt / antigravity / workbuddy / workbuddy-intl 全 OPEN；claude 车道 RETIRED（tombstone inert）。7 个 Antigravity 凭据 `refresh_age_hours` 0.0–0.1h、`METADATA_OK`；`credential_ban_signals_7d=0`；codex OAuth `oauth_expired=false`（约 9 天余量，lead24h 刷新策略内）。
 - 非 OAuth 受控验收（zhipu/glm API-key lane，无 OAuth 生成探针、无凭据轮换、无冷却清理）：`cpa-health.py cache-canary glm-5.3-flash chat` 两样本 `hit_ratio=0.0000 → 0.9956`，`HEALTH_OK`。
+- host 级受控模拟（新增拒绝路径）：在 BWG 用 `unshare -m` mount namespace 将内嵌全零哈希的伪造 guard 绑定挂载到 `/usr/local/libexec/cpa_request_guard.py` 检查路径，运行 integrity-check 得到 `ADMISSION_INTEGRITY_REFUSE guard_generation_mismatch` 退出码 1；namespace 退出后 live guard SHA 恢复 `502f4057…`，控制组复验 `ADMISSION_INTEGRITY_OK`，无残留挂载，临时目录已清理。live 文件与 admission 服务全程未受影响。
 
 ## 4. 性能与风险画像（维持既有决策）
 
