@@ -594,7 +594,7 @@ restore_all() {
   # complete (2026-11-21 incident evidence).
   if [ -f "$ADMISSION_SCRIPT" ] && [ -f "$ADMISSION_INTEGRITY_PIN" ] &&
     [ -f "$ADMISSION_REQUEST_GUARD" ] &&
-    [ "$(sha256sum "$ADMISSION_SCRIPT" | awk '{print $1}')" =
+    [ "$(sha256sum "$ADMISSION_SCRIPT" | awk '{print $1}')" = \
       "$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")" ] &&
     grep -Fq "SOURCE_SHA256 = \"$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")\"" \
       "$ADMISSION_REQUEST_GUARD" 2>/dev/null; then
@@ -2329,6 +2329,14 @@ after_unapproved = deepcopy(config_after)
 for key in allowed_changed_blocks:
     before_unapproved.pop(key, None)
     after_unapproved.pop(key, None)
+# Within server, only server.shutdown-timeout is owned by this transaction;
+# server.host, server.port, server.tls, and remote-management must stay untouched.
+for mapping in (before_unapproved, after_unapproved):
+    server_block = mapping.get("server")
+    if isinstance(server_block, dict):
+        server_block.pop("shutdown-timeout", None)
+        if not server_block:
+            mapping.pop("server", None)
 if before_unapproved != after_unapproved:
     raise SystemExit("config change exceeded the approved field/block set")
 

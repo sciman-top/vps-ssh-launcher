@@ -5785,10 +5785,21 @@ class CpaAdmissionContractParityTests(unittest.TestCase):
 
     def test_shutdown_timeout_stream_probe_and_doctor_observability_wired(self) -> None:
         self.assertIn('server_after["shutdown-timeout"] = 15', self.apply_source)
+        self.assertIn('server_block.pop("shutdown-timeout", None)', self.apply_source)
         self.assertIn('config.get("stream_probe_bytes") != 2097152', self.apply_source)
         self.assertIn("invalidated oauth token", self.doctor_source)
         self.assertIn("workbuddy_failover_probe_401_7d=", self.doctor_source)
         self.assertIn("refresh_cluster_max_10s=", self.doctor_source)
+
+    def test_rollback_admission_generation_check_line_continuation(self) -> None:
+        self.assertIn(
+            '[ "$(sha256sum "$ADMISSION_SCRIPT" | awk \'{print $1}\')" = \\',
+            self.apply_source,
+        )
+        self.assertNotIn(
+            '[ "$(sha256sum "$ADMISSION_SCRIPT" | awk \'{print $1}\')" =\n',
+            self.apply_source,
+        )
 
 
 if __name__ == "__main__":
