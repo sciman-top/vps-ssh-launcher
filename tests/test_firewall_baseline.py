@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -69,6 +70,19 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             'Replace("__HOP_TARGET__", "$($contract.Hysteria2HopTarget)")', lib
         )
         self.assertIn("HYSTERIA2_HOP_PORTS=", self.text)
+        unit = (
+            self.lib.split("function New-ProxyFirewallUnit {", 1)[1]
+            .split("return @'", 1)[1]
+            .split("\n'@", 1)[0]
+        )
+        self.assertIn(
+            "ExecStart=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft", unit
+        )
+        self.assertIn(
+            "ExecStop=-/usr/sbin/nft delete table inet vps_launcher_guard", unit
+        )
+        self.assertIn('EXPECTED_UNIT_B64="__UNIT_B64__"', self.text)
+        self.assertIn("printf '%s' \"$EXPECTED_UNIT_B64\" | base64 -d", self.text)
 
     def test_live_all_chains_must_match_the_exact_contract(self) -> None:
         source = self.lib.split("return @'\n", 1)[1].split("\n'@", 1)[0]
@@ -566,6 +580,17 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                 base64.b64encode(rules_stub.encode("utf-8")).decode("ascii"),
             )
             .replace("__RULES_SHA__", "0" * 64)
+            .replace(
+                "__UNIT_B64__",
+                base64.b64encode(
+                    (
+                        LIB.read_text(encoding="utf-8")
+                        .split("function New-ProxyFirewallUnit {", 1)[1]
+                        .split("return @'", 1)[1]
+                        .split("\n'@", 1)[0]
+                    ).encode("utf-8")
+                ).decode("ascii"),
+            )
             .replace("__TCP_PORTS__", "443 8443")
             .replace("__UDP_PORTS__", "443 8444")
             .replace("__SSH_PORT__", "29712")
@@ -651,7 +676,7 @@ exit 0
     def test_rollback_midflight_restore_sandbox_simulation(self) -> None:
         # The first rollback sandbox forces `nft -c` to fail before any write,
         # so only the scratch-reclaim path runs. This sibling lets apply get
-        # all the way past the atomic mv (the `-j list chain` probe fails so
+        # all the way past the atomic mv (the live JSON probe fails so
         # the post-write verify trips) and proves the mid-flight restore: the
         # live table is reloaded from the backup dump, the pre-apply rules and
         # unit files are copied back verbatim, and the service is re-enabled
@@ -669,7 +694,18 @@ exit 0
                 "__RULES_B64__",
                 base64.b64encode(rules_stub.encode("utf-8")).decode("ascii"),
             )
-            .replace("__RULES_SHA__", "0" * 64)
+            .replace("__RULES_SHA__", hashlib.sha256(rules_stub.encode()).hexdigest())
+            .replace(
+                "__UNIT_B64__",
+                base64.b64encode(
+                    (
+                        LIB.read_text(encoding="utf-8")
+                        .split("function New-ProxyFirewallUnit {", 1)[1]
+                        .split("return @'", 1)[1]
+                        .split("\n'@", 1)[0]
+                    ).encode("utf-8")
+                ).decode("ascii"),
+            )
             .replace("__TCP_PORTS__", "443 8443")
             .replace("__UDP_PORTS__", "443 8444")
             .replace("__SSH_PORT__", "29712")
@@ -688,6 +724,7 @@ SB="$(mktemp -d)"
 mkdir -p "$SB/stubs" "$SB/rules" "$SB/unit" "$SB/backups" "$SB/status"
 export NFT_CALLS="$SB/stubs/nft.calls"
 export SYSTEMCTL_CALLS="$SB/stubs/systemctl.calls"
+export SB="$SB"
 : > "$NFT_CALLS"
 : > "$SYSTEMCTL_CALLS"
 cat > "$SB/stubs/nft" <<'EOF'
@@ -696,8 +733,8 @@ printf '%s\\n' "$*" >> "$NFT_CALLS"
 case "${1:-}" in
   -j) exit 1 ;;
   -c) exit 0 ;;
-  list) echo 'table inet vps_launcher_guard {}'; exit 0 ;;
-  *) exit 0 ;;
+  list) if [ -f "$SB/APPLIED" ]; then exit 1; fi; echo 'table inet vps_launcher_guard {}'; exit 0 ;;
+  *) touch "$SB/APPLIED"; exit 0 ;;
 esac
 EOF
 cat > "$SB/stubs/systemctl" <<'EOF'
@@ -761,7 +798,8 @@ exit 0
         )
         self.assertIn("SIM_RC=6", result.stdout)
         self.assertIn(
-            "FIREWALL_BASELINE_VERIFY_FAILED reason=contract_7", result.stderr
+            "FIREWALL_BASELINE_VERIFY_FAILED reason=contract_7",
+            result.stdout + result.stderr,
         )
         self.assertIn("ROLLBACK_VERIFIED backup=", result.stdout)
         self.assertIn("RULES_RESTORED=table inet old_guard_before {}", result.stdout)

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 from pathlib import Path
 from typing import Any, cast
@@ -55,6 +56,38 @@ def _extract_bash_function(source: str, name: str, *, start: int = 0) -> str:
             if depth == 0:
                 return source[start : index + 1] + "\n"
     raise AssertionError(f"unterminated Bash function: {name}")
+
+
+def _bash_source_and_prefix(source: str, marker: str) -> tuple[str, str]:
+    """Return a runnable prefix plus the source minus heredoc test bodies."""
+    definitions: list[str] = []
+    lines = source.splitlines()
+    start = 0
+    for index, line in enumerate(lines):
+        if line == marker:
+            end = index
+            break
+        match = re.fullmatch(r"[a-z_]+\(\) \{", line)
+        if match is not None:
+            definitions.append(f"source <(sed -n '{start + 1},{index}p' \"$UPDATER\")")
+            start = index
+            depth = 1
+            index += 1
+            while index < len(lines) and depth:
+                depth += lines[index].count("{") - lines[index].count("}")
+                index += 1
+            if depth:
+                raise AssertionError(f"unterminated Bash function: {line}")
+            start = index
+    else:
+        raise AssertionError(f"marker not found: {marker}")
+    definitions.append(f"source <(sed -n '{start + 1},{end}p' \"$UPDATER\")")
+    quiet = re.sub(
+        r"(?ms)^<<'([A-Z][A-Z0-9_]*)'\n.*?^\\1$",
+        lambda match: f"<<'{match.group(1)}'\ntrue\n{match.group(1)}",
+        source,
+    )
+    return "\n".join(definitions), quiet
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
@@ -329,9 +362,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_updater_compose_replacement_is_exact_and_metadata_preserving(
         self,
     ) -> None:
-        source = _read_bash_source(
+        source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
-        )
+        ).read_text(encoding="utf-8")
         replacement = source.split(
             'MUTATED=1\npython3 - "$DIR/compose.yml" "$IMAGE" <<\'PY\'\n', 1
         )[1].split("\nPY\n", 1)[0]
@@ -415,15 +448,24 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertNotIn("trap 'exit 143' TERM", source)
         self.assertIn("compose_start_pid=$!", source)
         self.assertIn("MUTATION_STARTED=1", source)
-        self.assertIn('kill -TERM -- "-$start_pid"', source)
+        self.assertIn("pid_alive() {", source)
+        helper = _extract_bash_function(source, "stop_compose_start")
+        self.assertIn('kill -TERM -- "-$start_pid"', helper)
         self.assertIn("stop_compose_start", source)
         self.assertIn(
             'cp -a "$BK/compose.yml" "$DIR/compose.yml" || restore_failed=1',
             source,
         )
-        self.assertIn("ROLLBACK_VERIFIED interrupted=start_container", source)
+        self.assertIn("restore_verified", source)
+        self.assertIn(
+            "ROLLBACK_VERIFIED interrupted=${ROLLBACK_INTERRUPTED:-0} restored=$CUR",
+            source,
+        )
+        self.assertIn("trap 'rollback_after_write 143' TERM", source)
         self.assertIn("DOCKER_START_PENDING=1", source)
         self.assertIn('rollback "$start_status"', source)
+        self.assertIn("ROLLBACK_INTERRUPTED=1", source)
+        self.assertIn("rollback_after_write 143", source)
         bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
@@ -480,6 +522,84 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("AFTER_CLEAN_SUCCESS", output)
         self.assertIn("STATUS result=unverified code=32", output)
 
+    def test_post_write_signal_reports_the_verified_restore_as_deferred(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        restore = _extract_bash_function(source, "restore_verified")
+        rollback_after_write = _extract_bash_function(source, "rollback_after_write")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "backup"
+            cpa = root / "cpa"
+            log = root / "updater.log"
+            backup.mkdir()
+            cpa.mkdir()
+            backup_host = backup.as_posix()
+            cpa_host = cpa.as_posix()
+            (backup / "compose.yml").write_text(
+                "old-image\n", encoding="utf-8", newline="\n"
+            )
+            (cpa / "compose.yml").write_text(
+                "new-image\n", encoding="utf-8", newline="\n"
+            )
+            harness = "\n".join(
+                [
+                    "set -Eeuo pipefail",
+                    "DOCKER_START_PENDING=1",
+                    "MUTATED=1",
+                    "ROLLBACK_INTERRUPTED=0",
+                    "ROLLBACK_IMAGE_ID=sha256:old",
+                    "ROLLBACK_IMAGE_REF=backup-image",
+                    "ROLLBACK_STAGE=prepare",
+                    "ROLLBACK_VERIFIED=0",
+                    "umask 077",
+                    f"BK='{backup_host}'",
+                    f"DIR='{cpa_host}'",
+                    f"LOG='{log.as_posix()}'",
+                    "CUR=v8.0.79",
+                    'cp() { [[ "$1" == -a ]] || return 1; printf \'old-image\\n\' >"$DIR/compose.yml"; }',
+                    "docker() {",
+                    '  case "$*" in',
+                    '    "compose up -d --pull never") return 0 ;;',
+                    '    "inspect --format {{.Image}} cli-proxy-api") printf "sha256:old\\n" ;;',
+                    '    "image inspect --format {{.ID}} backup-image") printf "sha256:old\\n" ;;',
+                    "  esac",
+                    "}",
+                    "write_status() { :; }",
+                    "on_exit() {",
+                    '  printf "RECEIPT result=deferred code=%s\\n" "$1"',
+                    '  exit "$1"',
+                    "}",
+                    "trap 'status_code=$?; on_exit \"$status_code\"' EXIT",
+                    "health() { return 0; }",
+                    'log() { printf "%s\\n" "$*"; }',
+                    "image() { printf 'sha256:old\\n'; }",
+                    "cd() { :; }",
+                    "cmp() { return 0; }",
+                    restore,
+                    rollback_after_write,
+                    "rollback_after_write 143",
+                ]
+            )
+            completed = subprocess.run(
+                self._bash_command(bash),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout.decode() + completed.stderr.decode()
+            self.assertEqual(completed.returncode, 31, output)
+            self.assertIn("ROLLBACK_VERIFIED interrupted=1 restored=v8.0.79", output)
+            self.assertIn("RECEIPT result=deferred code=31", output)
+            self.assertEqual((cpa / "compose.yml").read_text(), "old-image\n")
+
     def test_interrupted_docker_start_restores_backup_with_bounded_recovery(
         self,
     ) -> None:
@@ -514,11 +634,24 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             cpa = root / "cpa"
             backup.mkdir()
             cpa.mkdir()
-            (backup / "compose.yml").write_text("old-image\n", encoding="utf-8")
-            (cpa / "compose.yml").write_text("new-image\n", encoding="utf-8")
+            (backup / "compose.yml").write_text(
+                "old-image\n", encoding="utf-8", newline="\n"
+            )
+            (cpa / "compose.yml").write_text(
+                "new-image\n", encoding="utf-8", newline="\n"
+            )
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text(
+                "#!/bin/sh\nexit 0\n", encoding="ascii", newline="\n"
+            )
+            fake_docker.chmod(0o755)
             harness = "\n".join(
                 [
                     "set -euo pipefail",
+                    "set -m",
+                    f"export PATH='{self._bash_path(bash, fake_bin)}:/usr/bin:/bin'",
                     f"BK='{self._bash_path(bash, backup)}'",
                     f"DIR='{self._bash_path(bash, cpa)}'",
                     f"LOG='{self._bash_path(bash, root / 'updater.log')}'",
@@ -534,8 +667,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     "ROLLBACK_IMAGE_REF='cliproxyapi-backup'",
                     "ROLLBACK_STAGE=prepare",
                     "stop_compose_start() { return 0; }",
-                    "readlink() { printf '%s\\n' \"$DIR\"; }",
-                    'cp() { [[ "$1" == -a && "$2" == "$BK/compose.yml" ]] && { printf \'old-image\\n\' >"$DIR/compose.yml"; return 0; }; command cp "$@"; }',
+                    'cp() { if [[ "$1" == -a && "$2" == "$BK/compose.yml" ]]; then printf \'old-image\\n\' >"$DIR/compose.yml"; else command cp "$@"; fi; }',
                     'log() { printf "%s\\n" "$*" | tee -a "$LOG"; }',
                     "kill() {",
                     '  if [[ "$1" == -0 ]]; then return 1; fi',
@@ -547,6 +679,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     '    "compose config --quiet") printf "new-image\\n" >"$DIR/compose.yml"; return 0 ;;',
                     '    "compose up -d --pull never") printf "restored\\n" >>"$LOG"; return 0 ;;',
                     "    \"inspect --format {{.Image}} cli-proxy-api\") printf 'sha256:old\\n' ;;",
+                    "    \"image inspect --format {{.ID}} cliproxyapi-backup\") printf 'sha256:old\\n' ;;",
                     "  esac",
                     "}",
                     '( command sleep 0.2; command kill -TERM "$$"; sleep 1 ) &',
@@ -557,11 +690,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 ]
             )
             completed = subprocess.run(
-                (
-                    ["wsl.exe", "-d", "Ubuntu-24.04", "--", "bash"]
-                    if bash == "wsl"
-                    else self._bash_command(bash)
-                ),
+                self._bash_command(bash),
                 input=harness.encode(),
                 capture_output=True,
                 timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
@@ -592,11 +721,23 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             cpa = root / "cpa"
             backup.mkdir()
             cpa.mkdir()
-            (backup / "compose.yml").write_text("old-image\n", encoding="utf-8")
-            (cpa / "compose.yml").write_text("new-image\n", encoding="utf-8")
+            (backup / "compose.yml").write_text(
+                "old-image\n", encoding="utf-8", newline="\n"
+            )
+            (cpa / "compose.yml").write_text(
+                "new-image\n", encoding="utf-8", newline="\n"
+            )
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text(
+                "#!/bin/sh\nexit 0\n", encoding="ascii", newline="\n"
+            )
+            fake_docker.chmod(0o755)
             harness = "\n".join(
                 [
                     "set -u",
+                    f"export PATH='{self._bash_path(bash, fake_bin)}:/usr/bin:/bin'",
                     f"BK='{self._bash_path(bash, backup)}'",
                     f"DIR='{self._bash_path(bash, cpa)}'",
                     f"LOG='{self._bash_path(bash, root / 'updater.log')}'",
@@ -616,7 +757,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     "cp() { printf 'old-image\\n' >\"$DIR/compose.yml\"; }",
                     "docker() {",
                     '  case "$*" in',
-                    '    "inspect --format {{.Image}} cli-proxy-api") printf "sha256:new\\n" ;;',
+                    '    "inspect --format {{.Image}} cli-proxy-api") printf "sha256:old\\n" ;;',
                     '    "image inspect --format {{.ID}} old") printf "sha256:old\\n" ;;',
                     "  esac",
                     "}",
@@ -634,8 +775,8 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 check=False,
             )
             output = completed.stdout.decode() + completed.stderr.decode()
-            self.assertIn(completed.returncode, (31, 32), output)
-            self.assertIn("ROLLBACK_FAILED interrupted=start_container", output)
+            self.assertEqual(completed.returncode, 31, output)
+            self.assertIn("ROLLBACK_VERIFIED interrupted=start_container", output)
 
     def test_deferred_signal_has_a_post_start_transaction_boundary(self) -> None:
         source = (
@@ -674,11 +815,13 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 "CUR=v8.0.79\n"
                 "TARGET=v8.0.80\n"
                 "ROLLBACK_IMAGE_REF=test-image\n"
+                "ROLLBACK_IMAGE_ID=sha256:test-old\n"
                 "restore_wait=30\n"
                 "restore_pid=999999\n"
                 'log() { printf "%s\\n" "$*"; }\n'
                 "cp() { printf 'old-image\\n' >\"$DIR/compose.yml\"; }\n"
                 "docker() { return 0; }\n"
+                'rollback() { printf "DEFERRED_ROLLBACK code=%s\\n" "$1"; exit "$1"; }\n'
                 + block
                 + '\nprintf "UNEXPECTED_SUCCESS\\n"\n'
             )
@@ -694,6 +837,83 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("ROLLBACK_FAILED interrupted=start_container", output)
             self.assertNotIn("UNEXPECTED_SUCCESS", output)
 
+    def test_compose_start_wait_parses_linux_proc_state_and_waits_for_exit(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        start = source.index("DOCKER_START_PENDING=1\n")
+        end = source.index('\nif [[ "$UPDATER_SIGNAL" != 0 ]]; then', start)
+        block = source[start:end]
+        self.assertIn("start_status=0", block)
+        self.assertIn(
+            'read -r start_state _ start_pgid _ <<< "${proc_state##*) }"',
+            block,
+        )
+        self.assertIn('wait "$compose_start_pid" || start_status=$?', block)
+        self.assertNotIn("set +e", block)
+        self.assertNotIn("read -r _ start_pid start_state", block)
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        if os.name == "nt":
+            if shutil.which("wsl.exe") is None or not self._has_native_linux_wsl():
+                self.skipTest("Linux /proc fixture requires native WSL")
+            bash = "wsl"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "compose-helper.sh"
+            helper.write_text(
+                "sleep 0.1\nprintf 'completed\\n' > \"$1\"\nexit 7\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            result = root / "result"
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text(
+                '#!/bin/sh\nexec bash "$HELPER" "$RESULT"\n',
+                encoding="ascii",
+                newline="\n",
+            )
+            fake_docker.chmod(0o755)
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    "set -m",
+                    f"export PATH='{self._bash_path(bash, fake_bin)}:/usr/bin:/bin'",
+                    f"HELPER='{self._bash_path(bash, helper)}'",
+                    f"RESULT='{self._bash_path(bash, result)}'",
+                    "export HELPER RESULT",
+                    "UPDATER_SIGNAL=0",
+                    f"LOG='{self._bash_path(bash, root / 'updater.log')}'",
+                    '(\n  exec /usr/bin/bash "$HELPER" "$RESULT"\n) &',
+                    "compose_start_pid=$!",
+                    'start_pid="$compose_start_pid"',
+                    "start_pgid=''",
+                    "start_state=''",
+                    "start_status=0",
+                    f"DIR='{self._bash_path(bash, root)}'",
+                    "docker() { return 0; }",
+                    'ls -l "/proc/$compose_start_pid/stat" >/dev/null',
+                    block,
+                    'printf "STATUS %s PID %s\\n" "$start_status" "$start_pid"',
+                ]
+            )
+            completed = subprocess.run(
+                self._bash_command(bash),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout.decode() + completed.stderr.decode()
+            self.assertEqual(completed.returncode, 0, output)
+            self.assertIn("STATUS 7", output)
+            self.assertEqual(result.read_text(), "completed\n")
+
     def test_process_identity_arming_accepts_precreated_group_leader(
         self,
     ) -> None:
@@ -703,6 +923,10 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
+        if os.name == "nt":
+            if shutil.which("wsl.exe") is None or not self._has_native_linux_wsl():
+                self.skipTest("Linux /proc fixture requires native WSL")
+            bash = "wsl"
         helper = _extract_bash_function(source, "stop_compose_start")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -748,7 +972,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
         ).read_text(encoding="utf-8")
         start = source.index("is_within_tree() {")
-        end = source.index("\n# Bound every Docker client call", start)
+        end = source.index("\ndefer_updater_signal() {", start)
         definitions = source[start:end]
         bash = self._resolve_bash()
         if bash is None:
@@ -803,35 +1027,97 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             harness = "\n".join(
                 [
                     "set -euo pipefail",
+                    'PID_FIXTURE="${PID_FIXTURE:?native pid required}"',
                     f"DIR='{self._bash_path(bash, backup.parents[2])}'",
                     f"BK='{self._bash_path(bash, backup)}'",
-                    "compose_start_pid=999999",
-                    "start_pid=999999",
-                    "start_pgid=1000000",
+                    "compose_start_pid=$PID_FIXTURE",
+                    "start_pid=$PID_FIXTURE",
+                    "start_pgid=''",
                     "start_state='S'",
-                    'readlink() { printf "%s\\n" "$DIR"; }',
-                    "kill() { printf 'KILL %s\\n' \"$*\"; }",
-                    "pid_alive() { printf 'PROBE %s\\n' \"$1\"; return 1; }",
+                    'readlink() { printf "%s" "$DIR"; }',
+                    'tr() { if [[ "$1" == -d ]]; then command tr "$@"; else printf \'compose up -d --pull never\'; fi; }',
+                    "kill() {",
+                    '  [[ "$*" == "-TERM -- -$PID_FIXTURE" || '
+                    '"$*" == "-TERM $PID_FIXTURE" ]] || {',
+                    "    printf 'UNEXPECTED_KILL %s\\n' \"$*\"; return 1",
+                    "  }",
+                    "  printf 'GROUP_TERM %s\\n' \"$PID_FIXTURE\"",
+                    "}",
+                    "ps() { printf '%s\\n' \"$START_PGID\"; }",
+                    "pid_alive() {",
+                    '  [[ "$1" == "$PID_FIXTURE" ]] || { printf \'UNEXPECTED_PROBE %s\\n\' "$1"; return 1; }',
+                    '  if [[ ! -f "$PROBES" ]]; then',
+                    "    printf 'probe\\n' >>\"$PROBES\"; printf 'PROBE %s\\n' \"$1\"; return 0",
+                    "  fi",
+                    "  return 1",
+                    "}",
                     "wait() { printf 'WAIT_BEFORE_SIGNAL %s\\n' \"$1\"; }",
+                    f"PROBES='{self._bash_path(bash, root / 'probe-count')}'",
+                    'tr() { if [[ "$1" == -d ]]; then command tr "$@"; else printf \'compose up -d --pull never\'; fi; }',
                     "is_within_tree() { return 0; }",
                     helper,
-                    "stop_compose_start",
+                    '[[ -e "/proc/$PID_FIXTURE" ]] || exit 90',
+                    "stop_compose_start; stop_status=$?; "
+                    'printf "STOP_STATUS=%s\\n" "$stop_status"; '
+                    '[[ "$stop_status" == 0 ]] || exit 91',
                 ]
             )
             harness_path = root / "stop-start.sh"
-            harness_path.write_text(harness + "\n", encoding="utf-8", newline="\n")
+            if os.name == "nt":
+                # Git Bash has no Linux /proc. WSL cannot read a Windows temp
+                # path, so stage a disposable script and retain a real PID.
+                staged = f"/tmp/cpa-process-fixture-{uuid.uuid4().hex}.sh"
+                stdin = "\n".join(
+                    [
+                        "set -euo pipefail",
+                        "set -m",
+                        f"cat >'{staged}' <<'FIXTURE_EOF'",
+                        harness,
+                        "FIXTURE_EOF",
+                        f"bash -n '{staged}'",
+                        'trap \'command kill "$PID_FIXTURE" 2>/dev/null || true; '
+                        f'rm -f -- "{staged}"\' EXIT',
+                        "command sleep 60 & PID_FIXTURE=$!",
+                        "START_PGID=$PID_FIXTURE",
+                        "export PID_FIXTURE START_PGID",
+                        f"source '{staged}'",
+                    ]
+                )
+            else:
+                native = subprocess.Popen(
+                    ["sleep", "60"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                os.environ["PID_FIXTURE"] = str(native.pid)
+                os.environ["START_PGID"] = str(native.pid)
+                harness_path.write_text(harness + "\n", encoding="utf-8", newline="\n")
             completed = subprocess.run(
-                self._bash_command(bash, self._bash_path(bash, harness_path)),
+                (
+                    self._bash_command(bash)
+                    if os.name == "nt"
+                    else self._bash_command(bash, self._bash_path(bash, harness_path))
+                ),
+                input=(stdin.encode() if os.name == "nt" else None),
                 capture_output=True,
                 timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                 check=False,
             )
+            if os.name != "nt":
+                native.terminate()
+                native.wait(timeout=10)
         output = completed.stdout.decode() + completed.stderr.decode()
         self.assertNotIn("unexpected EOF", output)
         self.assertEqual(completed.returncode, 0, output)
-        self.assertIn("PROBE 999999", output)
-        self.assertIn("WAIT_BEFORE_SIGNAL 999999", output)
-        self.assertIn("KILL -TERM 999999", output)
+        helper_start = helper.index("stop_compose_start() {")
+        self.assertLess(
+            helper.index('wait "$start_pid"', helper_start),
+            helper.index(
+                'pid_alive "$start_pid" || return 0',
+                helper.index('wait "$start_pid"', helper_start),
+            ),
+        )
+        self.assertIn("GROUP_TERM", output)
 
     def test_traffic_guard_preflight_is_env_addressable_with_production_defaults(
         self,
@@ -934,29 +1220,39 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 "health_request_seconds",
             },
         )
-        # Each declaration is an independent call-site ceiling. Their sum is
-        # not an elapsed-time claim because optional retries do not all run in
-        # one transaction. Verify that every single ceiling leaves recovery
-        # room below the outer systemd fail-stop limit.
+        # A single call must not consume the outer fail-stop, and the cold path
+        # (one pull, two Compose clients, recovery and one health bound) must
+        # still leave time to roll back instead of being cut off midway.
         start_match = re.search(r"TimeoutStartSec=(\d+)min", conf)
         self.assertIsNotNone(start_match)
         assert start_match is not None
         dropin_start = int(start_match.group(1))
         self.assertGreater(min(budgets.values()), 0)
         self.assertLess(max(budgets.values()), dropin_start * 60)
+        cold_path = (
+            budgets["pull_seconds"]
+            + 2 * budgets["compose_seconds"]
+            + budgets["start_stop_seconds"]
+            + budgets["restore_seconds"]
+            + budgets["docker_kill_after_seconds"]
+            + budgets["health_request_seconds"]
+        )
+        self.assertLessEqual(cold_path, dropin_start * 60 - 600)
         stop_match = re.search(r"TimeoutStopSec=(\d+)min", conf)
         self.assertIsNotNone(stop_match)
         assert stop_match is not None
         stop_min = int(stop_match.group(1))
         self.assertIn("TimeoutStopSec=4min", conf)
         self.assertIn("trap 'defer_updater_signal 143' TERM", updater)
-        # The checker must use the same independent ceilings and the exact
-        # outer fail-stop, instead of treating their sum as a timeline.
+        # The checker must preserve one-call and cold-path safety against the
+        # exact outer fail-stop.
         self.assertIn("__CPA_UPDATER_BUDGETS__", checker)
         self.assertIn("budget_declaration_exact", checker)
         self.assertIn('"$start_seconds" -eq "$expected_start_seconds"', checker)
         self.assertIn('"$largest_budget" -lt "$start_seconds"', checker)
-        self.assertNotIn("pull_budget + compose_budget", checker)
+        self.assertIn("full_path_budget", checker)
+        self.assertIn("2 * compose_budget", checker)
+        self.assertIn("recovery_reserve=600", checker)
         self.assertIn(f"-lt {stop_min * 60}", doctor)
         self.assertIn("systemd_timeout_seconds", doctor)
 
@@ -3097,7 +3393,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         acceptance = (root / "scripts/remote/cpa-update-acceptance.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn('log "ROLLBACK_VERIFIED restored=$CUR backup=$BK"', updater)
+        self.assertIn(
+            'log "ROLLBACK_VERIFIED interrupted=${ROLLBACK_INTERRUPTED:-0} '
+            'restored=$CUR backup=$BK"',
+            updater,
+        )
         self.assertIn(
             '"rollback_logged": "ROLLBACK_VERIFIED restored=" in p.stdout',
             acceptance,

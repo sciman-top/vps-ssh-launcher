@@ -498,6 +498,8 @@ class ScriptValidationMixin:
     def _bash_command(cls, bash: str, *args: str) -> list[str]:
         """Give Git Bash the login environment its Unix utilities require."""
         args = cls._spill_long_script(tuple(args))
+        if bash == "wsl":
+            return ["wsl.exe", "-d", "Ubuntu-24.04", "-e", "bash", *args]
         if os.name == "nt" and "git" in {
             part.lower() for part in Path(bash).resolve().parts
         }:
@@ -551,6 +553,9 @@ class ScriptValidationMixin:
     @classmethod
     def _bash_path(cls, bash: str, path: Path) -> str:
         """Use a path understood by the selected Bash implementation."""
+        if bash == "wsl":
+            posix = path.as_posix()
+            return f"/mnt/{posix[0].lower()}{posix[2:]}" if path.drive else posix
         if os.name != "nt" or not path.drive:
             return str(path)
         style = cls._bash_mount_style(bash)

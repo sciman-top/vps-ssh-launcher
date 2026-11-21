@@ -25,6 +25,8 @@ $rulesBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($rulesTe
 $tcpLiteral = $contract.TcpPorts -join ' '
 $udpLiteral = $contract.UdpPorts -join ' '
 $liveStatePython = Get-ProxyFirewallLiveStatePython
+$expectedUnit = (New-ProxyFirewallUnit).Replace("`r`n", "`n").Replace("`r", "`n")
+$unitB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($expectedUnit))
 $applyLiteral = if ($Apply) { "1" } else { "0" }
 
 $remoteCommand = @'
@@ -34,6 +36,7 @@ APPLY="__APPLY__"
 PROFILE="__PROFILE__"
 RULES_B64="__RULES_B64__"
 EXPECTED_SHA="__RULES_SHA__"
+EXPECTED_UNIT_B64="__UNIT_B64__"
 EXPECTED_TCP="__TCP_PORTS__"
 EXPECTED_UDP="__UDP_PORTS__"
 SSH_PORT="__SSH_PORT__"
@@ -75,27 +78,11 @@ render_expected() {
 }
 
 render_unit() {
-    cat <<EOF
-[Unit]
-Description=vps-ssh-launcher managed firewall baseline
-After=network-pre.target nftables.service
-Wants=network-pre.target
-Before=network.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f $RULES_FILE
-ExecReload=/usr/sbin/nft -f $RULES_FILE
-ExecStop=-/usr/sbin/nft delete table inet $TABLE_NAME
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    printf '%s' "$EXPECTED_UNIT_B64" | base64 -d
 }
 
 normalize_systemd_cat() {
-    sed -e '/^$/d'
+    sed -e '/^#/d' -e '/^$/d'
 }
 service_active() { systemctl is-active --quiet vps-launcher-firewall.service; }
 service_enabled() { systemctl is-enabled --quiet vps-launcher-firewall.service; }
@@ -132,13 +119,12 @@ contract_ok() {
     command -v nft >/dev/null 2>&1 || return 3
     command -v python3 >/dev/null 2>&1 || return 9
     systemctl cat vps-launcher-firewall.service >/dev/null 2>&1 || return 4
-    unit_current || return 7
     [ -f "$RULES_FILE" ] || return 5
     tmp="$(mktemp)"
     render_expected > "$tmp"
     cmp -s "$tmp" "$RULES_FILE" || { rm -f -- "$tmp"; return 6; }
     rm -f -- "$tmp"
-    table_exists || return 70
+    unit_current || return 7
     live_state="$(live_chain_state)" || return 73
     if [ "$live_state" != 'exact' ]; then
         nft list table inet "$TABLE_NAME" >&2 2>/dev/null || true
@@ -265,7 +251,14 @@ nft -f "$RULES_FILE"
 systemctl enable --now vps-launcher-firewall.service
 
 verify_rc=0
-contract_ok || verify_rc=$?
+post_live=''
+if ! unit_current; then
+    verify_rc=7
+elif ! post_live=$(live_chain_state); then
+    verify_rc=73
+elif [ "$post_live" != 'exact' ]; then
+    verify_rc=72
+fi
 if [ "$verify_rc" -ne 0 ]; then
     echo "FIREWALL_BASELINE_VERIFY_FAILED reason=contract_$verify_rc" >&2
     rollback 6
@@ -288,6 +281,7 @@ echo 'FIREWALL_BASELINE_APPLIED'
   Replace("__PROFILE__", $Profile).
   Replace("__RULES_B64__", $rulesBase64).
   Replace("__RULES_SHA__", $rulesSha).
+  Replace("__UNIT_B64__", $unitB64).
   Replace("__TCP_PORTS__", $tcpLiteral).
   Replace("__UDP_PORTS__", $udpLiteral).
   Replace("__SSH_PORT__", "$($contract.SshPort)").

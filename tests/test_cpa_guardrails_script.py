@@ -61,7 +61,7 @@ def _guardrail_preparation_fixture(
     )
     body = body.replace(
         '$updaterTimeoutConfText = Read-ProjLeafText -Path $updaterTimeoutConfPath -Description "CPA updater timeout drop-in"',
-        '$updaterTimeoutConfText = "# fixture only"',
+        '$updaterTimeoutConfText = "TimeoutStartSec=40min`nTimeoutStopSec=4min`n"',
         1,
     )
     body = body.replace('if ($Profile -ne "bwg") {', "if ($false) {", 1)
@@ -1608,14 +1608,14 @@ docker() {{
         # loaded the unit with no trigger at all. Assert the exact schedule the
         # tool must write, not a copy of whatever the script currently says.
         SIX_FIELD_CALENDAR = "*-*-* 04:00:00"
-        self.assertIn(
-            'python3 - "$UPDATER_TIMER_UNIT" \''
-            + SIX_FIELD_CALENDAR
-            + "' '300' <<'PY' || {",
-            apply_source,
+        render_timer = (
+            'python3 - "$UPDATER_TIMER_UNIT" '
+            "'__UPDATER_TIMER_ONCALENDAR__' "
+            "'__UPDATER_TIMER_RANDOM_DELAY__' <<'PY' || {"
         )
+        self.assertIn(render_timer, apply_source)
         timer_projection = apply_source.split(
-            "'" + SIX_FIELD_CALENDAR + "' '300' <<'PY' || {",
+            render_timer,
             1,
         )[1].split("\nPY\n", 1)[0]
         self.assertIn('stripped == "[Timer]"', timer_projection)
@@ -1644,7 +1644,10 @@ docker() {{
             'systemctl show "$UPDATER_TIMER_UNIT" -p RandomizedDelayUSec --value',
             apply_source,
         )
-        self.assertIn("300000000|5min)", apply_source)
+        self.assertIn(
+            "__UPDATER_TIMER_RANDOM_DELAY_USEC__|__UPDATER_TIMER_RANDOM_DELAY_SHORT__)",
+            apply_source,
+        )
 
         # The rewrite is key-order preserving and idempotent: run the embedded
         # block against a stock unit and against an already-projected one.
@@ -1947,6 +1950,11 @@ $result | ConvertTo-Json -Depth 6 -Compress
             fixture = Path(tmp)
             scripts = fixture / "scripts"
             shutil.copytree(root / ".git", fixture / ".git")
+            scripts.mkdir(parents=True)
+            shutil.copy2(
+                root / "scripts/cpa-updater-timer-contract.ps1",
+                scripts / "cpa-updater-timer-contract.ps1",
+            )
             shutil.copytree(root / "scripts/remote", scripts / "remote")
             shutil.copytree(root / "scripts/lib", scripts / "lib")
             driver_prefix = prefix
@@ -4341,6 +4349,11 @@ foreach ($case in @(
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
             scripts = fixture / "scripts"
+            scripts.mkdir(parents=True)
+            shutil.copy2(
+                root / "scripts/cpa-updater-timer-contract.ps1",
+                scripts / "cpa-updater-timer-contract.ps1",
+            )
             shutil.copytree(root / "scripts/remote", scripts / "remote")
             shutil.copytree(root / "scripts/lib", scripts / "lib")
             shutil.copytree(root / ".git", fixture / ".git")

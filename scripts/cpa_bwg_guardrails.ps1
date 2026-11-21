@@ -290,6 +290,23 @@ $admissionIntegrityPinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.G
 $admissionIntegrityPinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityPinText
 $updaterTimeoutConfPath = Join-Path $scriptDir "remote\cpa-update-timeout.conf"
 $updaterTimeoutConfText = Read-ProjLeafText -Path $updaterTimeoutConfPath -Description "CPA updater timeout drop-in"
+$updaterTimeoutStartMatch = [regex]::Match(
+  $updaterTimeoutConfText,
+  '(?m)^\s*TimeoutStartSec\s*=\s*(40min)\s*$'
+)
+if (-not $updaterTimeoutStartMatch.Success) {
+  throw "CPA updater timeout drop-in lacks its reviewed TimeoutStartSec=40min ceiling."
+}
+. (Join-Path $scriptDir "cpa-updater-timer-contract.ps1")
+$updaterTimerContract = Get-CpaUpdaterTimerContract
+$updaterGuardrailReplacements = [ordered]@{
+  "__UPDATER_TIMER_ONCALENDAR__" = $updaterTimerContract.OnCalendar
+  "__UPDATER_TIMER_RANDOM_DELAY__" = $updaterTimerContract.RandomizedDelaySec
+  "__UPDATER_TIMER_RANDOM_DELAY_USEC__" = $updaterTimerContract.RandomizedDelayUSec
+  "__UPDATER_TIMER_RANDOM_DELAY_SHORT__" = $updaterTimerContract.RandomizedDelayShort
+  "__UPDATER_TIMEOUT_START_USEC__" = "2400000000"
+  "__UPDATER_TIMEOUT_START_SHORT__" = $updaterTimeoutStartMatch.Groups[1].Value
+}
 if ($AuditProjection) {
   $auditRoot = $null
   try {
@@ -591,6 +608,9 @@ $projectionSources = [ordered]@{
   "connect.ps1" = $connectText
   "scripts/cpa_bwg_guardrails.ps1" = (Get-Content -LiteralPath $PSCommandPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
   "scripts/remote/cpa-auto-update.sh" = $updaterText
+  "scripts/cpa-updater-timer-contract.ps1" = (
+    Get-Content -LiteralPath (Join-Path $scriptDir "cpa-updater-timer-contract.ps1") -Raw
+  ).Replace("`r`n", "`n").Replace("`r", "`n")
   "scripts/remote/cpa-health.py" = $healthText
   "scripts/remote/cpa_health_runtime.py" = $healthRuntimeText
   "scripts/remote/cpa_policy.py" = $policyText
@@ -1065,4 +1085,18 @@ $applyScript = $applyScript.Replace(
   "__CPA_UPDATER_TIMEOUT_CONF_SHA256__",
   $updaterTimeoutConfSha256
 )
+foreach ($placeholder in $updaterGuardrailReplacements.Keys) {
+  $applyScript = $applyScript.Replace(
+    $placeholder,
+    [string]$updaterGuardrailReplacements[$placeholder]
+  )
+}
+$unresolvedUpdaterPlaceholders = @(
+  [regex]::Matches($applyScript, '__UPDATER_[A-Z0-9_]+__') |
+    ForEach-Object { $_.Value } |
+    Sort-Object -Unique
+)
+if ($unresolvedUpdaterPlaceholders.Count -gt 0) {
+  throw "Unresolved updater placeholders: $($unresolvedUpdaterPlaceholders -join ',')"
+}
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

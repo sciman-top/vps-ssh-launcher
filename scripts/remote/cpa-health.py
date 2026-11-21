@@ -919,7 +919,10 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     if _ROUTE_MANIFEST_ERROR is not None:
         return 20
     if request is None:
-        request = _loopback_request(config)
+        # The CLI and default callers are production probes. A raw loopback
+        # callable lacks the tag that keeps scheduled generation off models
+        # absent from the catalog and enables its bounded preflight.
+        request = production_request(config)
 
     # Approved catalog IDs come from the same checked-in manifest as the
     # projector and semantic policy. Only explicit matrix modes generate
@@ -958,6 +961,11 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         # unavailable or spend a generation after a catalog-only absence.
         optional.update(_CHANNEL_MODELS)
         required -= set(_CHANNEL_MODELS)
+        # The one scheduled generation target gets its own bounded preflight
+        # below. Keep it out of the general completeness result so a transient
+        # catalog lag actually reaches that wait rather than returning before
+        # it can read a refreshed catalog.
+        required -= {"glm-5.3-flash"}
     # The legacy relay-soft mode is retained as a compatibility entry point;
     # it now observes ai.input.im only. It is never an update decision.
     # When the provider is disabled, return 13 without a network request.
@@ -1071,10 +1079,41 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # route, while catalog readiness permits configured optional models to be
     # absent.
     ids = set(ids)
-    preflight_started = time.monotonic()
+    preflight_started: float | None = None
+    sleep_started: float | None = None
+    # The main catalog loop may already have spent its convergence window.
+    # That attempt is not the preflight wait; giving the latter a full bound
+    # avoids turning an intentional retry limit into a zero-time deadline.
+    preflight_attempt_started: float | None = None
+    preflight_attempt_calls = 0
 
-    def remaining_delay(started):
-        return started + delay - time.monotonic()
+    def remaining_delay():
+        nonlocal preflight_attempt_started, preflight_attempt_calls
+        nonlocal preflight_started, sleep_started
+        now = time.monotonic()
+        if preflight_started is None:
+            preflight_started = now
+            sleep_started = now
+        if preflight_attempt_started is None:
+            # This read starts phase two even when the main catalog retries
+            # consumed their whole timeout. Only this attempt's delay and the
+            # absolute 60-second phase cap can end it.
+            preflight_attempt_started = now - 2.0
+            preflight_attempt_calls = 0
+        # OAuth-lane production uses catalog() as a zero-generation preflight.
+        # Permit no more than the explicit three-attempt retry contract, even
+        # when a mocked or frozen clock cannot advance between reads.
+        preflight_attempt_calls += 1
+        if preflight_attempt_calls > 3:
+            return 0
+        remaining = preflight_attempt_started + delay - now
+        assert sleep_started is not None
+        return min(remaining, max(0.25, sleep_started + 60.0 - now))
+
+    def phase_two_expired() -> bool:
+        if sleep_started is None:
+            return False
+        return sleep_started + 60.0 <= time.monotonic()
 
     def refresh_catalog(requested):
         nonlocal ids
@@ -1101,11 +1140,12 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         "PROBE_PREFLIGHT status=waiting missing=%s"
                         % ",".join(sorted(required - ids))
                     )
-                if preflight_started + delay <= time.monotonic():
+                if phase_two_expired():
                     return 10
                 sleep(2)
+                sleep_started = time.monotonic()
                 try:
-                    remaining = remaining_delay(preflight_started)
+                    remaining = remaining_delay()
                     if remaining <= 0:
                         return 10
                     requested = (
@@ -1135,7 +1175,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             # a request: use the catalog the readiness check already obtained.
             if probe_model not in refreshed and delay > 0:
                 while True:
-                    remaining = remaining_delay(preflight_started)
+                    remaining = remaining_delay()
                     if remaining <= 0:
                         break
                     requested = request.catalog(remaining)

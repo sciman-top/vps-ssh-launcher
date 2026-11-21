@@ -9,6 +9,15 @@ doctor 门禁、guardrails 入口与应急开关。README 只保留定位与边�
 [cpa-stale-cooldown-recovery.md](cpa-stale-cooldown-recovery.md)，
 手动回滚见 [cpa-manual-rollback.md](cpa-manual-rollback.md)。
 
+## 更新事务边界
+
+- `cpa-health.py` 的默认及 CLI 入口使用带生产标记的目录请求。单模型 `generation` 会在任何生成请求前，对缺席的 `glm-5.3-flash` 做一次有界目录等待；普通目录读取不再被误当作生产预检。
+- `cpa-auto-update.sh` 在取得维护锁后的 `TERM/INT` 会先恢复已启动的 Compose helper，再核验旧镜像、Compose 文件与本机 `readiness`。helper 已完成或已回收时，`/proc` 消失不能被误判为恢复失败；发送组信号前会复核 Docker 客户端身份。
+- `cpa-updater-schedule-check.sh` 按 systemd 显式 `TimeoutStartSec` 优先规则判断有效上限，300 秒随机延迟是启动后的附加延迟。`-Apply` 在最终提交前回读 timer 有效日历、随机延迟和 service 有效启动超时。
+- `scripts/proxy_hardening_drift.ps1` 核对 CDN 回环地址、端口、WS、无传输层 TLS、客户端及发布路径，并比较实际加载的防火墙 oneshot unit 和 drop-in，无法从当前规则健康推导重启后的持久化健康。
+
+这些修复改善更新事务可恢复性、检查时序和漂移识别，**不保证**账号长期不封禁、模型不降智或所有网络的长期可用。证据仍按 `repo_verified -> filesystem_projected -> host_loaded -> live_accepted` 分层；本地及投影验证不等于真实客户端的长时验收。
+
 ## 流式受控验收
 
 `scripts/cpa_stream_acceptance.py` 对指定本机 sidecar 发起一次 Responses 请求，

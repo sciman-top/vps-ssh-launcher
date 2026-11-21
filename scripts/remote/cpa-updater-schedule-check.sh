@@ -214,11 +214,11 @@ case "$random_delay" in
     ;;
 esac
 
-# Each work leg and Docker kill grace is an independently enforced ceiling at
-# its call site. Adding all optional retries is not an actual transaction
-# elapsed time, so only validate the individual ceiling below the projected
-# systemd hard limit. The 40min service timeout is the overall fail-stop bound;
-# it does not prove that every optional retry can run before that boundary.
+# Each work leg and Docker kill grace is independently bounded at its call
+# site. Their full cold-path total must still fit comfortably inside the
+# systemd overall fail-stop. In particular, the 600s pull, 180s Compose client
+# and the possible 30s+compose wait before the second 180s Compose step are
+# not interchangeable just because neither leg exceeds the 40min ceiling.
 # `-Apply` projects an explicit per-unit TimeoutStartSec. Read both that value
 # and the manager default, so neither can silently cap a longer raw setting.
 pull_budget="$(budget_seconds pull_seconds || true)"
@@ -228,23 +228,38 @@ restore_budget="$(budget_seconds restore_seconds || true)"
 kill_budget="$(budget_seconds docker_kill_after_seconds || true)"
 health_budget="$(budget_seconds health_request_seconds || true)"
 largest_budget=0
+recovery_reserve=600
 budget_valid=1
 for budget_value in "$pull_budget" "$compose_budget" "$start_stop_budget" \
   "$restore_budget" "$kill_budget" "$health_budget"; do
   case "$budget_value" in
     ''|*[!0-9]*) budget_valid=0; break ;;
   esac
-  if [ "$budget_value" -gt "$largest_budget" ]; then
+  if [ "$budget_valid" -eq 1 ] && [ "$budget_value" -gt "$largest_budget" ]; then
     largest_budget="$budget_value"
   fi
 done
+full_path_budget=''
+if [ "$budget_valid" -eq 1 ]; then
+  full_path_budget=$((pull_budget + 2 * compose_budget + start_stop_budget + \
+    restore_budget + kill_budget + health_budget))
+fi
 budget_declaration=incomplete
 if budgets_every >/dev/null 2>&1 && budget_declaration_exact; then
   budget_declaration=exact
 fi
 expected_start_seconds=2400
 echo "updater-schedule-budget-declared=$budget_declaration"
-echo "updater-schedule-budget-largest=${budget_valid:+${largest_budget:-UNVERIFIED}}s"
+if [ "$budget_valid" -eq 1 ]; then
+  echo "updater-schedule-budget-largest=${largest_budget}s"
+else
+  echo "updater-schedule-budget-largest=UNVERIFIED"
+fi
+if [ "$budget_valid" -eq 1 ]; then
+  echo "updater-schedule-budget-full-path=${full_path_budget}s"
+else
+  echo "updater-schedule-budget-full-path=UNVERIFIED"
+fi
 echo "updater-schedule-budget-expected=${expected_start_seconds}s"
 
 start_property="$(systemctl show -p TimeoutStartUSec --value cliproxyapi-update.service 2>/dev/null || true)"
@@ -260,6 +275,12 @@ echo "updater-schedule-timeout-raw=${start_property:-ABSENT}/${systemd_default_r
 # Prefer Effective, which includes both a drop-in and the manager default. A
 # systemd build that omits it from one query is covered by the other query.
 [ -n "$effective_start_raw" ] || effective_start_raw="$effective_property"
+# systemd documents a per-unit explicit duration as the effective ceiling even
+# when it exceeds DefaultTimeoutStartSec: the manager default applies only when
+# the service leaves TimeoutStartSec unset. Keep that precedence explicit.
+if [ -n "$start_property" ] && [ "$start_property" != invalid ]; then
+  effective_start_raw="$start_property"
+fi
 start_seconds=''
 case "$effective_start_raw" in
   ''|infinity|*infinity) : ;;
@@ -358,10 +379,13 @@ case "$start_seconds" in
     # review of the independent call-site ceilings and recovery paths.
     if [ "$budget_valid" -eq 1 ] && [ "$budget_declaration" = exact ] &&
       [ "$largest_budget" -lt "$start_seconds" ] &&
+      [ "$full_path_budget" -le $((start_seconds - recovery_reserve)) ] &&
       [ "$start_seconds" -eq "$expected_start_seconds" ]; then
       flag OK updater-schedule-budget
     elif [ "$budget_valid" -eq 1 ] && [ "$largest_budget" -ge "$start_seconds" ]; then
       flag "single_budget=${largest_budget}s" updater-schedule-budget
+    elif [ "$budget_valid" -eq 1 ] && [ "$full_path_budget" -gt $((start_seconds - recovery_reserve)) ]; then
+      flag "full_path_budget=${full_path_budget}s" updater-schedule-budget
     else
       flag "timeout_start=${start_seconds}s" updater-schedule-budget
     fi

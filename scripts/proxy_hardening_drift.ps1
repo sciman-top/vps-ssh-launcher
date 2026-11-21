@@ -83,6 +83,11 @@ $firewallRulesSha = (
 ).Replace("-", "").ToLowerInvariant()
 $firewallTcpLiteral = $firewallContract.TcpPorts -join ' '
 $firewallUdpLiteral = $firewallContract.UdpPorts -join ' '
+$firewallExpectedUnitB64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (New-ProxyFirewallUnit).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
 $cdnContractPython = @'
 import base64
 import glob
@@ -114,6 +119,10 @@ frag_id = ''
 config_path = ''
 listen = ''
 security = ''
+network = ''
+port = None
+tag = ''
+client_count = 0
 try:
     frag = json.load(open(frag_path, encoding='utf-8'))
     first = (frag.get('inbounds') or [{}])[0]
@@ -121,6 +130,10 @@ try:
     config_path = (first.get('streamSettings') or {}).get('wsSettings', {}).get('path', '')
     listen = first.get('listen', '')
     security = (first.get('streamSettings') or {}).get('security', 'none')
+    network = (first.get('streamSettings') or {}).get('network') or 'tcp'
+    port = first.get('port')
+    tag = first.get('tag') or ''
+    client_count = len((first.get('settings') or {}).get('clients') or [])
 except Exception:
     pass
 published_path = ''
@@ -168,14 +181,24 @@ for sub_path in sorted(subscription_root.rglob('*')):
         continue
     if published_path:
         break
+inbound_contract = (
+    tag == 'vps-launcher-cdn-ws'
+    and listen == '127.0.0.1'
+    and type(port) is int
+    and port == 45989
+    and network == 'ws'
+    and security == 'none'
+    and bool(config_path)
+    and client_count >= 1
+)
 if not base:
     print('base-missing')
 elif not frag_id:
     print('fragment-missing')
 elif base != frag_id:
     print('mismatch')
-elif not config_path:
-    print('path-missing')
+elif not inbound_contract:
+    print('inbound-contract')
 elif published_path and published_path != config_path:
     print('path-mismatch')
 elif (
@@ -185,16 +208,11 @@ elif (
     and published_host == cdn_host
     and published_port == 2087
     and config_path == published_path
-    and listen == '127.0.0.1'
-    and security == 'none'
+    and inbound_contract
 ):
     print('ok')
 elif published_path:
     print('published-contract-mismatch')
-elif listen != '127.0.0.1':
-    print('listen-mismatch')
-elif security != 'none':
-    print('security-mismatch')
 else:
     print('ok')
 '@
@@ -2435,6 +2453,17 @@ firewall_live_state() {
 __LIVE_FIREWALL_PYTHON__
 PY_FIREWALL
 }
+FIREWALL_EXPECTED_UNIT_B64='__FIREWALL_EXPECTED_UNIT_B64__'
+firewall_unit_current() {
+    local expected actual
+    expected="$(printf '%s' "$FIREWALL_EXPECTED_UNIT_B64" | base64 -d)" || return 1
+    actual="$(systemctl cat "$FIREWALL_SERVICE" 2>/dev/null)" || return 1
+    [ -n "$actual" ] || return 1
+    case "$actual" in
+        *" (offset)"*) return 1 ;;
+    esac
+    [ "$(printf '%s\n' "$actual" | sed '/^$/d')" = "$(printf '%s\n' "$expected" | sed '/^$/d')" ]
+}
 if [ ! -f "$FIREWALL_RULES" ]; then
     echo 'firewall_baseline=drift rules-missing'
     drift+=('firewall-baseline')
@@ -2450,6 +2479,9 @@ elif ! firewall_live_state="$(firewall_live_state)"; then
     drift+=('firewall-baseline')
 elif [ "$firewall_live_state" != 'exact' ]; then
     echo "firewall_baseline=drift $firewall_live_state"
+    drift+=('firewall-baseline')
+elif ! firewall_unit_current; then
+    echo 'firewall_baseline=drift unit-or-dropin-mismatch'
     drift+=('firewall-baseline')
 else
     echo 'firewall_baseline=applied'
@@ -2475,7 +2507,7 @@ for lane in "${drift[@]}"; do
 done
 echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__CDN_CONTRACT_PYTHON__", $cdnContractPython).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__VERIFIED_TLS_HELPER__", $verifiedTlsHelper).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_HOP_START__", "$($firewallContract.Hysteria2HopStart)").Replace("__FIREWALL_HOP_END__", "$($firewallContract.Hysteria2HopEnd)").Replace("__FIREWALL_HOP_TARGET__", "$($firewallContract.Hysteria2HopTarget)").Replace("__LIVE_FIREWALL_PYTHON__", $liveFirewallPython).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__CDN_CONTRACT_PYTHON__", $cdnContractPython).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__VERIFIED_TLS_HELPER__", $verifiedTlsHelper).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_HOP_START__", "$($firewallContract.Hysteria2HopStart)").Replace("__FIREWALL_HOP_END__", "$($firewallContract.Hysteria2HopEnd)").Replace("__FIREWALL_HOP_TARGET__", "$($firewallContract.Hysteria2HopTarget)").Replace("__LIVE_FIREWALL_PYTHON__", $liveFirewallPython).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__FIREWALL_EXPECTED_UNIT_B64__", $firewallExpectedUnitB64).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
 
 try {
   Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

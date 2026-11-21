@@ -367,3 +367,27 @@ else:
     print("live-rules:" + ",".join(mismatched))
 '@
 }
+
+function New-ProxyFirewallUnit {
+  # Shared source for the persistent oneshot definition. Both the baseline
+  # self-check and the read-only drift gate consume this text, so a drop-in
+  # that overrides ExecStart fails even while the currently loaded rules
+  # happen to be correct.
+  return @'
+[Unit]
+Description=vps-ssh-launcher managed firewall baseline
+After=network-pre.target nftables.service
+Wants=network-pre.target
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft
+ExecStop=-/usr/sbin/nft delete table inet vps_launcher_guard
+
+[Install]
+WantedBy=multi-user.target
+'@
+}

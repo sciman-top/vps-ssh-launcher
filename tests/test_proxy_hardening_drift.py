@@ -66,7 +66,108 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("__FIREWALL_HOP_START__", text)
         self.assertIn("__FIREWALL_TCP__", text)
         self.assertIn("__FIREWALL_UDP__", text)
+        self.assertIn("FIREWALL_EXPECTED_UNIT_B64", text)
+        self.assertIn("firewall_unit_current", text)
+        self.assertIn("unit-or-dropin-mismatch", text)
+        self.assertIn('Replace("__FIREWALL_EXPECTED_UNIT_B64__"', text)
         self.assertIn("__LIVE_FIREWALL_PYTHON__", text)
+
+    def test_cdn_inbound_shape_mismatch_is_drift(self) -> None:
+        source = self.text.split("$cdnContractPython = @'\n", 1)[1]
+        source = source.split("\n'@", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            xray = root / "xray"
+            xray.mkdir()
+            fragment = xray / "15_vps_ssh_launcher_cdn_ws.json"
+            uuid = "11111111-1111-1111-1111-111111111111"
+            (xray / "00_base.json").write_text(
+                json.dumps(
+                    {
+                        "inbounds": [
+                            {
+                                "protocol": "vless",
+                                "settings": {"clients": [{"id": uuid}]},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def classify(
+                *,
+                listen: str = "127.0.0.1",
+                port: int = 45989,
+                network: str = "ws",
+                security: str = "none",
+                path: str = "/cdn",
+            ) -> str:
+                inbound = {
+                    "tag": "vps-launcher-cdn-ws",
+                    "listen": listen,
+                    "port": port,
+                    "protocol": "vless",
+                    "settings": {
+                        "clients": [{"id": uuid}],
+                        "decryption": "none",
+                    },
+                    "streamSettings": {
+                        "network": network,
+                        "security": security,
+                        "wsSettings": {"path": path},
+                    },
+                }
+                fragment.write_text(
+                    json.dumps({"inbounds": [inbound]}), encoding="utf-8"
+                )
+                result = subprocess.run(
+                    [sys.executable, "-", str(xray), str(fragment)],
+                    input=source,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+
+            self.assertEqual(classify(), "ok")
+            self.assertEqual(classify(path="/other"), "ok")
+            self.assertEqual(classify(listen="0.0.0.0"), "inbound-contract")
+            self.assertEqual(classify(network="tcp"), "inbound-contract")
+            self.assertEqual(classify(security="tls"), "inbound-contract")
+            self.assertEqual(classify(port=45990), "inbound-contract")
+            fragment.write_text(
+                json.dumps(
+                    {
+                        "inbounds": [
+                            {
+                                "tag": "vps-launcher-cdn-ws",
+                                "listen": "127.0.0.1",
+                                "port": 45989,
+                                "streamSettings": {
+                                    "network": "ws",
+                                    "security": "none",
+                                    "wsSettings": {"path": "/cdn"},
+                                },
+                                "settings": {"clients": []},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, "-", str(xray), str(fragment)],
+                input=source,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "fragment-missing")
 
     def test_merged_subscription_detects_a_stale_published_uuid(self) -> None:
         text = self.text
@@ -309,12 +410,9 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("https://www.cloudflare.com/ips-v6", text)
         self.assertIn("def upstream(addresses, networks):", text)
         self.assertIn("published-contract-mismatch", text)
-        self.assertIn("listen-mismatch", text)
-        self.assertIn("security-mismatch", text)
-        self.assertIn(
-            '"$XRAY_CONF" "$cdn_frag" "$CDN_HOST" <<\'PY_CDN_CONTRACT\'',
-            text,
-        )
+        self.assertIn("listen = first.get('listen', '')", text)
+        self.assertIn("security = (first.get('streamSettings') or {})", text)
+        self.assertIn("__CDN_CONTRACT_PYTHON__", text)
         self.assertNotIn(
             'getent ahostsv4 "$EXPECTED_REALITY_HOST" 2>/dev/null | awk',
             text,
@@ -352,8 +450,11 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
                     {
                         "inbounds": [
                             {
+                                "tag": "vps-launcher-cdn-ws",
                                 "listen": "127.0.0.1",
+                                "port": 45989,
                                 "streamSettings": {
+                                    "network": "ws",
                                     "security": "none",
                                     "wsSettings": {"path": "/a"},
                                 },

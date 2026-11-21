@@ -2739,7 +2739,7 @@ write_base64_file "__CPA_UPDATER_TIMEOUT_CONF_B64__" "$UPDATER_TIMEOUT_DROPIN" 6
 # racing for the one maintenance lock. Only Directory/Timer keys are rewritten;
 # every other line of the unit stays where the host operator left it.
 if [ -f "$UPDATER_TIMER_UNIT" ]; then
-  python3 - "$UPDATER_TIMER_UNIT" '*-*-* 04:00:00' '300' <<'PY' || {
+  python3 - "$UPDATER_TIMER_UNIT" '__UPDATER_TIMER_ONCALENDAR__' '__UPDATER_TIMER_RANDOM_DELAY__' <<'PY' || {
 import sys
 from pathlib import Path
 
@@ -2795,9 +2795,10 @@ PY
   # is asked to echo the same value after the reload later in this transaction.
   UPDATER_TIMER_ONCALENDAR=$(awk -F= '/^OnCalendar=/ {print $2; exit}' "$UPDATER_TIMER_UNIT")
   UPDATER_TIMER_DELAY=$(awk -F= '/^RandomizedDelaySec=/ {print $2; exit}' "$UPDATER_TIMER_UNIT")
-  if [ "$UPDATER_TIMER_ONCALENDAR" != '*-*-* 04:00:00' ] || [ "$UPDATER_TIMER_DELAY" != '300' ]; then
+  if [ "$UPDATER_TIMER_ONCALENDAR" != '__UPDATER_TIMER_ONCALENDAR__' ] ||
+     [ "$UPDATER_TIMER_DELAY" != '__UPDATER_TIMER_RANDOM_DELAY__' ]; then
     restore_all
-    echo "ROLLBACK updater_timer_readback want=*-*-* 04:00:00/300 got=$UPDATER_TIMER_ONCALENDAR/$UPDATER_TIMER_DELAY"
+    echo "ROLLBACK updater_timer_readback want=__UPDATER_TIMER_ONCALENDAR__/__UPDATER_TIMER_RANDOM_DELAY__ got=$UPDATER_TIMER_ONCALENDAR/$UPDATER_TIMER_DELAY"
     exit 1
   fi
   echo "UPDATER_TIMER_READBACK on_calendar=$UPDATER_TIMER_ONCALENDAR randomized_delay=$UPDATER_TIMER_DELAY"
@@ -3198,7 +3199,7 @@ if [ -f "$UPDATER_TIMER_UNIT" ]; then
   UPDATER_TIMER_CALENDAR=$(systemctl show "$UPDATER_TIMER_UNIT" -p TimersCalendar --value 2>/dev/null || true)
   UPDATER_TIMER_DELAY_USEC=$(systemctl show "$UPDATER_TIMER_UNIT" -p RandomizedDelayUSec --value 2>/dev/null || true)
   case "$UPDATER_TIMER_DELAY_USEC" in
-    300000000|5min)
+    __UPDATER_TIMER_RANDOM_DELAY_USEC__|__UPDATER_TIMER_RANDOM_DELAY_SHORT__)
       ;;
     *)
       restore_all
@@ -3207,7 +3208,7 @@ if [ -f "$UPDATER_TIMER_UNIT" ]; then
       ;;
   esac
   case "$UPDATER_TIMER_CALENDAR" in
-    *"OnCalendar=*-*-* 04:00:00"*)
+    *"OnCalendar=__UPDATER_TIMER_ONCALENDAR__"*)
       ;;
     *)
       restore_all
@@ -3215,7 +3216,24 @@ if [ -f "$UPDATER_TIMER_UNIT" ]; then
       exit 1
       ;;
   esac
-  echo "UPDATER_TIMER_EFFECTIVE on_calendar=0400 randomized_delay_usec=$UPDATER_TIMER_DELAY_USEC"
+  UPDATER_TIMEOUT_START=$(systemctl show cliproxyapi-update.service -p TimeoutStartUSec --value 2>/dev/null || true)
+  case "$UPDATER_TIMEOUT_START" in
+    __UPDATER_TIMEOUT_START_USEC__|__UPDATER_TIMEOUT_START_SHORT__)
+      ;;
+    *)
+      restore_all
+      echo "ROLLBACK updater_timeout_effective_readback timeout_start=$UPDATER_TIMEOUT_START"
+      exit 1
+      ;;
+  esac
+echo "UPDATER_TIMER_EFFECTIVE on_calendar=0400 randomized_delay_usec=$UPDATER_TIMER_DELAY_USEC"
+echo "UPDATER_TIMEOUT_EFFECTIVE timeout_start=$UPDATER_TIMEOUT_START"
+  if ! systemctl start cliproxyapi-update.timer >"$BK/cpa-updater-timer-start.log" 2>&1; then
+    restore_all
+    echo "ROLLBACK updater_timer_start"
+    exit 1
+  fi
+  echo "UPDATER_TIMER_SLOT=04:00 UTC jitter=__UPDATER_TIMER_RANDOM_DELAY__sec"
 fi
 if ! systemctl enable cpa-admission.service >"$BK/cpa-admission-enable.log" 2>&1; then
   restore_all

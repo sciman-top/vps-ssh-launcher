@@ -33,6 +33,11 @@ STATUS_DIR=/var/lib/vps-ssh-launcher/maintenance-status
 STATUS_FILE="$STATUS_DIR/cpa-update.status"
 PENDING_FILE="$STATUS_DIR/cpa-update.pending"
 STATUS_STARTED_AT="$(date -u +%FT%TZ)"
+MUTATED=0
+DOCKER_START_PENDING=0
+ROLLBACK_IMAGE_ID=""
+ROLLBACK_IMAGE_REF=""
+ROLLBACK_INTERRUPTED=0
 
 write_status() {
   local result="$1" code="$2" finished tmp reason="${3:-}"
@@ -122,10 +127,75 @@ pid_alive() {
     return 1
   fi
   state=${state//[[:space:]]/}
-  [[ -n "$state" && "$state" != Z* && "$state" != T* ]]
+  [[ -n "$state" && "$state" != Z* ]]
+}
+restore_verified() {
+  # Fatal ERR keeps the failed main command's status. A TERM/INT handler calls
+  # this with its conventional status instead. Any write after the backup is
+  # therefore restored and read back before on_exit can label it a success.
+  local code=${1:-$?} rollback_failed=0 running_image expected_image
+  [[ "${MUTATED:-0}" == 1 || -n "$ROLLBACK_IMAGE_ID" ]] || return 0
+  trap '' ERR INT TERM HUP
+  ROLLBACK_STAGE=restore
+  cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
+  if [[ "$rollback_failed" == 0 ]]; then
+    ROLLBACK_STAGE=compose_up
+    (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) || rollback_failed=1
+  fi
+  if [[ "$rollback_failed" == 0 ]]; then
+    ROLLBACK_STAGE=health_readiness
+    health readiness || rollback_failed=1
+  fi
+  if [[ "$rollback_failed" == 0 ]]; then
+    ROLLBACK_STAGE=image_readback
+    running_image=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
+    expected_image=$(docker image inspect --format '{{.ID}}' "$ROLLBACK_IMAGE_REF" 2>/dev/null || true)
+    if [[ -z "$running_image" || "$running_image" != "$expected_image" ]]; then
+      rollback_failed=1
+    fi
+  fi
+  if [[ "$rollback_failed" == 0 ]]; then
+    ROLLBACK_STAGE=config_readback
+    cmp -s "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
+  fi
+  MUTATED=0
+  DOCKER_START_PENDING=0
+  if [[ "$rollback_failed" == 0 ]]; then
+    ROLLBACK_VERIFIED=1
+    log "ROLLBACK_VERIFIED interrupted=${ROLLBACK_INTERRUPTED:-0} restored=$CUR backup=$BK"
+    return 0
+  fi
+  log "ROLLBACK_FAILED backup=$BK stage=$ROLLBACK_STAGE"
+  return 1
+}
+rollback() {
+  local code=${1:-$?}
+  trap '' ERR INT TERM HUP
+  restore_verified "$code" || log "ROLLBACK_FAILED backup=$BK stage=$ROLLBACK_STAGE"
+  [[ "$code" != 0 ]] || code=1
+  exit "$code"
+}
+rollback_after_write() {
+  local code=${1:?rollback signal code required} recovery_status=0
+  trap '' ERR INT TERM HUP
+  ROLLBACK_INTERRUPTED=1
+  if [[ -n "$ROLLBACK_IMAGE_ID" && -f "$BK/compose.yml" ]]; then
+    restore_verified "$code" || recovery_status=$?
+    [[ "$recovery_status" == 0 ]] || exit 32
+    # An interrupted update that has been restored and read back is a deferred
+    # update, not a failed one. Keep the on_exit receipt aligned with the
+    # already-verified ROLLBACK_VERIFIED result.
+    exit 31
+  fi
+  MUTATED=0
+  DOCKER_START_PENDING=0
+  ROLLBACK_INTERRUPTED=1
+  log "ROLLBACK_VERIFIED interrupted=1 before_mutation code=$code backup=$BK"
+  exit 31
 }
 stop_compose_start() {
-  local start_pid="${compose_start_pid:-${start_pid:-}}" start_cwd start_group
+  local start_pid="${compose_start_pid:-${start_pid:-}}" start_cwd start_group start_command
+  local child_status=0
   local attempt=0
   [[ "$start_pid" =~ ^[0-9]+$ ]] || return 1
   if ! is_within_tree "$DIR" "$BK"; then
@@ -133,27 +203,40 @@ stop_compose_start() {
     return 1
   fi
   [[ -d "$BK" && ! -L "$BK" ]] || return 1
-  start_cwd=$(readlink -f -- "/proc/$start_pid/cwd" 2>/dev/null || true)
-  [[ -n "$start_cwd" ]] || return 1
+  # Inspect the direct child before reaping it. `wait` is the only operation
+  # that returns its actual exit status; once bash reaps it, /proc and kill -0
+  # cannot distinguish success from failure.
+  if ! start_cwd=$(readlink -f -- "/proc/$start_pid/cwd" 2>/dev/null); then
+    wait "$start_pid" 2>/dev/null || child_status=$?
+    COMPOSE_START_STATUS=$child_status
+    start_status=$child_status
+    return 0
+  fi
   is_within_tree "$DIR" "$start_cwd" || return 1
-  # Reap our background compose client once it exits. `wait` is already
-  # complete under some Windows launchers, so a nonzero status is not evidence
-  # that the process is still running; pid_alive decides that below.
-  wait "$start_pid" 2>/dev/null || true
   # The positive group ID is the parent shell's, not a child we own. A child's
   # group is safe only when it equals its own PID (it leads the group).
   start_group=${start_pgid:-}
   if [[ -z "$start_group" ]]; then
-    start_group=$(ps -o pgid= -p "$start_pid" 2>/dev/null | tr -d ' ') || return 1
+    start_group=$(ps -o pgid= -p "$start_pid" 2>/dev/null | tr -d ' ') || true
   fi
-  if [[ "$start_group" =~ ^[0-9]+$ && "$start_group" == "$start_pid" ]]; then
+  start_command=$(tr '\0' ' ' <"/proc/$start_pid/cmdline" 2>/dev/null || true)
+  if [[ "$start_group" =~ ^[0-9]+$ && "$start_group" == "$start_pid" &&
+        "$start_command" == *'compose up -d --pull never'* ]]; then
     kill -TERM -- "-$start_pid" 2>/dev/null || true
-  else
+  elif [[ "$start_command" == *'compose up -d --pull never'* ]]; then
     # A recovery helper deliberately has no TERM trap. Blocking TERM until it
     # exits ensures the old Compose process cannot outlive the restored image.
     trap '' TERM
     kill -TERM "$start_pid" 2>/dev/null || true
   fi
+  pid_alive "$start_pid" || return 0
+  # A TERM can finish the child before this helper reaps it. Retain the actual
+  # exit status for the no-signal transaction boundary; recovery after an
+  # explicit interruption uses the restore that follows.
+  wait "$start_pid" 2>/dev/null || child_status=$?
+  COMPOSE_START_STATUS=$child_status
+  start_status=$child_status
+  [[ -e "/proc/$start_pid" ]] || return 0
   while (( attempt < 30 )); do
     attempt=$((attempt + 1))
     pid_alive "$start_pid" || return 0
@@ -165,8 +248,7 @@ stop_compose_start() {
 # process-group ID. Without this, ASLR can assign the child a PID that already
 # leads an unrelated process group; the recovery path would kill that group.
 set -m
-trap 'defer_updater_signal 130' INT
-trap 'defer_updater_signal 143' TERM
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
 # Bound every Docker client call, including rollback. A stalled pull must not
 # monopolise the shared maintenance lock or block certificate renewal forever.
 docker() {
@@ -175,6 +257,15 @@ docker() {
   if [[ "$1" == compose ]]; then budget=180; fi
   timeout --signal=TERM --kill-after=15s "${budget}s" docker "$@"
 }
+fi
+defer_updater_signal() {
+  local code="$1"
+  if [[ "${UPDATER_SIGNAL:-0}" == 0 ]]; then
+    UPDATER_SIGNAL="$code"
+  fi
+}
+trap 'defer_updater_signal 130' INT
+trap 'defer_updater_signal 143' TERM
 
 require_plugin_canary() {
   python3 - "$DIR/config.yaml" <<'PY'
@@ -1607,43 +1698,7 @@ log "BACKUP_IMAGE_ID=$ROLLBACK_IMAGE_ID"
 MUTATED=0
 ROLLBACK_STAGE=prepare
 ROLLBACK_VERIFIED=0
-rollback() {
-  local code=${1:-$?} rollback_failed=0
-  trap '' ERR INT TERM HUP
-  if [[ "$MUTATED" == 1 ]]; then
-    ROLLBACK_STAGE=restore
-    cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
-    if [[ "$rollback_failed" == 0 ]]; then
-      ROLLBACK_STAGE=compose_up
-      (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) || rollback_failed=1
-    fi
-    if [[ "$rollback_failed" == 0 ]]; then
-      ROLLBACK_STAGE=health_readiness
-      health readiness || rollback_failed=1
-    fi
-    if [[ "$rollback_failed" == 0 ]]; then
-      ROLLBACK_STAGE=image_readback
-      running_image=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
-      expected_image=$(docker image inspect --format '{{.ID}}' "$ROLLBACK_IMAGE_REF" 2>/dev/null || true)
-      if [[ -z "$running_image" || "$running_image" != "$expected_image" ]]; then
-        rollback_failed=1
-      fi
-    fi
-    if [[ "$rollback_failed" == 0 ]]; then
-      ROLLBACK_STAGE=config_readback
-      cmp -s "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
-    fi
-    if [[ "$rollback_failed" == 0 ]]; then
-      ROLLBACK_VERIFIED=1
-      log "ROLLBACK_VERIFIED restored=$CUR backup=$BK"
-    else
-      log "ROLLBACK_FAILED backup=$BK stage=$ROLLBACK_STAGE"
-      set +e
-    fi
-  fi
-  [[ "$code" != 0 ]] || code=1
-  exit "$code"
-}
+MUTATION_STARTED=0
 persist_pending_or_rollback() {
   local verified_lanes="$1"
   if write_pending_verification "$verified_lanes"; then
@@ -1657,10 +1712,17 @@ persist_pending_or_rollback() {
   exit 9
 }
 trap - ERR
-trap rollback ERR
+# A failed backup read must stop the transaction; it must never be swallowed by
+# cleanup that then refers to an uninitialised BK.
+restore_on_err() {
+  local code=$?
+  restore_verified "$code" || true
+  exit "$code"
+}
+trap restore_on_err ERR
 trap 'ROLLBACK_HUP=1' HUP
-trap 'defer_updater_signal 130' INT
-trap 'defer_updater_signal 143' TERM
+trap 'rollback_after_write 130' INT
+trap 'rollback_after_write 143' TERM
 IMAGE="eceasy/cli-proxy-api:$TARGET@$DIGEST"
 docker pull "$IMAGE" >>"$LOG" 2>&1
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
@@ -1762,25 +1824,34 @@ DOCKER_START_PENDING=1
   exec docker compose up -d --pull never
 ) >>"$LOG" 2>&1 9>&- &
 compose_start_pid=$!
-start_pid=''
+start_pid="$compose_start_pid"
 start_pgid=''
 start_state=''
-while [[ "$UPDATER_SIGNAL" == 0 && "$start_state" == '' ]]; do
+start_status=0
+while [[ "$UPDATER_SIGNAL" == 0 ]]; do
   if proc_state=$(cat "/proc/$compose_start_pid/stat" 2>/dev/null); then
-    read -r _ start_pid start_state start_pgid _ <<< "${proc_state##*) }"
+    read -r start_state _ start_pgid _ <<< "${proc_state##*) }"
+  else
+    start_state=''
   fi
   if [[ -z "$start_state" ]]; then
-    start_status=0
     wait "$compose_start_pid" || start_status=$?
+    COMPOSE_START_STATUS=$start_status
     DOCKER_START_PENDING=0
     break
   fi
-  [[ "$start_state" != Z* ]] || break
+  if [[ "$start_state" == Z* ]]; then
+    wait "$compose_start_pid" || start_status=$?
+    COMPOSE_START_STATUS=$start_status
+    DOCKER_START_PENDING=0
+    break
+  fi
   sleep 1
 done
 if [[ "$UPDATER_SIGNAL" != 0 ]]; then
-  set +e
-  MUTATED=0
+  # The original image must remain recoverable until this branch has verified
+  # both the recreated old container and its restarted Compose client.
+  MUTATED=1
   MUTATION_STARTED=0
   ROLLBACK_STAGE=container_start
   trap '' ERR HUP
@@ -1790,10 +1861,13 @@ if [[ "$UPDATER_SIGNAL" != 0 ]]; then
     exit 32
   fi
   restore_failed=0
+  restore_status=0
   cp -a "$BK/compose.yml" "$DIR/compose.yml" || restore_failed=1
-  restore_status=1
   if [[ "$restore_failed" == 0 ]]; then
-    (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) &
+    (
+      cd "$DIR"
+      docker compose up -d --pull never >>"$LOG" 2>&1 9>&-
+    ) &
     restore_pid=$!
     restore_wait=0
     while kill -0 "$restore_pid" 2>/dev/null && (( restore_wait < 30 )); do
@@ -1803,10 +1877,8 @@ if [[ "$UPDATER_SIGNAL" != 0 ]]; then
     if kill -0 "$restore_pid" 2>/dev/null; then
       kill -TERM -- "-$restore_pid" 2>/dev/null ||
         kill -TERM "$restore_pid" 2>/dev/null || true
-    elif wait "$restore_pid"; then
-      restore_status=0
     else
-      restore_status=$?
+      wait "$restore_pid" || restore_status=$?
     fi
   fi
   running_image=''
@@ -1822,9 +1894,10 @@ if [[ "$UPDATER_SIGNAL" != 0 ]]; then
     exit 32
   fi
 fi
-[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
+if [[ "$UPDATER_SIGNAL" != 0 ]]; then
+  rollback "$UPDATER_SIGNAL"
+fi
 [[ "$start_status" == 0 ]] || rollback "$start_status"
-[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   rollback 129
 fi
@@ -1870,6 +1943,7 @@ fi
 if ! POST_HOLDS=$(lane_hold_state); then
   log "UNVERIFIED: admission durable state unreadable after update; retained=$TARGET backup=$BK"
   persist_pending_or_rollback unknown
+  exit 10
 fi
 NEW_HOLDS=""
 if [[ -n "$POST_HOLDS" ]]; then
@@ -1894,8 +1968,8 @@ if [[ -n "$NEW_HOLDS" ]]; then
   persist_pending_or_rollback "$NEW_HOLD_LANES"
   exit 10
 fi
-trap - ERR INT TERM HUP
 [[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
+trap - ERR INT TERM HUP
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # UNVERIFIED and rollback paths never reach these; any failure here happens
 # after the completed update and is therefore explicitly non-fatal.

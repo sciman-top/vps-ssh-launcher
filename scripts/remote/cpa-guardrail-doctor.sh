@@ -2165,7 +2165,7 @@ echo "updater_stop_timeout=${updater_stop_timeout:-UNKNOWN}"
 # 180s compose step, plus drain, probes and retention. Its rollback also needs a
 # real stop window. The unit's 90s default (a lost drop-in) would kill a real
 # update mid-pull, and the former 20-minute budget could split an otherwise
-# valid update at the boundary. The projected 30-minute value leaves room for
+# valid update at the boundary. The projected 40-minute value leaves room for
 # those bounded legs without hardening the timer into a hidden ten-minute cap.
 systemd_timeout_seconds() {
   case "$1" in
@@ -2190,7 +2190,7 @@ systemd_timeout_seconds() {
        esac ;;
   esac
 }
-if [ "$(systemd_timeout_seconds "$updater_timeout")" -lt 1800 ] ||
+if [ "$(systemd_timeout_seconds "$updater_timeout")" -lt 2400 ] ||
   [ "$(systemd_timeout_seconds "$updater_stop_timeout")" -lt 240 ]; then
   mark_fail updater-timeout
 fi

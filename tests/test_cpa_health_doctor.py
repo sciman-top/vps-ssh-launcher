@@ -291,25 +291,66 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         }
         production = mock.Mock(return_value=missing_baseline_catalog)
         production.is_production_probe = True
+        production.catalog = mock.Mock(return_value=missing_baseline_catalog)
         with mock.patch.dict(os.environ, {"CPA_HEALTH_PREFLIGHT_WAIT_SECONDS": "0"}):
             self.assertEqual(check({}, "generation", production, mock.Mock()), 10)
-        # Zero means no additional catalog wait. The three calls above are the
-        # initial catalog attempts plus one explicit preflight decision; a
-        # missing required baseline defers before any generation is sent.
+        # Zero means no additional catalog wait. The initial attempts may adopt
+        # the valid catalog immediately; the absence of the scheduled baseline
+        # still defers before any generation is sent.
         self.assertEqual(
             [call.args[0] for call in production.call_args_list],
-            ["models"] * 3,
+            ["models"],
         )
 
-        refused = mock.Mock()
+        missing_baseline = mock.Mock(return_value=missing_baseline_catalog)
+        missing_baseline.is_production_probe = True
+        missing_baseline.catalog = mock.Mock(return_value=missing_baseline_catalog)
+        missing_reports: list[str] = []
+        with (
+            mock.patch.dict(os.environ, {"CPA_HEALTH_PREFLIGHT_WAIT_SECONDS": "15"}),
+            mock.patch.object(script["time"], "monotonic", return_value=0.0),
+        ):
+            self.assertEqual(
+                check(
+                    {},
+                    "generation",
+                    missing_baseline,
+                    mock.Mock(),
+                    missing_reports.append,
+                ),
+                10,
+            )
+        # The baseline gets its own bounded preflight after the initial catalog
+        # attempt; it is not rejected before that wait and no generation is sent.
+        self.assertGreaterEqual(
+            missing_baseline.catalog.call_args_list[0].args[0], 0.25
+        )
+        self.assertEqual(
+            [call.args[0] for call in missing_baseline.call_args_list],
+            ["models"],
+        )
+        self.assertIn(
+            "PROBE_PREFLIGHT model=glm-5.3-flash status=skipped reason=catalog_absent",
+            missing_reports,
+        )
+
+        main_missing_catalog = {
+            **missing_full_catalog,
+            "data": [
+                {"id": model["id"]}
+                for model in missing_full_catalog["data"]
+                if model["id"] != "glm-5.3-flash"
+            ],
+        }
+        refreshed_catalog = {
+            **missing_full_catalog,
+            "data": [{"id": model} for model in required_models]
+            + [{"id": "glm-5.3-flash"}],
+        }
+        refused = mock.Mock(side_effect=[main_missing_catalog, generation])
         refused.is_production_probe = True
-        refused.side_effect = [missing_full_catalog] * 3 + [
-            missing_full_catalog,
-            {
-                **missing_full_catalog,
-                "data": required_models + [{"id": "glm-5.3-flash"}],
-            },
-        ]
+        refused.catalog = mock.Mock(side_effect=[refreshed_catalog])
+        refreshed_reports: list[str] = []
         # The main catalog used its complete three-attempt convergence window
         # before returning 10. Only the extra preflight read starts at zero.
         readiness_deadline = [0.0, 0.0, 0.0]
@@ -324,11 +365,20 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             mock.patch.dict(os.environ, {"CPA_HEALTH_PREFLIGHT_WAIT_SECONDS": "30"}),
             mock.patch.object(script["time"], "monotonic", clock_value),
         ):
-            self.assertEqual(check({}, "generation", refused, mock.Mock()), 10)
+            self.assertEqual(
+                check({}, "generation", refused, mock.Mock(), refreshed_reports.append),
+                0,
+                {
+                    "reports": refreshed_reports,
+                    "calls": str(refused.mock_calls),
+                    "catalog_calls": str(refused.catalog.mock_calls),
+                },
+            )
         self.assertEqual(
             [call.args[0] for call in refused.call_args_list],
-            ["models"] * 3,
+            ["models", "chat/completions"],
         )
+        self.assertEqual(refused.call_args_list[-1].args[1]["model"], "glm-5.3-flash")
 
         # One live alias stays out of the upstream catalog on purpose so the
         # not_listed oauth=unverified path keeps being exercised. It used to be
