@@ -995,11 +995,12 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         normalize += _extract_bash_function(source, "normalize_seconds")
         normalize += _extract_bash_function(source, "budget_seconds")
         declaration = source[
-            source.index("budget_declaration_exact() {") :
-            source.index("\nbudgets_every() {")
+            source.index("budget_declaration_exact() {") : source.index(
+                "\nbudgets_every() {"
+            )
         ]
         declaration = declaration.replace(
-            '  for token in ${AUTO_UPDATE_BUDGETS:-}; do\n',
+            "  for token in ${AUTO_UPDATE_BUDGETS:-}; do\n",
             "  for token in $AUTO_UPDATE_BUDGETS; do\n",
             1,
         )
