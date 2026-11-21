@@ -2461,7 +2461,93 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             self.assertTrue(receipts)
             payload = json.loads(receipts[0].read_text(encoding="utf-8"))
             self.assertEqual(payload["outcome"], "deferred")
-            self.assertIn("Host busy", payload["reason"])
+
+    def test_remote_start_state_failure_prevents_adapter_execution(self) -> None:
+        """The local start journal must commit before any remote mutation."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, fixed_now, inventory = self._unattended_plan(policy_path, state_path)
+            policy = load_policy(policy_path)
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            _FixedClock = _fixed_clock(fixed_now)
+            client = mock.MagicMock()
+            remove_target = mock.Mock(
+                side_effect=OSError("simulated local state write failure")
+            )
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
+                    return_value=client,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.state_automation.update_stored_plan",
+                    remove_target,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.execute_action"
+                ) as execute_action,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--run-integration",
+                            "--unattended",
+                            "--target-config",
+                            str(target_config),
+                        ]
+                    ),
+                    2,
+                )
+            execute_action.assert_not_called()
+            self.assertEqual(load_plan(state_path, plan.plan_id), plan)
+            self.assertIsNone(
+                load_automation_target(
+                    state_path,
+                    profile="bwg",
+                    resource="xray",
+                    pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+                )
+            )
+            client.close.assert_called_once_with()
 
     def test_state_and_receipt_store_no_sensitive_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

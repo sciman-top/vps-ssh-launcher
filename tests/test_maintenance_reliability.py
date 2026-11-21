@@ -122,7 +122,13 @@ restore_binary ./old ./live
         # hit the same verified rollback as ERR/INT/TERM; otherwise a half-
         # applied image swap is silently absorbed by the next daily run.
         self.assertIn("trap 'ROLLBACK_HUP=1' HUP", source)
-        self.assertEqual(source.count("trap '' ERR INT TERM HUP"), 2)
+        # Verified rollback disarms signals. Docker-start recovery must keep
+        # TERM deferred while it is bounded by the Docker timeout; disabling
+        # TERM there would turn the outer fail-stop into an uncancellable wait.
+        self.assertIn("trap '' ERR INT TERM HUP", source)
+        self.assertIn("trap '' ERR HUP", source)
+        self.assertIn("trap 'defer_updater_signal 143' TERM", source)
+        self.assertIn("stop_compose_start", source)
         self.assertIn("ROLLBACK_STAGE=image_readback", source)
         self.assertIn('cmp -s "$BK/compose.yml" "$DIR/compose.yml"', source)
         self.assertIn("ROLLBACK_FAILED backup=$BK stage=$ROLLBACK_STAGE", source)
@@ -141,17 +147,20 @@ restore_binary ./old ./live
         source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text(
             encoding="utf-8"
         )
-        rollback = (
-            "rollback() {"
-            + source.split("rollback() {", 1)[1].split("\n}\ntrap rollback ERR", 1)[0]
-            + "\n}"
-        )
-        trap_block = source.split("\ntrap rollback ERR\n", 1)[1].split("\nIMAGE=", 1)[0]
-        traps = "trap rollback ERR\n" + trap_block
+        start = source.index("rollback() {")
+        end = source.index("\nIMAGE=", start)
+        functions_and_traps = source[start:end]
         payload = f"""set -Eeuo pipefail
+export DIR=/tmp
+export LOG=/dev/null
 MUTATED=0
-{rollback}
-{traps}
+DOCKER_START_PENDING=0
+ROLLBACK_IMAGE_ID=
+ROLLBACK_IMAGE_REF=
+ROLLBACK_INTERRUPTED=0
+on_exit() {{ exit "$1"; }}
+trap 'status_code=$?; on_exit "$status_code"' EXIT
+{functions_and_traps}
 true
 kill -HUP $$
 echo UNEXPECTED_CONTINUATION

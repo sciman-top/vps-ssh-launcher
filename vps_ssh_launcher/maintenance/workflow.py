@@ -87,18 +87,26 @@ def execute_remote_plan(
         for index, action in enumerate(plan.actions):
             if action.status != "planned":
                 continue
-            updated = updated_plan(
-                updated,
-                action_index=index,
-                status="applied",
-                reason=(
-                    "Remote adapter started; outcome remains unresolved until its "
-                    "success or rollback marker is verified."
-                ),
-            )
-            # Save before the adapter can mutate the host. A crash must not make
-            # this action look planned and eligible for an automatic retry.
-            save_plan(state_path, updated)
+            if action.status == "planned" and on_remote_start is not None:
+                # Unattended authorization commits the applied marker and books
+                # the attempt in one transaction. An extra local write here
+                # could fail after that commit but before the adapter and leave
+                # the host ambiguous, so the caller's atomic start journal is
+                # the only write for this action.
+                updated = load_plan(state_path, plan.plan_id)
+            else:
+                updated = updated_plan(
+                    updated,
+                    action_index=index,
+                    status="applied",
+                    reason=(
+                        "Remote adapter started; outcome remains unresolved until its "
+                        "success or rollback marker is verified."
+                    ),
+                )
+                # Save before the adapter can mutate the host. A crash must not
+                # make this action look planned and eligible for automatic retry.
+                save_plan(state_path, updated)
             try:
                 result = execute_action(
                     action,

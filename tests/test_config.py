@@ -128,7 +128,7 @@ class ConfigTests(unittest.TestCase):
             self._apply_config(args)
             self.assertTrue(args.strict_host_key_checking)
 
-    def test_apply_config_warns_when_cli_host_differs_from_profile(self) -> None:
+    def test_apply_config_refuses_profile_credentials_for_another_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "target.json"
             config_path.write_text(
@@ -156,17 +156,53 @@ class ConfigTests(unittest.TestCase):
                 password=None,
                 key=None,
             )
-            stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
+            with self.assertRaisesRegex(ValueError, "refusing to reuse the profile's"):
                 self._apply_config(args)
-
-            # Merge behavior is unchanged; the warning only names hosts and
-            # the profile, never credential values.
             self.assertEqual(args.host, "other.example")
-            self.assertEqual(args.password, "secret")
-            self.assertEqual(args.user, "root")
-            self.assertIn("--host other.example", stderr.getvalue())
-            self.assertIn("profile 'alpha'", stderr.getvalue())
+
+            # --password-stdin is an explicit direct credential source, even
+            # before cli.main() replaces the flag with its one-line value.
+            stdin_target = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host="other.example",
+                port=None,
+                user="root",
+                password=None,
+                password_stdin=True,
+                key=None,
+            )
+            self._apply_config(stdin_target)
+            self.assertIsNone(stdin_target.password)
+
+            # Authentication overrides return no profile credential, even when
+            # the resolved key field is absent on a small caller.
+            direct = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host="other.example",
+                port=None,
+                user="root",
+                password="direct-password",
+                allow_agent=False,
+            )
+            self._apply_config(direct)
+            self.assertEqual(direct.host, "other.example")
+            self.assertEqual(direct.user, "root")
+            self.assertEqual(direct.password, "direct-password")
+
+            same_host = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host="10.0.0.1",
+                port=None,
+                user=None,
+                password=None,
+                key=None,
+            )
+            self._apply_config(same_host)
+            self.assertEqual(same_host.user, "root")
+            self.assertEqual(same_host.password, "secret")
 
     def test_apply_config_matching_host_and_direct_target_do_not_warn(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

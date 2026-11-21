@@ -194,9 +194,11 @@ $guardrailTemplates = [ordered]@{
   "apply" = "scripts/remote/cpa-guardrail-apply.sh"
 }
 $guardrailTemplateTexts = @{}
+$projectionTemplateSourceTexts = @{}
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
   $path = Join-Path $repoRoot $entry.Value
   $text = Read-ProjLeafText -Path $path -Description "CPA guardrail template $($entry.Key)"
+  $projectionTemplateSourceTexts[$entry.Key] = $text
   $guardrailTemplateTexts[$entry.Key] = $text
 }
 $tlsContractPath = Join-Path $repoRoot "scripts\lib\proxy_tls_contract.ps1"
@@ -635,7 +637,10 @@ $projectionSources = [ordered]@{
 # The schedule check ships inside the doctor payload (base64), so it has no
 # destination file of its own and stays out of doctor_targets.
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
-  $projectionSources[$entry.Value] = $guardrailTemplateTexts[$entry.Key]
+  # Assert the committed source bytes, not the payload after TLS-helper
+  # substitution. Downstream remote payloads continue to use the substituted
+  # generation in $guardrailTemplateTexts.
+  $projectionSources[$entry.Value] = $projectionTemplateSourceTexts[$entry.Key]
 }
 $projectionSourcePaths = @($projectionSources.Keys)
 $projectionSourceHashes = [ordered]@{}

@@ -1995,16 +1995,17 @@ $result | ConvertTo-Json -Depth 6 -Compress
             )
             for name, record in loaded.items():
                 payload = (scripts / "remote" / f"cpa-guardrail-{name}.sh").read_bytes()
-                expected = payload.replace(b"\r\n", b"\n").replace(
+                source_bytes = payload.replace(b"\r\n", b"\n")
+                expected_bytes = source_bytes.replace(
                     b"__VERIFIED_TLS_HELPER__", helper.encode()
                 )
                 self.assertEqual(
                     base64.b64decode(record["payload"]),
-                    expected.removesuffix(b"\n"),
+                    expected_bytes.removesuffix(b"\n"),
                 )
                 self.assertEqual(
                     record["hash"],
-                    hashlib.sha256(expected).hexdigest(),
+                    hashlib.sha256(source_bytes).hexdigest(),
                 )
                 self.assertTrue(record["tracked"])
 

@@ -275,12 +275,6 @@ echo "updater-schedule-timeout-raw=${start_property:-ABSENT}/${systemd_default_r
 # Prefer Effective, which includes both a drop-in and the manager default. A
 # systemd build that omits it from one query is covered by the other query.
 [ -n "$effective_start_raw" ] || effective_start_raw="$effective_property"
-# systemd documents a per-unit explicit duration as the effective ceiling even
-# when it exceeds DefaultTimeoutStartSec: the manager default applies only when
-# the service leaves TimeoutStartSec unset. Keep that precedence explicit.
-if [ -n "$start_property" ] && [ "$start_property" != invalid ]; then
-  effective_start_raw="$start_property"
-fi
 start_seconds=''
 case "$effective_start_raw" in
   ''|infinity|*infinity) : ;;
@@ -356,7 +350,11 @@ case "$systemd_default_raw" in
       case "$start_seconds" in
         ''|*[!0-9]*) : ;;
         *)
-          if [ "$start_seconds" -gt "$existing_default_seconds" ]; then
+          # An explicit per-unit TimeoutStartSec is authoritative. Cap only an
+          # inherited value by DefaultTimeoutStartSec; a manager default must
+          # never hide a reviewed longer per-unit ceiling.
+          if [ -z "$start_property" ] &&
+            [ "$start_seconds" -gt "$existing_default_seconds" ]; then
             start_seconds="$existing_default_seconds"
           fi
           ;;

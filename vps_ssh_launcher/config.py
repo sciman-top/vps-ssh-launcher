@@ -55,6 +55,20 @@ def allow_agent_arg(args: Any) -> bool:
     return bool(getattr(args, "allow_agent", False))
 
 
+def password_stdin_arg(args: Any) -> bool:
+    return bool(getattr(args, "password_stdin", False))
+
+
+def has_direct_auth_arg(args: Any) -> bool:
+    """Whether the CLI names its own SSH authentication source."""
+    return bool(
+        allow_agent_arg(args)
+        or _cli_password_arg(args) is not None
+        or password_stdin_arg(args)
+        or cli_key_arg(args) is not None
+    )
+
+
 def resolve_socks5_proxy(
     entry: dict[str, Any],
     *,
@@ -121,10 +135,16 @@ def resolve_socks5_proxy(
 
 
 def has_cli_auth_override(args: Any) -> bool:
+    return has_direct_auth_arg(args)
+
+
+def has_complete_direct_target(args: Any) -> bool:
+    """A CLI host/user pair without a profile credential merge."""
     return bool(
-        allow_agent_arg(args)
-        or _cli_password_arg(args) is not None
-        or cli_key_arg(args) is not None
+        isinstance(args.host, str)
+        and args.host.strip()
+        and isinstance(args.user, str)
+        and args.user.strip()
     )
 
 
@@ -142,6 +162,9 @@ def resolve_auth_for_entry(
     cli_password = _cli_password_arg(args)
     if cli_password is not None:
         return cli_password, None
+
+    if password_stdin_arg(args):
+        return None, None
 
     if allow_agent_arg(args):
         return None, None
@@ -400,15 +423,16 @@ def validate_profile(
     name: str,
     *,
     require_auth: bool = True,
+    require_identity: bool = True,
 ) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"Profile '{name}' must be an object.")
     host = entry.get("host")
-    if not isinstance(host, str) or not host.strip():
+    if require_identity and (not isinstance(host, str) or not host.strip()):
         raise ValueError(f"Profile '{name}': 'host' is required and must be a string.")
     coerce_port(entry.get("port", 22), context=f"Profile '{name}'")
     user = entry.get("user")
-    if not isinstance(user, str) or not user.strip():
+    if require_identity and (not isinstance(user, str) or not user.strip()):
         raise ValueError(f"Profile '{name}': 'user' is required and must be a string.")
     password = entry.get("password")
     password_env = entry.get("password_env")
@@ -551,11 +575,7 @@ def _select_config_entry(
 def apply_config(args: argparse.Namespace) -> None:
     """Merge config file into CLI args (CLI takes precedence)."""
     direct_target_complete = bool(
-        isinstance(args.host, str)
-        and args.host.strip()
-        and isinstance(args.user, str)
-        and args.user.strip()
-        and has_cli_auth_override(args)
+        has_complete_direct_target(args) and has_cli_auth_override(args)
     )
     if args.config is None and args.profile is None and direct_target_complete:
         return
@@ -571,8 +591,35 @@ def apply_config(args: argparse.Namespace) -> None:
 
     cli_key = cli_key_arg(args)
     cli_has_auth_override = has_cli_auth_override(args)
+    explicit_direct_target = (
+        has_complete_direct_target(args)
+        and isinstance(args.host, str)
+        and args.host.strip() != cast(str, entry.get("host", "")).strip()
+    )
 
-    validate_profile(entry, name, require_auth=not cli_has_auth_override)
+    validate_profile(
+        entry,
+        name,
+        require_auth=not cli_has_auth_override,
+        require_identity=not explicit_direct_target,
+    )
+
+    if args.host is None:
+        args.host = cast(str, entry["host"]).strip()
+    elif (
+        isinstance(args.host, str)
+        and args.host.strip() != cast(str, entry["host"]).strip()
+        and (args.user is None or not has_direct_auth_arg(args))
+    ):
+        # A CLI --host override must not inherit any profile credential field.
+        # An explicit direct authentication source is required; unrelated
+        # profile fields such as socks5 or host-key policy may still apply.
+        raise ValueError(
+            f"--host {args.host.strip()} differs from profile '{name}' host "
+            f"{cast(str, entry['host']).strip()}; refusing to reuse the "
+            "profile's user or credentials. Set a profile for that host or "
+            "provide --user plus --password-stdin/--key."
+        )
 
     args.socks5 = resolve_socks5_proxy(entry, profile_name=name)
     profile_strict = _profile_strict_override(entry, name)
@@ -584,43 +631,22 @@ def apply_config(args: argparse.Namespace) -> None:
         getattr(args, "strict_host_key_checking", True)
     ) or bool(profile_strict)
 
-    cli_host = args.host
-    if args.host is None:
-        args.host = cast(str, entry["host"]).strip()
-
     if args.port is None:
         args.port = coerce_port(entry.get("port", 22), context=f"Profile '{name}'")
     else:
         args.port = coerce_port(args.port, context="CLI --port")
 
-    user_from_profile = args.user is None
     if args.user is None:
         args.user = cast(str, entry["user"]).strip()
+    explicit_auth = has_direct_auth_arg(args)
     profile_password, profile_key = resolve_auth_for_entry(
         entry,
         args,
         config_dir=config_file.parent,
     )
-    password_from_profile = args.password is None
-    if args.password is None:
+    if getattr(args, "password", None) is None and not explicit_auth:
         args.password = profile_password
-    key_from_profile = cli_key is None and args.key is None
     if cli_key is not None:
         args.key = cli_key
-    elif args.key is None:
+    elif getattr(args, "key", None) is None and not explicit_auth:
         args.key = profile_key
-    if (
-        cli_host is not None
-        and cli_host.strip() != cast(str, entry["host"]).strip()
-        and (user_from_profile or password_from_profile or key_from_profile)
-    ):
-        # A CLI --host override with credentials still merged from the profile
-        # would offer that profile's credentials to a different host. Strict
-        # host key checking bounds the damage, but the reuse itself is
-        # rarely intended, so say so instead of merging silently.
-        print(
-            f"warning: --host {cli_host.strip()} differs from profile '{name}' "
-            f"host {cast(str, entry['host']).strip()}; credentials merged from "
-            "that profile will be offered to the CLI host",
-            file=sys.stderr,
-        )

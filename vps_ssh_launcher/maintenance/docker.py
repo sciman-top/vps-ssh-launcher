@@ -113,6 +113,7 @@ rollback() {{
   rollback_project_dir="$compose_project_dir"
   rollback_ok=1
   if [ -n "$old_existing_services" ]; then
+    # The pinned snapshot retains the real Compose project's relative paths.
     docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" up -d --wait --wait-timeout 120 --pull never $old_existing_services >/dev/null 2>&1 || rollback_ok=0
   fi
   for service in $old_absent_services; do

@@ -1319,9 +1319,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         for prop, default, effective, expected, budget_status in (
             ("2400s", "2400s", "2400s", 2400, "OK"),
             ("2400s", "90s", "90s", "UNVERIFIED", "UNVERIFIED"),
-            # An empty value from an older systemd does not override the
-            # explicit service property when that property is 90 seconds.
-            ("2400s", "90s", "", 90, "single_budget=600s"),
+            # An empty Effective from an older systemd does not override the
+            # explicit service property; that property remains authoritative.
+            ("2400s", "90s", "", 2400, "OK"),
             # When Effective agrees with the explicit ceiling, the per-unit
             # value is the allocated timeout. An inconsistent pair is rejected
             # before reaching this table.
@@ -1330,7 +1330,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             # An explicit property without Effective remains a visible,
             # non-passing fallback; it does not inherit the manager default.
             ("2400s", "infinity", "", 2400, "OK"),
-            ("1200s", "infinity", "", 1200, "timeout_start=1200s"),
+            ("1200s", "infinity", "", 1200, "full_path_budget=1170s"),
             ("infinity", "infinity", "", "UNVERIFIED", "UNVERIFIED"),
             ("30min", "infinity", "", 1800, "timeout_start=1800s"),
         ):
