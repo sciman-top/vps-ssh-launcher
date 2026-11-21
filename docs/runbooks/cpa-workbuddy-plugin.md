@@ -332,11 +332,17 @@ Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；
 
 CN 插件保留 `checkin_auto`，其他后台动作按 doctor 的开关契约检查。宿主的
 `routing.retry.max-retry-credentials: 1` 约束宿主调度。`workbuddy-provider`
-0.21.29 在执行器里还有 `retry_on_4xx`，冷启动缺省为 10 次，流式路径也拿
-这项预算处理部分 5xx 和断流。守卫投影为活跃 CN 插件写入整数
-`plugins.configs.workbuddy-provider.retry_on_4xx: 0`，doctor 拦截缺失或非零值。
-投影后以 doctor 和插件重载回执确认生效。后续独立请求仍由 `credits` 选择合格
-凭据。调用端应收紧请求与流式自动重试，保留上游错误、冷却和账号状态。
+0.21.29 的来源仓库是 `luode0320/cpa-workbuddy-plugin`。上游代码在省略
+`retry_on_4xx` 时默认 10 次重试（最多 11 次尝试），流式执行器会将同一预算用于
+账号级 4xx、429、非队列满载的 5xx，以及满足可重放和候选账号条件的正文输出前
+断流重试。上游有些注释仍称 5xx 只走跨请求冷却，但实际路径通过
+`shouldRotateOnStatus` 对 500–599 执行同请求切号；429 同时进入跨请求冷却。
+
+守卫投影为活跃 CN 插件写入整数
+`plugins.configs.workbuddy-provider.retry_on_4xx: 0`，关闭上述同请求执行器重试，
+doctor 拦截缺失或非零值。投影后以 doctor 和插件重载回执确认生效。后续独立请求
+仍由 `credits` 选择合格凭据。调用端应收紧请求与流式自动重试，保留上游错误、
+冷却和账号状态。
 
 | 信号 | 处置 |
 | --- | --- |
