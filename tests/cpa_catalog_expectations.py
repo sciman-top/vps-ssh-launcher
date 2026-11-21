@@ -117,6 +117,7 @@ ADMISSION_LANE_MODELS = {
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
 }
 

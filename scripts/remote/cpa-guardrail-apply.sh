@@ -1095,12 +1095,20 @@ def parse_required_slot(route):
     expected_port = route.get("port")
     allow_insecure_http = route.get("allow_insecure_http", False)
     if scheme == "http" and not (
-        slot == 3
-        and expected_host == "35.213.82.91"
-        and expected_port == 8003
-        and allow_insecure_http is True
+        (
+            slot == 3
+            and expected_host == "35.213.82.91"
+            and expected_port == 8003
+            and allow_insecure_http is True
+        )
+        or (
+            slot == 6
+            and expected_host == "172.17.0.1"
+            and expected_port == 18082
+            and allow_insecure_http is True
+        )
     ):
-        raise SystemExit("REFUSE HTTP is allowed only for explicitly authorized slot 3")
+        raise SystemExit("REFUSE HTTP is allowed only for explicitly authorized local/pinned slots")
     if scheme not in ("https", "http") or (
         scheme == "https" and (expected_port is not None or allow_insecure_http is not False)
     ):
@@ -2836,6 +2844,7 @@ expected = {
         "gpt-6.2-sol",
     ],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
         "gemini-4-hydrogen-xhigh",
@@ -2855,6 +2864,7 @@ expected = {
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
+    "zcode-start-plan": 1,
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
     "workbuddy-intl-oauth": 1,
@@ -2880,7 +2890,7 @@ for lane in lanes:
         raise SystemExit(1)
     if lane.get("cooldown_cap_seconds") > config["retry_after_max_seconds"]:
         raise SystemExit(1)
-    expected_rpm = {"chatgpt-oauth": 24, "zhipu-coding-plan": 30,
+    expected_rpm = {"chatgpt-oauth": 24, "zhipu-coding-plan": 30, "zcode-start-plan": 20,
                     "antigravity-oauth": 18, "workbuddy-oauth": 18,
                     "workbuddy-intl-oauth": 18}
     if lane.get("requests_per_minute") != expected_rpm.get(lane.get("name")):

@@ -47,6 +47,7 @@ LANE_SOURCES: dict[str, tuple[str, ...]] = {
     "chatgpt-oauth": ("oauth_route", "chatgpt-plus-oauth"),
     "antigravity-oauth": ("oauth_route", "antigravity-oauth"),
     "zhipu-coding-plan": ("provider", "zhipu-plan"),
+    "zcode-start-plan": ("provider", "zcode-start-plan"),
     "workbuddy-oauth": ("plugin", "workbuddy-provider", "cn"),
     "workbuddy-intl-oauth": ("plugin", "workbuddy-ai-provider", "intl"),
 }

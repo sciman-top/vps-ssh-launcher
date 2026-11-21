@@ -543,6 +543,7 @@ expected = {
         "gpt-6.2-sol",
     ],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
         "gemini-4-hydrogen-xhigh",
@@ -563,6 +564,7 @@ expected = {
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
+    "zcode-start-plan": 1,
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
     "workbuddy-intl-oauth": 1,
@@ -570,6 +572,7 @@ expected_max_inflight = {
 expected_rpm = {
     "chatgpt-oauth": 24,
     "zhipu-coding-plan": 30,
+    "zcode-start-plan": 20,
     "antigravity-oauth": 18,
     "workbuddy-oauth": 18,
     "workbuddy-intl-oauth": 18,

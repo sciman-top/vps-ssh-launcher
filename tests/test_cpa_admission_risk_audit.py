@@ -374,6 +374,18 @@ class ContractTests(unittest.TestCase):
                         "model_cooldowns": {},
                     },
                 },
+                "zcode-start-plan": {
+                    "requests_per_minute": 20,
+                    "state": {
+                        "inflight": 0,
+                        "pending": 0,
+                        "rpm_window_used": 0,
+                        "hold_reason": None,
+                        "cooldown_active": False,
+                        "cooldown_remaining": 0,
+                        "model_cooldowns": {},
+                    },
+                },
                 "antigravity-oauth": {
                     "requests_per_minute": 18,
                     "state": {

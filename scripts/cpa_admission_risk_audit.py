@@ -144,6 +144,7 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
     required = {
         "chatgpt-oauth",
         "zhipu-coding-plan",
+        "zcode-start-plan",
         "antigravity-oauth",
         "workbuddy-oauth",
         "workbuddy-intl-oauth",
@@ -162,6 +163,7 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
     expected_rpm = {
         "chatgpt-oauth": 24,
         "zhipu-coding-plan": 30,
+        "zcode-start-plan": 20,
         "antigravity-oauth": 18,
         "workbuddy-oauth": 18,
         "workbuddy-intl-oauth": 18,

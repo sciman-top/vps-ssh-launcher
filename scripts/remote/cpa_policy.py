@@ -440,6 +440,7 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # coding-plan lane has independent consumption and keeps its own bound.
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
+    "zcode-start-plan": 1,
     # Antigravity (Google AI Pro) mirrors the ChatGPT OAuth bound: same
     # shared-subscription shape, manual low-frequency usage today.
     "antigravity-oauth": 2,
@@ -672,14 +673,23 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 )
         elif scheme == "http":
             if not (
-                slot == 3
-                and host == "35.213.82.91"
-                and type(port) is int
-                and port == 8003
-                and allow_insecure_http is True
+                (
+                    slot == 3
+                    and host == "35.213.82.91"
+                    and type(port) is int
+                    and port == 8003
+                    and allow_insecure_http is True
+                )
+                or (
+                    slot == 6
+                    and host == "172.17.0.1"
+                    and type(port) is int
+                    and port == 18082
+                    and allow_insecure_http is True
+                )
             ):
                 issues.append(
-                    f"{label} HTTP is allowed only for explicitly authorized slot 3"
+                    f"{label} HTTP is allowed only for explicitly authorized local/pinned slots"
                 )
         else:
             issues.append(
@@ -728,6 +738,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         expected_shared = {
             4: ("official-coding-plan", "zhipu-coding-plan"),
             5: ("official-api", "deepseek-official"),
+            6: ("official-coding-plan", "zcode-start-plan"),
         }
         if slot in expected_shared:
             expected_workload, expected_lane = expected_shared[slot]

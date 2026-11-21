@@ -761,15 +761,20 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
         # Every generation route is reported, plus every suppressed OAuth
-        # route (both lanes) and the probe-budget line.
-        self.assertEqual(len(lines), len(models) + len(ALL_OAUTH_ROUTE_ALIASES) + 1)
+        # route (both lanes), optional absent provider models, and the probe-budget line.
+        absent_optional = 1  # glm-5.3-flash-start (optional zcode-start-plan)
+        self.assertEqual(
+            len(lines),
+            len(models) + len(ALL_OAUTH_ROUTE_ALIASES) + absent_optional + 1,
+        )
         self.assertEqual(
             sorted(
                 line.split(" ", 1)[0]
                 for line in lines
                 if not line.startswith("GENERATION ")
             ),
-            ["PROBE_BUDGET"] + ["ROUTE_PREPARED"] * len(ALL_OAUTH_ROUTE_ALIASES),
+            ["PROBE_BUDGET"]
+            + ["ROUTE_PREPARED"] * (len(ALL_OAUTH_ROUTE_ALIASES) + absent_optional),
         )
         self.assertTrue(
             any(

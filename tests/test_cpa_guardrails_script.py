@@ -2509,7 +2509,7 @@ except Exception as exc:
             # OpenCode Go subscription; the number stays unused so the
             # providers.env BASE_URL_2/API_KEY_2 mapping survives a renewal
             # re-add.
-            [1, 4],
+            [1, 4, 6],
         )
         self.assertEqual(
             route_manifest["retired_hosts"],

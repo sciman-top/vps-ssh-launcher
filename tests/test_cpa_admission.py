@@ -1263,6 +1263,7 @@ def test_config_freezes_shared_official_account_lanes() -> None:
     assert [item["name"] for item in loaded["lanes"]] == [
         "chatgpt-oauth",
         "zhipu-coding-plan",
+        "zcode-start-plan",
         "antigravity-oauth",
         "workbuddy-oauth",
         "workbuddy-intl-oauth",
@@ -1270,6 +1271,7 @@ def test_config_freezes_shared_official_account_lanes() -> None:
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
+        "zcode-start-plan": 1,
         "antigravity-oauth": 2,
         "workbuddy-oauth": 1,
         "workbuddy-intl-oauth": 1,

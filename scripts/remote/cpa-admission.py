@@ -393,6 +393,7 @@ ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024
 ADMISSION_MAX_INFLIGHT_BY_LANE = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
+    "zcode-start-plan": 1,
     "deepseek-official": 3,
     "antigravity-oauth": 2,
     "claude-oauth": 2,
