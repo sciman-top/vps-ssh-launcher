@@ -419,48 +419,55 @@ restore_all() {
   trap - EXIT HUP INT TERM
   set +e
   rollback_failed=0
+  ROLLBACK_FIRST_FAILED_STEP=
+  mark_rollback_failed() {
+    rollback_failed=1
+    if [ -z "$ROLLBACK_FIRST_FAILED_STEP" ]; then
+      ROLLBACK_FIRST_FAILED_STEP="restore_all:${BASH_LINENO[0]:-unknown}"
+    fi
+  }
   # Both generations bind 8318. Stop the current process before restoring the
   # next file set, then recreate exactly the pre-transaction enable/active state.
   systemctl stop cpa-admission.service >/dev/null 2>&1 || true
   systemctl stop cpa-luna-admission.service >/dev/null 2>&1 || true
-  cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
-  cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
-  cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh" || rollback_failed=1
+  cp -a "$BK/config.yaml" "$DIR/config.yaml" || mark_rollback_failed
+  cp -a "$BK/compose.yml" "$DIR/compose.yml" || mark_rollback_failed
+  cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh" || mark_rollback_failed
   if [ -f "$BK/cpa_provider_routes.json" ]; then
-    cp -a "$BK/cpa_provider_routes.json" "$DIR/cpa_provider_routes.json" || rollback_failed=1
+    cp -a "$BK/cpa_provider_routes.json" "$DIR/cpa_provider_routes.json" || mark_rollback_failed
   else
-    rm -f "$DIR/cpa_provider_routes.json" || rollback_failed=1
+    rm -f "$DIR/cpa_provider_routes.json" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-health.py" ]; then
-    cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
+    cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || mark_rollback_failed
   else
-    rm -f "$DIR/cpa-health.py" || rollback_failed=1
+    rm -f "$DIR/cpa-health.py" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa_health_runtime.py" ]; then
-    cp -a "$BK/cpa_health_runtime.py" "$DIR/cpa_health_runtime.py" || rollback_failed=1
+    cp -a "$BK/cpa_health_runtime.py" "$DIR/cpa_health_runtime.py" || mark_rollback_failed
   else
-    rm -f "$DIR/cpa_health_runtime.py" || rollback_failed=1
+    rm -f "$DIR/cpa_health_runtime.py" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa_policy.py" ]; then
-    cp -a "$BK/cpa_policy.py" "$DIR/cpa_policy.py" || rollback_failed=1
+    cp -a "$BK/cpa_policy.py" "$DIR/cpa_policy.py" || mark_rollback_failed
   else
-    rm -f "$DIR/cpa_policy.py" || rollback_failed=1
+    rm -f "$DIR/cpa_policy.py" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-admission.py" ]; then
-    cp -a "$BK/cpa-admission.py" "$ADMISSION_SCRIPT" || rollback_failed=1
+    cp -a "$BK/cpa-admission.py" "$ADMISSION_SCRIPT" || mark_rollback_failed
   else
-    rm -f "$ADMISSION_SCRIPT" || rollback_failed=1
+    rm -f "$ADMISSION_SCRIPT" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-admission.json" ]; then
-    cp -a "$BK/cpa-admission.json" "$ADMISSION_CONFIG" || rollback_failed=1
+    cp -a "$BK/cpa-admission.json" "$ADMISSION_CONFIG" || mark_rollback_failed
   else
-    rm -f "$ADMISSION_CONFIG" || rollback_failed=1
+    rm -f "$ADMISSION_CONFIG" || mark_rollback_failed
   fi
   if [ -f "$BK/workbuddy-intl-risk.json" ]; then
-    mkdir -p "$RISK_STATE_DIR" || rollback_failed=1
-    cp -a "$BK/workbuddy-intl-risk.json" "$RISK_STATE_DIR/workbuddy-intl-risk.json" || rollback_failed=1
+    mkdir -p "$RISK_STATE_DIR" || mark_rollback_failed
+    cp -a "$BK/workbuddy-intl-risk.json" "$RISK_STATE_DIR/workbuddy-intl-risk.json" || mark_rollback_failed
   elif [ -f "$BK/workbuddy-intl-risk.json.missing" ]; then
-    rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" || rollback_failed=1
+    rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" || mark_rollback_failed
   fi
   # Restore each snapshot to its original filename. The snapshot copy exists
   # because the projection may rewrite an auth file's bytes (disabled flag);
@@ -475,109 +482,109 @@ restore_all() {
         workbuddyai-*.json) ;;
         *)
           echo "ROLLBACK_FAILED intl_auth_name_unexpected"
-          rollback_failed=1
+          mark_rollback_failed
           continue
           ;;
       esac
-      cp -a "$BK/intl-auth/$intl_restore_index.json" "$DIR/auth/$intl_restore_name" || rollback_failed=1
+      cp -a "$BK/intl-auth/$intl_restore_index.json" "$DIR/auth/$intl_restore_name" || mark_rollback_failed
     done
   fi
   if [ -f "$BK/cpa-admission.service" ]; then
-    cp -a "$BK/cpa-admission.service" "$ADMISSION_UNIT" || rollback_failed=1
+    cp -a "$BK/cpa-admission.service" "$ADMISSION_UNIT" || mark_rollback_failed
   else
-    rm -f "$ADMISSION_UNIT" || rollback_failed=1
+    rm -f "$ADMISSION_UNIT" || mark_rollback_failed
   fi
   if [ -f "$BK/cliproxyapi-update.timer" ]; then
-    cp -a "$BK/cliproxyapi-update.timer" "$UPDATER_TIMER_UNIT" || rollback_failed=1
+    cp -a "$BK/cliproxyapi-update.timer" "$UPDATER_TIMER_UNIT" || mark_rollback_failed
   elif [ -f "$BK/cliproxyapi-update.timer.missing" ]; then
-    rm -f "$UPDATER_TIMER_UNIT" || rollback_failed=1
+    rm -f "$UPDATER_TIMER_UNIT" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-admission-launch.sh" ]; then
-    cp -a "$BK/cpa-admission-launch.sh" "$ADMISSION_LAUNCHER" || rollback_failed=1
+    cp -a "$BK/cpa-admission-launch.sh" "$ADMISSION_LAUNCHER" || mark_rollback_failed
   elif [ -f "$BK/cpa-admission-launch.sh.missing" ]; then
-    rm -f "$ADMISSION_LAUNCHER" || rollback_failed=1
+    rm -f "$ADMISSION_LAUNCHER" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa_admission_bootstrap.py" ]; then
-    cp -a "$BK/cpa_admission_bootstrap.py" "$ADMISSION_BOOTSTRAP" || rollback_failed=1
+    cp -a "$BK/cpa_admission_bootstrap.py" "$ADMISSION_BOOTSTRAP" || mark_rollback_failed
   elif [ -f "$BK/cpa_admission_bootstrap.py.missing" ]; then
-    rm -f "$ADMISSION_BOOTSTRAP" || rollback_failed=1
+    rm -f "$ADMISSION_BOOTSTRAP" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa_request_guard.py" ]; then
-    cp -a "$BK/cpa_request_guard.py" "$ADMISSION_REQUEST_GUARD" || rollback_failed=1
+    cp -a "$BK/cpa_request_guard.py" "$ADMISSION_REQUEST_GUARD" || mark_rollback_failed
   elif [ -f "$BK/cpa_request_guard.py.missing" ]; then
-    rm -f "$ADMISSION_REQUEST_GUARD" || rollback_failed=1
+    rm -f "$ADMISSION_REQUEST_GUARD" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-admission-integrity-check" ]; then
-    cp -a "$BK/cpa-admission-integrity-check" "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1
+    cp -a "$BK/cpa-admission-integrity-check" "$ADMISSION_INTEGRITY_CHECK" || mark_rollback_failed
   else
-    rm -f "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1
+    rm -f "$ADMISSION_INTEGRITY_CHECK" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-admission-integrity.conf" ]; then
-    mkdir -p "$(dirname "$ADMISSION_INTEGRITY_DROPIN")" || rollback_failed=1
-    cp -a "$BK/cpa-admission-integrity.conf" "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1
+    mkdir -p "$(dirname "$ADMISSION_INTEGRITY_DROPIN")" || mark_rollback_failed
+    cp -a "$BK/cpa-admission-integrity.conf" "$ADMISSION_INTEGRITY_DROPIN" || mark_rollback_failed
   else
-    rm -f "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1
+    rm -f "$ADMISSION_INTEGRITY_DROPIN" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-admission-integrity-pin.txt" ]; then
-    mkdir -p "$(dirname "$ADMISSION_INTEGRITY_PIN")" || rollback_failed=1
-    cp -a "$BK/cpa-admission-integrity-pin.txt" "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1
+    mkdir -p "$(dirname "$ADMISSION_INTEGRITY_PIN")" || mark_rollback_failed
+    cp -a "$BK/cpa-admission-integrity-pin.txt" "$ADMISSION_INTEGRITY_PIN" || mark_rollback_failed
   else
-    rm -f "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1
+    rm -f "$ADMISSION_INTEGRITY_PIN" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-update-timeout.conf" ]; then
-    mkdir -p "$(dirname "$UPDATER_TIMEOUT_DROPIN")" || rollback_failed=1
-    cp -a "$BK/cpa-update-timeout.conf" "$UPDATER_TIMEOUT_DROPIN" || rollback_failed=1
+    mkdir -p "$(dirname "$UPDATER_TIMEOUT_DROPIN")" || mark_rollback_failed
+    cp -a "$BK/cpa-update-timeout.conf" "$UPDATER_TIMEOUT_DROPIN" || mark_rollback_failed
   else
-    rm -f "$UPDATER_TIMEOUT_DROPIN" || rollback_failed=1
+    rm -f "$UPDATER_TIMEOUT_DROPIN" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-luna-admission.py" ]; then
-    cp -a "$BK/cpa-luna-admission.py" "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1
+    cp -a "$BK/cpa-luna-admission.py" "$LEGACY_ADMISSION_SCRIPT" || mark_rollback_failed
   else
-    rm -f "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1
+    rm -f "$LEGACY_ADMISSION_SCRIPT" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-luna-admission.json" ]; then
-    cp -a "$BK/cpa-luna-admission.json" "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1
+    cp -a "$BK/cpa-luna-admission.json" "$LEGACY_ADMISSION_CONFIG" || mark_rollback_failed
   else
-    rm -f "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1
+    rm -f "$LEGACY_ADMISSION_CONFIG" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-luna-admission.service" ]; then
-    cp -a "$BK/cpa-luna-admission.service" "$LEGACY_ADMISSION_UNIT" || rollback_failed=1
+    cp -a "$BK/cpa-luna-admission.service" "$LEGACY_ADMISSION_UNIT" || mark_rollback_failed
   else
-    rm -f "$LEGACY_ADMISSION_UNIT" || rollback_failed=1
+    rm -f "$LEGACY_ADMISSION_UNIT" || mark_rollback_failed
   fi
-  cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
+  cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || mark_rollback_failed
   if [ -f "$BK/cpa-gateway-filter.conf" ]; then
-    cp -a "$BK/cpa-gateway-filter.conf" "$FAIL2BAN_FILTER" || rollback_failed=1
+    cp -a "$BK/cpa-gateway-filter.conf" "$FAIL2BAN_FILTER" || mark_rollback_failed
   else
-    rm -f "$FAIL2BAN_FILTER" || rollback_failed=1
+    rm -f "$FAIL2BAN_FILTER" || mark_rollback_failed
   fi
   if [ -f "$BK/cpa-gateway-jail.conf" ]; then
-    cp -a "$BK/cpa-gateway-jail.conf" "$FAIL2BAN_JAIL" || rollback_failed=1
+    cp -a "$BK/cpa-gateway-jail.conf" "$FAIL2BAN_JAIL" || mark_rollback_failed
   else
-    rm -f "$FAIL2BAN_JAIL" || rollback_failed=1
+    rm -f "$FAIL2BAN_JAIL" || mark_rollback_failed
   fi
-  chmod 600 "$DIR/config.yaml" || rollback_failed=1
-  chmod 700 "$DIR/auto-update.sh" || rollback_failed=1
-  if [ -f "$ADMISSION_SCRIPT" ]; then chmod 755 "$ADMISSION_SCRIPT" || rollback_failed=1; fi
-  if [ -f "$ADMISSION_CONFIG" ]; then chmod 644 "$ADMISSION_CONFIG" || rollback_failed=1; fi
-  if [ -f "$ADMISSION_UNIT" ]; then chmod 644 "$ADMISSION_UNIT" || rollback_failed=1; fi
-  if [ -f "$ADMISSION_INTEGRITY_CHECK" ]; then chmod 755 "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1; fi
-  if [ -f "$ADMISSION_INTEGRITY_DROPIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1; fi
-  if [ -f "$ADMISSION_INTEGRITY_PIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1; fi
-  if [ -f "$UPDATER_TIMEOUT_DROPIN" ]; then chmod 644 "$UPDATER_TIMEOUT_DROPIN" || rollback_failed=1; fi
-  if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then chmod 755 "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1; fi
-  if [ -f "$LEGACY_ADMISSION_CONFIG" ]; then chmod 644 "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1; fi
-  if [ -f "$LEGACY_ADMISSION_UNIT" ]; then chmod 644 "$LEGACY_ADMISSION_UNIT" || rollback_failed=1; fi
-  systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
-  docker compose -f "$DIR/compose.yml" config --quiet || rollback_failed=1
-  docker restart cli-proxy-api >/dev/null 2>&1 || rollback_failed=1
+  chmod 600 "$DIR/config.yaml" || mark_rollback_failed
+  chmod 700 "$DIR/auto-update.sh" || mark_rollback_failed
+  if [ -f "$ADMISSION_SCRIPT" ]; then chmod 755 "$ADMISSION_SCRIPT" || mark_rollback_failed; fi
+  if [ -f "$ADMISSION_CONFIG" ]; then chmod 644 "$ADMISSION_CONFIG" || mark_rollback_failed; fi
+  if [ -f "$ADMISSION_UNIT" ]; then chmod 644 "$ADMISSION_UNIT" || mark_rollback_failed; fi
+  if [ -f "$ADMISSION_INTEGRITY_CHECK" ]; then chmod 755 "$ADMISSION_INTEGRITY_CHECK" || mark_rollback_failed; fi
+  if [ -f "$ADMISSION_INTEGRITY_DROPIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_DROPIN" || mark_rollback_failed; fi
+  if [ -f "$ADMISSION_INTEGRITY_PIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_PIN" || mark_rollback_failed; fi
+  if [ -f "$UPDATER_TIMEOUT_DROPIN" ]; then chmod 644 "$UPDATER_TIMEOUT_DROPIN" || mark_rollback_failed; fi
+  if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then chmod 755 "$LEGACY_ADMISSION_SCRIPT" || mark_rollback_failed; fi
+  if [ -f "$LEGACY_ADMISSION_CONFIG" ]; then chmod 644 "$LEGACY_ADMISSION_CONFIG" || mark_rollback_failed; fi
+  if [ -f "$LEGACY_ADMISSION_UNIT" ]; then chmod 644 "$LEGACY_ADMISSION_UNIT" || mark_rollback_failed; fi
+  systemctl daemon-reload >/dev/null 2>&1 || mark_rollback_failed
+  docker compose -f "$DIR/compose.yml" config --quiet || mark_rollback_failed
+  docker restart cli-proxy-api >/dev/null 2>&1 || mark_rollback_failed
   if [ "$ADMISSION_WAS_ENABLED" -eq 1 ]; then
-    systemctl enable cpa-admission.service >/dev/null 2>&1 || rollback_failed=1
+    systemctl enable cpa-admission.service >/dev/null 2>&1 || mark_rollback_failed
   else
     systemctl disable cpa-admission.service >/dev/null 2>&1 || true
   fi
   if [ "$ADMISSION_WAS_ACTIVE" -eq 1 ]; then
-    systemctl start cpa-admission.service >/dev/null 2>&1 || rollback_failed=1
+    systemctl start cpa-admission.service >/dev/null 2>&1 || mark_rollback_failed
   else
     systemctl stop cpa-admission.service >/dev/null 2>&1 || true
   fi
@@ -594,58 +601,58 @@ restore_all() {
     :
   else
     echo "ROLLBACK_FAILED admission_generation_set_mismatch"
-    rollback_failed=1
+    mark_rollback_failed
   fi
   if [ "$LEGACY_ADMISSION_WAS_ENABLED" -eq 1 ]; then
-    systemctl enable cpa-luna-admission.service >/dev/null 2>&1 || rollback_failed=1
+    systemctl enable cpa-luna-admission.service >/dev/null 2>&1 || mark_rollback_failed
   else
     systemctl disable cpa-luna-admission.service >/dev/null 2>&1 || true
   fi
   if [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; then
-    systemctl start cpa-luna-admission.service >/dev/null 2>&1 || rollback_failed=1
+    systemctl start cpa-luna-admission.service >/dev/null 2>&1 || mark_rollback_failed
   else
     systemctl stop cpa-luna-admission.service >/dev/null 2>&1 || true
   fi
   if nginx -t >/dev/null 2>&1; then
-    systemctl reload nginx >/dev/null 2>&1 || rollback_failed=1
+    systemctl reload nginx >/dev/null 2>&1 || mark_rollback_failed
   else
-    rollback_failed=1
+    mark_rollback_failed
   fi
-  fail2ban-client -t >/dev/null 2>&1 || rollback_failed=1
-  fail2ban-client reload --restart cpa-gateway >/dev/null 2>&1 || rollback_failed=1
+  fail2ban-client -t >/dev/null 2>&1 || mark_rollback_failed
+  fail2ban-client reload --restart cpa-gateway >/dev/null 2>&1 || mark_rollback_failed
   if [ -f "$DIR/cpa-health.py" ]; then
-    python3 "$DIR/cpa-health.py" readiness >/dev/null 2>&1 || rollback_failed=1
+    python3 "$DIR/cpa-health.py" readiness >/dev/null 2>&1 || mark_rollback_failed
   else
-    rollback_failed=1
+    mark_rollback_failed
   fi
   if [ -f "$DIR/cpa_policy.py" ]; then
-    python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >/dev/null 2>&1 || rollback_failed=1
+    python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >/dev/null 2>&1 || mark_rollback_failed
   else
-    rollback_failed=1
+    mark_rollback_failed
   fi
-  assert_merged_nginx_route_contract || rollback_failed=1
+  assert_merged_nginx_route_contract || mark_rollback_failed
   if [ "$NGINX_ADMISSION_ROUTE_BEFORE" -eq 1 ]; then
-    assert_admission_nginx_route_contract || rollback_failed=1
+    assert_admission_nginx_route_contract || mark_rollback_failed
   elif assert_admission_nginx_route_contract; then
-    rollback_failed=1
+    mark_rollback_failed
   fi
-  assert_public_route_contract || rollback_failed=1
-  ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]' || rollback_failed=1
+  assert_public_route_contract || mark_rollback_failed
+  ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]' || mark_rollback_failed
   rm -rf -- "$projection_source_scan_dir"
   if [ "$ADMISSION_WAS_ACTIVE" -eq 1 ] || [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; then
-    ss -ltn | grep -Eq '127\.0\.0\.1:8318[[:space:]]' || rollback_failed=1
+    ss -ltn | grep -Eq '127\.0\.0\.1:8318[[:space:]]' || mark_rollback_failed
   fi
   if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
-    rollback_failed=1
+    mark_rollback_failed
   fi
   if { [ "$ADMISSION_WAS_ACTIVE" -eq 1 ] || [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; } &&
      ss -ltn | grep -Eq '\[::\]:8318[[:space:]]|:::8318[[:space:]]'; then
-    rollback_failed=1
+    mark_rollback_failed
   fi
   if [ "$rollback_failed" -eq 0 ]; then
     echo "ROLLBACK_VERIFIED"
   else
-    echo "ROLLBACK_FAILED"
+    echo "ROLLBACK_FAILED first_step=${ROLLBACK_FIRST_FAILED_STEP:-unknown}"
   fi
   set -e
   return 0

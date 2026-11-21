@@ -4005,6 +4005,83 @@ except Exception as exc:
                 self.assertIn(want_dur, lines, completed.stdout)
                 self.assertIn(want_triggers, lines, completed.stdout)
 
+    def test_apply_timer_readback_falls_back_from_path_form_to_unit_name(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for updater timer readback check")
+        root = Path(__file__).parents[1]
+        apply_source = (root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        fragment_start = apply_source.index("# A daemon-reload that succeeds")
+        timer_slot_echo = apply_source.index(
+            '  echo "UPDATER_TIMER_SLOT=', fragment_start
+        )
+        fragment_end = apply_source.index("\nfi\n", timer_slot_echo) + len("\nfi\n")
+        fragment = apply_source[fragment_start:fragment_end]
+        fragment = (
+            fragment.replace(
+                "__UPDATER_TIMER_RANDOM_DELAY_USEC__|__UPDATER_TIMER_RANDOM_DELAY_SHORT__",
+                "300000000|5min",
+            )
+            .replace(
+                "__UPDATER_TIMEOUT_START_USEC__|__UPDATER_TIMEOUT_START_SHORT__",
+                "40min|40min",
+            )
+            .replace(
+                '*"OnCalendar=__UPDATER_TIMER_ONCALENDAR__"*',
+                '*"OnCalendar=*-*-* 04:00:00"*',
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            timer = Path(directory) / "cliproxyapi-update.timer"
+            timer.write_text("[Timer]\nOnCalendar=*-*-* 04:00:00\n", encoding="utf-8")
+            (Path(directory) / "bk").mkdir()
+            # systemd 255 returns rc=0 but an empty unit property for a path
+            # argument. The basename retry is the deployed compatibility path.
+            harness = (
+                "set -u\n"
+                f'UPDATER_TIMER_UNIT="{timer.as_posix()}"\n'
+                f'BK="{(Path(directory) / "bk").as_posix()}"\n'
+                "systemctl() {\n"
+                '  case "$1" in\n'
+                "    start) return 0 ;;\n"
+                "    show)\n"
+                '      case "$2" in\n'
+                '        "$UPDATER_TIMER_UNIT") return 0 ;;\n'
+                "        cliproxyapi-update.timer)\n"
+                '          case "$4" in\n'
+                '            TimersCalendar) echo "{ OnCalendar=*-*-* 04:00:00 ; }" ;;\n'
+                "            RandomizedDelayUSec) echo 300000000 ;;\n"
+                "          esac\n"
+                "          ;;\n"
+                "        cliproxyapi-update.service) echo 40min ;;\n"
+                "        *) return 1 ;;\n"
+                "      esac\n"
+                "      ;;\n"
+                "    *) return 1 ;;\n"
+                "  esac\n"
+                "}\n" + fragment
+            )
+            completed = subprocess.run(
+                self._bash_command(bash, "-c", harness),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(
+                "UPDATER_TIMER_EFFECTIVE on_calendar=0400 randomized_delay_usec=300000000",
+                completed.stdout,
+            )
+            self.assertIn(
+                "UPDATER_TIMEOUT_EFFECTIVE timeout_start=40min", completed.stdout
+            )
+            self.assertNotIn("ROLLBACK", completed.stdout)
+
     def test_cpa_guardrails_doctor_asserts_443_lane_limiter_contract(self) -> None:
         source = read_guardrail_source()
         doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
@@ -5105,6 +5182,52 @@ foreach ($case in @(
         self.assertIn("==oauth-quarantine==", doctor)
         self.assertIn("oauth_quarantine=UNMARKED_OAUTH_BLOCK", doctor)
         self.assertIn("mark_fail oauth-quarantine", doctor)
+
+    def test_restore_all_reports_first_failed_step(self) -> None:
+        root = Path(__file__).parents[1]
+        source = (root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        restore_all = source.split("restore_all() {\n", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("mark_rollback_failed() {", restore_all)
+        self.assertEqual(restore_all.count("rollback_failed=1"), 1)
+        self.assertIn(
+            'echo "ROLLBACK_FAILED first_step=${ROLLBACK_FIRST_FAILED_STEP:-unknown}"',
+            restore_all,
+        )
+
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for rollback first-failure probe")
+        helper_start = source.index("  mark_rollback_failed() {")
+        helper_end = source.index("\n  # Both generations", helper_start)
+        helper = source[helper_start:helper_end]
+        harness = (
+            "set -u\n"
+            "rollback_failed=0\n"
+            "ROLLBACK_FIRST_FAILED_STEP=\n"
+            + helper
+            + "\nfalse || mark_rollback_failed\n"
+            "first_step=$ROLLBACK_FIRST_FAILED_STEP\n"
+            "false || mark_rollback_failed\n"
+            "second_step=$ROLLBACK_FIRST_FAILED_STEP\n"
+            'printf "FIRST=%s\\nSECOND=%s\\n" "$first_step" "$second_step"\n'
+        )
+        completed = subprocess.run(
+            self._bash_command(bash, "-c", harness),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertRegex(completed.stdout, r"FIRST=restore_all:[0-9]+")
+        output_lines = completed.stdout.splitlines()
+        self.assertEqual(
+            output_lines[0].split("=", 1)[1], output_lines[1].split("=", 1)[1]
+        )
 
     def test_cpa_oauth_quarantine_state_change_is_reversible_and_policy_clean(
         self,
