@@ -45,17 +45,11 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # request touching two consumer OAuth UIDs; the single-credential cap
     # stopped that fan-out while request-retry=0 still forbade another retry
     # round.
-    # 2026-11-08 re-review (cap=3, per the 11-06 change-evidence re-review
-    # gate): the same single-credential cap let one credential's billing-shaped
-    # 429 become the whole lane's response, and the workbuddy admission hold
-    # (billing codes latch a durable operator review) turned two transient
-    # upstream blips (11-06/11-07) into full lane outages until a manual
-    # release. cap=3 keeps the fan-out bounded (<=3 credentials per failed
-    # request, vs unlimited at 0) while a fallback attempt can reach a live
-    # credential instead of surfacing one account's denial. 6004-wave exposure
-    # stays mitigated by the admission model-level park, the plugin's
-    # (credential, model) fast-fail registry, and per-credential cooldowns.
-    ("routing", "retry", "max-retry-credentials"): 3,
+    # 2026-11-21 user-approved hardening: one consumer credential per request.
+    # This deliberately gives up cross-account retry: a quota/auth failure is
+    # surfaced to the caller instead of replaying the same prompt elsewhere.
+    # CPA already has request-retry=0, and admission handles lane cooldown.
+    ("routing", "retry", "max-retry-credentials"): 1,
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
     # 2026-10-31: 60 -> 30. Codex (single OAuth credential) turns every upstream
@@ -178,12 +172,11 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
         "openai",
         "codex",
     ],
-    # Literal replacements supersede the zero-width obfuscation above on the
-    # system instruction: the 2026-11-18 probes showed the WAF matches through
-    # zero-width-padded words (T2) and through raw user-role text (T1), while
-    # an input-fully-swapped replay with verbatim tool schemas completes (T6).
-    # This swap table plus the requests.payload.replace rule below are the
-    # effective masking surfaces for the antigravity lane.
+    # The historical replay suggested literal replacement could clear one
+    # response filter, but did not establish a durable reason for changing
+    # System Instructions. The old user-role swap has been removed because it
+    # rewrote natural content and prefixes. Keep this mapping only to preserve
+    # the deployed behavior until system instructions are reviewed separately.
     ("oauth", "providers", "antigravity", "sensitive-words-replace"): {
         "chatgpt": "chatservice",
         "openai": "vendor",
@@ -230,9 +223,10 @@ EXPECTED_ROUTING = {
     # and permanent-unavailability signals.
     "session-affinity-rebind-on": "quota",
     # Keep each child task eligible for a separate credential. Binding every
-    # subagent to the parent improves cache locality but concentrates bursts on
-    # a single account, which is the less safe default for this public gateway.
-    "session-affinity-subagents": False,
+    # child task to the parent keeps a shared prefix and model on one account,
+    # so forks do not lose cache locality or fan one parent's burst across more
+    # consumer credentials.
+    "session-affinity-subagents": True,
 }
 
 EXPECTED_QUOTA = {
@@ -1851,55 +1845,6 @@ if (
         }
         for name in sorted(set(_workbuddy_developer_override_spec["models"]))
     ]
-# Google's antigravity WAF escalated on 2026-11-17: fingerprint literals
-# are now matched in user-role conversational text too (T1 probe), and the
-# zero-width obfuscation built into `sensitive-words` no longer defeats the
-# match (T2 probe), while an input-fully-swapped replay with verbatim tool
-# schemas completes (T6 probe). The sanctioned config-level lever is
-# literal replacement: `sensitive-words-replace` rewrites the system
-# instruction and a requests.payload.replace rule rewrites user-role text,
-# both scoped to the antigravity gemini models on responses-wire requests
-# only. The pairs reuse the word families and replacement words validated
-# by the 2026-11-18 controlled probes. A manifest spec that fails
-# validation degrades to "expect no rules", which a rule-bearing live
-# config then fails exact-match on (fail closed).
-_antigravity_fingerprint_spec = ROUTE_MANIFEST.get("antigravity_fingerprint_swap")
-_ANTIGRAVITY_FINGERPRINT_REPLACE_RULES: list[dict[str, Any]] = []
-if (
-    isinstance(_antigravity_fingerprint_spec, dict)
-    and _antigravity_fingerprint_spec.get("from_protocol") == "responses"
-    and isinstance(_antigravity_fingerprint_spec.get("models"), list)
-    and _antigravity_fingerprint_spec["models"]
-    and all(
-        isinstance(name, str) and name
-        for name in _antigravity_fingerprint_spec["models"]
-    )
-    and len(_antigravity_fingerprint_spec["models"])
-    == len(set(_antigravity_fingerprint_spec["models"]))
-    and isinstance(_antigravity_fingerprint_spec.get("replacements"), list)
-    and _antigravity_fingerprint_spec["replacements"]
-    and all(
-        isinstance(pair, list)
-        and len(pair) == 2
-        and all(isinstance(side, str) and side for side in pair)
-        for pair in _antigravity_fingerprint_spec["replacements"]
-    )
-    and len({pair[0] for pair in _antigravity_fingerprint_spec["replacements"]})
-    == len(_antigravity_fingerprint_spec["replacements"])
-):
-    _ANTIGRAVITY_FINGERPRINT_REPLACE_RULES = [
-        {
-            "models": [
-                {"name": name, "from-protocol": "responses"}
-                for name in sorted(set(_antigravity_fingerprint_spec["models"]))
-            ],
-            "target": {"role": "user", "all": True},
-            "replacements": [
-                {pair[0]: pair[1]}
-                for pair in _antigravity_fingerprint_spec["replacements"]
-            ],
-        }
-    ]
 EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     "override": [
         {
@@ -1955,7 +1900,11 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
         }
         for name in _APPLY_PATCH_FILTER_MODEL_NAMES
     ],
-    "replace": _ANTIGRAVITY_FINGERPRINT_REPLACE_RULES,
+    # No user-content replacement: natural prompts and code identifiers must
+    # reach the upstream verbatim so the rendered cache prefix stays stable.
+    # The former swap was an unproven, non-durable workaround and is not a
+    # ban-prevention control.
+    "replace": [],
 }
 # The claude-lane thinking-binding override and the conditional trailing-
 # assistant prefill filter retired 2026-10-20: CLIProxyAPI v8.0.34 (deployed

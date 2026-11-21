@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import unittest
-import re
+import urllib.request
 from unittest import mock
 from pathlib import Path
 
@@ -76,11 +78,30 @@ class CdnFallbackLaneTests(ScriptValidationMixin, unittest.TestCase):
             "\nPY\n}", 1
         )[0]
         ranges = "104.16.0.0/13\n172.64.0.0/13\n"
+        ranges6 = "2606:4700::/32"
 
-        def classify(answers: list[str], raw_ranges: str = ranges) -> str:
-            if answers:
-                lookup = mock.Mock(
-                    return_value=[
+        def classify(
+            answers: list[str],
+            raw_ranges: str = ranges,
+            raw_ranges6: str = ranges6,
+            ipv6_answers: list[str] | None = None,
+        ) -> str:
+            def lookup(
+                _host: str,
+                _port: object = None,
+                family: int = socket.AF_UNSPEC,
+                _socktype: int = 0,
+                _proto: int = 0,
+                _flags: int = 0,
+            ) -> list[tuple[int, int, int, str, tuple[object, ...]]]:
+                families = (
+                    (socket.AF_INET,)
+                    if family == socket.AF_INET
+                    else (socket.AF_INET, socket.AF_INET6)
+                )
+                values: list[tuple[int, int, int, str, tuple[object, ...]]] = []
+                if socket.AF_INET in families:
+                    values.extend(
                         (
                             socket.AF_INET,
                             socket.SOCK_STREAM,
@@ -89,14 +110,25 @@ class CdnFallbackLaneTests(ScriptValidationMixin, unittest.TestCase):
                             (address, 0),
                         )
                         for address in answers
-                    ]
-                )
-            else:
-                lookup = mock.Mock(
-                    side_effect=socket.gaierror(socket.EAI_NONAME, "not found")
-                )
+                    )
+                if socket.AF_INET6 in families:
+                    values.extend(
+                        (
+                            socket.AF_INET6,
+                            socket.SOCK_STREAM,
+                            socket.IPPROTO_TCP,
+                            "",
+                            (address, 0, 0, 0),
+                        )
+                        for address in ipv6_answers or []
+                    )
+                if not values:
+                    raise socket.gaierror(socket.EAI_NONAME, "not found")
+                return values
+
+            lookup_mock = mock.Mock(side_effect=lookup)
             with (
-                mock.patch.object(socket, "getaddrinfo", lookup),
+                mock.patch.object(socket, "getaddrinfo", lookup_mock),
                 mock.patch.dict(
                     os.environ,
                     {
@@ -104,6 +136,7 @@ class CdnFallbackLaneTests(ScriptValidationMixin, unittest.TestCase):
                         "CF_ZONE": "example.test",
                         "CF_HOST": "cdn.example.test",
                         "CF_IPV4_RANGES": raw_ranges,
+                        "CF_IPV6_RANGES": raw_ranges6,
                     },
                 ),
                 contextlib.redirect_stdout(io.StringIO()) as output,
@@ -116,8 +149,105 @@ class CdnFallbackLaneTests(ScriptValidationMixin, unittest.TestCase):
             classify(["104.21.70.202", "172.67.139.71"]),
         )
         self.assertIn("dns_state=not-proxied", classify(["38.244.39.84"]))
+        self.assertIn(
+            "dns_state=not-proxied",
+            classify(["104.21.70.202"], ipv6_answers=["2001:db8::20"]),
+        )
+        self.assertIn(
+            "dns_state=proxied",
+            classify(["104.21.70.202"], ipv6_answers=["2606:4700::1"]),
+        )
+        self.assertIn(
+            "dns_state=not-proxied",
+            classify(
+                ["104.21.70.202"],
+                raw_ranges6="2001:db8::/32",
+                ipv6_answers=["2606:4700::1"],
+            ),
+        )
+        self.assertIn(
+            "dns_state=not-proxied",
+            classify(["104.21.70.202"], ipv6_answers=["2001:db8::1"]),
+        )
+        self.assertIn(
+            "dns_state_reason=cloudflare_ranges_unavailable",
+            classify(["104.21.70.202"], raw_ranges6=""),
+        )
         self.assertIn("dns_state=missing", classify([]))
         self.assertIn("dns_state=unverified", classify(["104.21.70.202"], ""))
+
+    def test_token_dns_check_rejects_a_direct_source_aaaa(self) -> None:
+        source = self.text.split("dns_state() {\n    python3 <<'PY'\n", 1)[1].split(
+            "\nPY\n}", 1
+        )[0]
+        responses = {
+            "/zones?name=example.test": {
+                "success": True,
+                "result": [{"id": "zone-1"}],
+            },
+            "/zones/zone-1/dns_records?name=cdn.example.test": {
+                "success": True,
+                "result": [
+                    {
+                        "id": "a-1",
+                        "type": "A",
+                        "content": "203.0.113.20",
+                        "proxied": True,
+                        "ttl": 1,
+                    },
+                    {
+                        "id": "aaaa-1",
+                        "type": "AAAA",
+                        "content": "2001:db8::20",
+                        "proxied": True,
+                        "ttl": 1,
+                    },
+                ],
+            },
+        }
+
+        class Response(io.StringIO):
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                self.close()
+
+        def respond(request: urllib.request.Request, timeout: int) -> Response:
+            self.assertEqual(timeout, 15)
+            path = str(request.full_url).removeprefix(
+                "https://api.cloudflare.com/client/v4"
+            )
+            return Response(json.dumps(responses[path]))
+
+        with (
+            mock.patch.object(urllib.request, "urlopen", side_effect=respond),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "CF_TOKEN": "fixture-token",
+                    "CF_ZONE": "example.test",
+                    "CF_HOST": "cdn.example.test",
+                    "CF_IPV4_RANGES": "104.16.0.0/13",
+                },
+            ),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            exec(source, {})
+        self.assertIn("dns_state=direct-source", output.getvalue())
+        self.assertIn("dns_conflicting_record_types=AAAA", output.getvalue())
+        self.assertNotIn("2001:db8", output.getvalue())
+
+    def test_decoy_probe_uses_the_contract_ca_not_skip_tls(self) -> None:
+        decoy = self.text.split("decoys_ok() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("verified_pinned_tls_curl_args", decoy)
+        self.assertIn('PUBLIC_HOST="$PUBLIC_HOST"', decoy)
+        self.assertIn('"${curl_args[@]}"', decoy)
+        self.assertIn("verified_pinned_tls_curl_args", decoy)
+        self.assertNotIn("curl -sk", decoy)
+        self.assertIn("Get-VerifiedLocalTlsCaPython", self.text)
+        self.assertIn("local code sha decoy verify_args", decoy)
+        self.assertIn("local -a curl_args", decoy)
 
     def test_reuses_the_existing_vless_credential(self) -> None:
         text = self.text
@@ -177,6 +307,9 @@ class CdnFallbackLaneTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('render_conf > "$temporary_conf"', text)
         self.assertIn("cdn_conf_current()", text)
         self.assertIn("cdn_lane_template=stale", text)
+        # Powershell here-strings interpolate ``$()``. Keep render helper
+        # outside it or a healthy read-only run reports drift.
+        self.assertNotIn("cdn_conf_current() {\n    render_conf", text)
         self.assertIn("[ \"$edge_code\" = '200' ] && decoys_ok &&", text)
         self.assertIn(
             'temporary_conf="$(mktemp "$NGINX_CONF_D/.cdn-lane.XXXXXX")"', text

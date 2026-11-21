@@ -12,12 +12,16 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+. (Join-Path $PSScriptRoot "lib\proxy_firewall_contract.ps1")
 # The managed vhosts must negotiate the same TLS 1.2 suites as the REALITY
 # fallback target; divergence splits the fleet into two observable groups from
 # a single ClientHello per IP:port. The expected list comes from the same
 # contract the lanes render, so the gate cannot drift from the projectors.
 . (Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1")
 $tlsCiphers = Get-ProxyTlsCipherSuite
+$verifiedTlsHelper = Get-VerifiedLocalTlsCaPython
+$firewallContract = Get-ProxyFirewallContract -Profile $Profile
+$liveFirewallPython = Get-ProxyFirewallLiveStatePython
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
@@ -71,16 +75,129 @@ $googleDomainsJson = $GoogleIpv4DomainsByProfile[$Profile] | ConvertTo-Json -Com
 if ($googleDomainsJson -notmatch '^\["[a-z0-9.\-]+"(,"[a-z0-9.\-]+")*\]$') {
   throw "Refusing to inject an unexpected google ipv4 domain list: $googleDomainsJson"
 }
-. (Join-Path $PSScriptRoot "lib\proxy_firewall_contract.ps1")
 $firewallRulesText = (New-ProxyFirewallRules -Profile $Profile).Replace("`r`n", "`n").Replace("`r", "`n")
 $firewallRulesSha = (
   [BitConverter]::ToString(
     [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($firewallRulesText))
   )
 ).Replace("-", "").ToLowerInvariant()
-$firewallContract = Get-ProxyFirewallContract -Profile $Profile
 $firewallTcpLiteral = $firewallContract.TcpPorts -join ' '
 $firewallUdpLiteral = $firewallContract.UdpPorts -join ' '
+$cdnContractPython = @'
+import base64
+import glob
+import json
+import sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+conf_dir, frag_path = sys.argv[1], sys.argv[2]
+cdn_host = sys.argv[3] if len(sys.argv) > 3 else ''
+base = ''
+for path in sorted(glob.glob(conf_dir + '/*.json')):
+    if base:
+        break
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for entry in data.get('inbounds', []) or []:
+        if base:
+            break
+        if entry.get('protocol') != 'vless':
+            continue
+        for client in (entry.get('settings') or {}).get('clients') or []:
+            if client.get('id'):
+                base = client['id']
+                break
+frag_id = ''
+config_path = ''
+listen = ''
+security = ''
+try:
+    frag = json.load(open(frag_path, encoding='utf-8'))
+    first = (frag.get('inbounds') or [{}])[0]
+    frag_id = ((first.get('settings') or {}).get('clients') or [{}])[0].get('id', '')
+    config_path = (first.get('streamSettings') or {}).get('wsSettings', {}).get('path', '')
+    listen = first.get('listen', '')
+    security = (first.get('streamSettings') or {}).get('security', 'none')
+except Exception:
+    pass
+published_path = ''
+published_security = ''
+published_type = ''
+published_host = ''
+published_port = None
+subscription_root = Path(conf_dir) / 'subscribe'
+for sub_path in sorted(subscription_root.rglob('*')):
+    if not sub_path.is_file() or sub_path.stat().st_size > 5 * 1024 * 1024:
+        continue
+    try:
+        raw = sub_path.read_bytes()
+        candidate = raw.decode('utf-8').strip()
+        # vasma can wrap the base64 subscription. Decode the full file so a
+        # path split onto its last line is compared instead of being lost.
+        if 'vless://' not in candidate and not candidate.lower().startswith('http'):
+            compact = b''.join(raw.split())
+            candidate = base64.b64decode(
+                compact + b'=' * (-len(compact) % 4)
+            ).decode()
+        if 'vless://' not in candidate:
+            continue
+        for line in candidate.splitlines():
+            if not line.startswith('vless://'):
+                continue
+            parsed = urlparse(line)
+            # The share link's host is the Cloudflare edge proxy; the WS
+            # `host` parameter carries the public CDN name. vasma uses the
+            # same workspace-internal address in this fragment as the CDN
+            # vhost, so do not require either IPv4 resolution to match it.
+            if parsed.port != 2087:
+                continue
+            # parse_qs already decodes the path. Calling unquote again would
+            # turn %252F into '/', making a literal %2F match a separator.
+            query = parse_qs(parsed.query)
+            published_path = (query.get('path') or [''])[0]
+            published_security = (query.get('security') or [''])[0]
+            published_type = (query.get('type') or [''])[0]
+            published_host = (query.get('host') or [''])[0]
+            published_port = parsed.port
+            if published_path:
+                break
+    except (OSError, UnicodeError, ValueError):
+        continue
+    if published_path:
+        break
+if not base:
+    print('base-missing')
+elif not frag_id:
+    print('fragment-missing')
+elif base != frag_id:
+    print('mismatch')
+elif not config_path:
+    print('path-missing')
+elif published_path and published_path != config_path:
+    print('path-mismatch')
+elif (
+    published_path
+    and published_security == 'tls'
+    and published_type == 'ws'
+    and published_host == cdn_host
+    and published_port == 2087
+    and config_path == published_path
+    and listen == '127.0.0.1'
+    and security == 'none'
+):
+    print('ok')
+elif published_path:
+    print('published-contract-mismatch')
+elif listen != '127.0.0.1':
+    print('listen-mismatch')
+elif security != 'none':
+    print('security-mismatch')
+else:
+    print('ok')
+'@
 
 # Supply-chain lane inputs: the projected weekly vasma updater is the repo
 # source verbatim (LF-normalized; the projector validates the pin anchors in
@@ -336,6 +453,7 @@ echo "singbox_empty_short_id=${empty_sb}"
 # posture this fleet keeps (2026-11-18), so a set value is drift, not a typo.
 reality_params="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY_REALITY_PARAMS'
 import glob
+import base64
 import json
 import os
 import sys
@@ -423,6 +541,7 @@ fi
 echo '==reality-target=='
 target_state="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$EXPECTED_REALITY_HOST" <<'PY'
 import glob
+import base64
 import json
 import os
 import sys
@@ -512,6 +631,7 @@ echo '==reality-flow=='
 # restore the field and `xray run -test`), never a blind lane replay.
 reality_flow_state="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY'
 import glob
+import base64
 import json
 import os
 import sys
@@ -581,6 +701,15 @@ fi
 
 echo '==nginx-stealth=='
 stealth_rc=0
+VERIFY_DIR="$(mktemp -d)" || exit 4
+cleanup_verify() { rm -rf -- "$VERIFY_DIR"; }
+trap cleanup_verify 0
+chmod 700 "$VERIFY_DIR"
+mkdir -p "$VERIFY_DIR/ca" "$VERIFY_DIR/leaf"
+chmod 700 "$VERIFY_DIR/ca" "$VERIFY_DIR/leaf"
+cat > "$VERIFY_DIR/verify_tls.py" <<'PY_VERIFY_TLS'
+__VERIFIED_TLS_HELPER__
+PY_VERIFY_TLS
 stealth_facts="$(printf '%s' '__TLS_PORTS_HELPER_B64__' | base64 -d | python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$NGINX_CONF_D" "vps-launcher-stealth,alone,reality-handshake")" || stealth_rc=$?
 if [ "$stealth_rc" -ne 0 ]; then stealth_facts='stealth_facts=invalid'; fi
 # The shared derivation prints `facts=...`; this gate keys on `stealth_facts=`.
@@ -618,7 +747,35 @@ else
                 else
                     echo "unknown_sni_rejected port=$stealth_port"
                 fi
-                stealth_header="$(curl -sk -m 8 -D - -o /dev/null \
+                stealth_verify_args="$(cd "$VERIFY_DIR" && VPS_LOCAL_TLS_VERIFY_DIR="$VERIFY_DIR/leaf" python3 - "$NGINX_CONF_D" "$stealth_sni" <<'PY_STEALTH_CERT'
+import pathlib
+import os
+import re
+import sys
+from verify_tls import verified_tls_curl_args
+
+root = pathlib.Path(sys.argv[1])
+host = sys.argv[2]
+candidates = []
+for path in root.glob("*.conf"):
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        continue
+    if not re.search(
+        r"server_name\s+[^;]*\b" + re.escape(host) + r"\s*;", text
+    ):
+        continue
+    candidates.extend(
+        re.findall(r"\bssl_certificate\s+([^;\s]+)\s*;", text)
+    )
+if len(set(candidates)) != 1:
+    raise SystemExit("ambiguous local TLS certificate")
+print("\n".join(verified_tls_curl_args(host, candidates[0])))
+PY_STEALTH_CERT
+)" || { echo "stealth_tls_unverified port=$stealth_port"; stealth_bad=1; continue; }
+                mapfile -t stealth_curl_args <<<"$stealth_verify_args"
+                stealth_header="$(curl -sS "${stealth_curl_args[@]}" -m 8 -D - -o /dev/null \
                     --resolve "$stealth_sni:$stealth_port:127.0.0.1" \
                     "https://$stealth_sni:$stealth_port/" 2>/dev/null |
                     tr -d '\r' | grep -i '^server:' | head -1 || true)"
@@ -629,7 +786,7 @@ else
                 # The reject vhost must not have swallowed the real SNI: the
                 # camouflage vhost has to keep answering 200, or the REALITY
                 # fallback target is dead while every config check stays green.
-                stealth_live="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' \
+                stealth_live="$(curl -sS "${stealth_curl_args[@]}" -m 8 -o /dev/null -w '%{http_code}' \
                     --resolve "$stealth_sni:$stealth_port:127.0.0.1" \
                     "https://$stealth_sni:$stealth_port/" 2>/dev/null || true)"
                 if [ "$stealth_live" = '200' ]; then
@@ -1293,44 +1450,12 @@ else
     # (vasma reinstall, credential rotation), the fragment keeps serving a
     # dead secret while every file check stays green. Report match state
     # only — the UUID itself never enters the evidence output.
-    cdn_uuid_state="$(python3 - "$XRAY_CONF" "$cdn_frag" <<'PY'
-import glob
-import json
-import sys
-
-conf_dir, frag_path = sys.argv[1], sys.argv[2]
-base = ''
-for path in sorted(glob.glob(conf_dir + '/*.json')):
-    if base:
-        break
-    try:
-        data = json.load(open(path, encoding='utf-8'))
-    except Exception:
-        continue
-    for entry in data.get('inbounds', []) or []:
-        if base:
-            break
-        if entry.get('protocol') != 'vless':
-            continue
-        for client in (entry.get('settings') or {}).get('clients') or []:
-            if client.get('id'):
-                base = client['id']
-                break
-frag_id = ''
-try:
-    frag = json.load(open(frag_path, encoding='utf-8'))
-    frag_id = (((frag.get('inbounds') or [{}])[0].get('settings') or {}).get('clients') or [{}])[0].get('id', '')
-except Exception:
-    pass
-if not base:
-    print('base-missing')
-elif not frag_id:
-    print('fragment-missing')
-elif base == frag_id:
-    print('ok')
-else:
-    print('mismatch')
-PY
+    # The here-string is interpolated by PowerShell, so use a quoted heredoc
+    # delimiter for the nested shell payload. An unquoted delimiter lets bash
+    # grep for the literal ``$CDN_HOST`` and misreport every published node.
+    cdn_uuid_state="$(python3 - "$XRAY_CONF" "$cdn_frag" "$CDN_HOST" <<'PY_CDN_CONTRACT'
+__CDN_CONTRACT_PYTHON__
+PY_CDN_CONTRACT
 )" || cdn_uuid_state='tool-error'
     if [ "$cdn_uuid_state" = 'ok' ]; then
         echo 'cdn_uuid=match'
@@ -1345,41 +1470,88 @@ PY
         cdn_listen_state='down'
         cdn_ok=0
     fi
-    # A non-origin answer is not enough: arbitrary DNS or another proxy can
-    # pass that weaker check while the Cloudflare path is already gone.
-    # Require every resolved IPv4 address to be inside Cloudflare's published
-    # ranges; a failed range fetch is unverified, never a green proxied state.
+    # Query every A/AAAA answer, including CNAME chains. ipaddress does not
+    # resolve names, so a CNAME to a non-Cloudflare A or AAAA would otherwise
+    # be accepted as proxied, or handed to an invalid-address branch. DNS
+    # ambiguity and lookup failure fail closed; no record content is printed.
     cdn_cf_ranges="$(curl -fsS --max-time 12 https://www.cloudflare.com/ips-v4 2>/dev/null || true)"
-    cdn_dns_state="$(CDN_HOST="$CDN_HOST" CDN_CF_RANGES="$cdn_cf_ranges" python3 <<'PY_CDN_DNS'
+    cdn_cf_ranges6="$(curl -fsS --max-time 12 https://www.cloudflare.com/ips-v6 2>/dev/null || true)"
+    cdn_dns_state="$(CDN_HOST="$CDN_HOST" CDN_CF_RANGES="$cdn_cf_ranges" CDN_CF_RANGES6="$cdn_cf_ranges6" python3 <<'PY_CDN_DNS'
 import ipaddress
 import os
 import socket
 
 host = os.environ['CDN_HOST']
 raw_ranges = os.environ.get('CDN_CF_RANGES', '')
-try:
-    answers = sorted({
-        item[4][0]
-        for item in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
-    })
-except socket.gaierror:
-    answers = []
-try:
-    networks = [
-        ipaddress.ip_network(line.strip(), strict=False)
-        for line in raw_ranges.splitlines()
-        if line.strip()
-    ]
-except ValueError:
-    networks = []
-if not answers:
-    print('missing')
-elif not networks:
-    print('unverified')
-elif all(any(ipaddress.ip_address(address) in network for network in networks) for address in answers):
-    print('proxied')
-else:
-    print('not-proxied')
+raw_ranges6 = os.environ.get('CDN_CF_RANGES6', '')
+
+def cloudflare(address, networks):
+    return any(ipaddress.ip_address(address) in network for network in networks)
+
+def resolve(address):
+    items = socket.getaddrinfo(address, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    return sorted({item[4][0] for item in items})
+
+def upstream(addresses, networks):
+    pending = list(reversed(addresses))
+    seen = set()
+    found = []
+    ambiguous = False
+    while pending:
+        address = pending.pop()
+        if address in seen:
+            return None
+        seen.add(address)
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            if not address.endswith('.') and address.lower() != host.lower():
+                ambiguous = True
+                try:
+                    pending.extend(reversed(resolve(address)))
+                except (socket.gaierror, UnicodeError):
+                    return None
+            continue
+        if ip.version == 4 and cloudflare(str(ip), networks[4]):
+            continue
+        if ip.version == 6 and cloudflare(str(ip), networks[6]):
+            continue
+        found.append(str(ip))
+    return found if not ambiguous else None
+
+def main():
+    try:
+        answers = resolve(host)
+    except socket.gaierror:
+        answers = []
+    try:
+        networks = [
+            ipaddress.ip_network(line.strip(), strict=False)
+            for line in raw_ranges.splitlines()
+            if line.strip()
+        ]
+        networks6 = [
+            ipaddress.ip_network(line.strip(), strict=False)
+            for line in raw_ranges6.splitlines()
+            if line.strip()
+        ]
+        if not answers:
+            print('missing')
+            return
+        if not networks or not networks6:
+            print('unverified')
+            return
+        direct = upstream(answers, {4: networks, 6: networks6})
+        if direct is None:
+            print('unverified')
+        elif direct:
+            print('direct-source')
+        else:
+            print('proxied')
+    except (OSError, ValueError, AttributeError):
+        print('unverified')
+
+main()
 PY_CDN_DNS
 )"
     cdn_ip="$(getent ahostsv4 "$CDN_HOST" 2>/dev/null | awk 'NR==1{print $1}' || true)"
@@ -1671,7 +1843,7 @@ for path in sorted(glob.glob(sys.argv[1] + '/*.conf')):
 print('')
 PY
 )"
-    fetch_code="$(curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
+    fetch_code="$(curl -sS -m 12 --cacert "$CA_BUNDLE" --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
         -o /dev/null -w '%{http_code}' \
         "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true)"
     # Each run leaves this gate's own 0-byte scratch file behind by design
@@ -1683,7 +1855,7 @@ PY
     find "${TMPDIR:-/tmp}" -maxdepth 1 -user "$(id -u)" -type f \
         -name 'vps-launcher-drift.*' -mmin +1440 -delete 2>/dev/null || true
     import_file="$(mktemp "${TMPDIR:-/tmp}/vps-launcher-drift.XXXXXXXXXX")"
-    curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
+    curl -sS -m 12 --cacert "$CA_BUNDLE" --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
         -o "$import_file" "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true
     # The base64 subscription may wrap, so decode it in Python instead of
     # relying on the local base64(1) flavor.
@@ -2254,100 +2426,13 @@ fi
 echo '==firewall-baseline=='
 FIREWALL_RULES="/etc/vps-ssh-launcher/firewall.nft"
 FIREWALL_SERVICE="vps-launcher-firewall.service"
-firewall_input_state() {
+firewall_live_state() {
     local nft_json
-    nft_json="$(nft -j list chain inet vps_launcher_guard input 2>/dev/null)" || return 1
-    FIREWALL_NFT_JSON="$nft_json" python3 - '__FIREWALL_TCP__' '__FIREWALL_UDP__' <<'PY_FIREWALL'
-import json
-import os
-import sys
-
-doc = json.loads(os.environ["FIREWALL_NFT_JSON"])
-objects = doc.get("nftables") or []
-chains = [
-    item["chain"] for item in objects
-    if isinstance(item, dict)
-    and "chain" in item
-    and item["chain"].get("table") == "vps_launcher_guard"
-    and item["chain"].get("name") == "input"
-]
-if len(chains) != 1:
-    print("live-chain")
-    raise SystemExit(0)
-
-chain = chains[0]
-if (
-    chain.get("family") != "inet"
-    or chain.get("type") != "filter"
-    or chain.get("hook") != "input"
-    or chain.get("prio") != -10
-):
-    print("live-chain")
-    raise SystemExit(0)
-if chain.get("policy") != "drop":
-    print("live-policy")
-    raise SystemExit(0)
-
-tcp = [int(value) for value in sys.argv[1].split()]
-udp = [int(value) for value in sys.argv[2].split()]
-expected = [
-    # CVE-2026-98432 mitigation (rendered by nft 1.0.9, verified in a
-    # throwaway netns 2026-11-10): meta l4proto tcp ip hdrlength > 5 drop.
-    [
-        {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "tcp"}},
-        {"match": {"op": ">", "left": {"payload": {"protocol": "ip", "field": "hdrlength"}}, "right": 5}},
-        {"drop": None},
-    ],
-    [
-        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "invalid"}},
-        {"drop": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "lo"}},
-        {"accept": None},
-    ],
-    [
-        {
-            "match": {
-                "op": "==",
-                "left": {"meta": {"key": "l4proto"}},
-                "right": {"set": ["icmp", "ipv6-icmp"]},
-            }
-        },
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 67}},
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 68}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 547}},
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 546}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"set": tcp}}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": {"set": udp}}},
-        {"accept": None},
-    ],
-]
-actual = [
-    item["rule"].get("expr")
-    for item in objects
-    if isinstance(item, dict)
-    and "rule" in item
-    and item["rule"].get("table") == "vps_launcher_guard"
-    and item["rule"].get("chain") == "input"
-]
-print("exact" if actual == expected else "live-rules")
+    nft_json="$(nft -j list table inet vps_launcher_guard 2>/dev/null)" || return 1
+    FIREWALL_NFT_JSON="$nft_json" python3 - \
+        '__FIREWALL_HOP_START__' '__FIREWALL_HOP_END__' '__FIREWALL_HOP_TARGET__' \
+        '__FIREWALL_TCP__' '__FIREWALL_UDP__' <<'PY_FIREWALL'
+__LIVE_FIREWALL_PYTHON__
 PY_FIREWALL
 }
 if [ ! -f "$FIREWALL_RULES" ]; then
@@ -2360,7 +2445,7 @@ elif ! systemctl is-enabled --quiet "$FIREWALL_SERVICE" 2>/dev/null ||
      ! systemctl is-active --quiet "$FIREWALL_SERVICE" 2>/dev/null; then
     echo 'firewall_baseline=drift service-not-active-or-enabled'
     drift+=('firewall-baseline')
-elif ! firewall_live_state="$(firewall_input_state)"; then
+elif ! firewall_live_state="$(firewall_live_state)"; then
     echo 'firewall_baseline=drift live-unreadable'
     drift+=('firewall-baseline')
 elif [ "$firewall_live_state" != 'exact' ]; then
@@ -2390,7 +2475,7 @@ for lane in "${drift[@]}"; do
 done
 echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__CDN_CONTRACT_PYTHON__", $cdnContractPython).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__VERIFIED_TLS_HELPER__", $verifiedTlsHelper).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_HOP_START__", "$($firewallContract.Hysteria2HopStart)").Replace("__FIREWALL_HOP_END__", "$($firewallContract.Hysteria2HopEnd)").Replace("__FIREWALL_HOP_TARGET__", "$($firewallContract.Hysteria2HopTarget)").Replace("__LIVE_FIREWALL_PYTHON__", $liveFirewallPython).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
 
 try {
   Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

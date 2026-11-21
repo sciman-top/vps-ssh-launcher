@@ -100,7 +100,9 @@ _OUTPUT_UNKNOWN = "unknown"
 # tuning signal from one cold prefix.
 _CACHE_HEALTH_MIN_REPORTS = 10
 _CACHE_HEALTH_MIN_INPUT_TOKENS = 1_000_000
+_CACHE_CANDIDATE_MIN_TOKENS = 20_000
 _CACHE_HEALTH_WARN_RATIO = 0.5
+_MIN_STREAM_RATE_DURATION_MS = 50
 
 
 def _parse_timestamp(token: str) -> datetime | None:
@@ -161,51 +163,14 @@ def _text_finish_reason(line: str) -> str | None:
     return None
 
 
-def _metrics(
-    record: dict[str, Any], result_ts: datetime
-) -> tuple[int | None, int | None]:
-    """Return (total_duration_ms, first_output_ms) for one request.
-
-    ``upstream_result`` is written at terminal delivery.  Stream mode commits
-    its downstream headers before the queue, so total duration must come from
-    the recorded stage durations.  A non-stream response commits its headers
-    after upstream answer, so its ``http`` interval measures additional decode
-    time after the upstream header; use that interval when available.
-    """
-
-    waited_ms = record.get("waited_ms")
-    header_ms = record.get("header_ms")
-    first_byte_ms = record.get("first_byte_ms")
-    header_at = record.get("header_at")
-    sse = record.get("sse_inspection") != "na"
-    post_header_ms = None
-    if isinstance(header_at, datetime) and result_ts >= header_at:
-        post_header_ms = int(round((result_ts - header_at).total_seconds() * 1000))
-    total_duration_ms = (
-        waited_ms + header_ms
-        if waited_ms is not None and header_ms is not None
-        else None
-    )
-    if not sse and post_header_ms is not None and header_ms is not None:
-        total_duration_ms = header_ms + post_header_ms
-    if not sse and post_header_ms is None:
-        total_duration_ms = None
-    first_output_ms = (
-        waited_ms + first_byte_ms
-        if waited_ms is not None and first_byte_ms is not None
-        else None
-    )
-    return total_duration_ms, first_output_ms
-
-
 def parse_journal(
     lines: Iterable[str],
 ) -> tuple[list[dict[str, Any]], int]:
-    """Pair request-start lines with upstream-result lines.
+    """Pair admission and downstream header lines with terminal delivery.
 
-    The result line is the authoritative completion record.  A start line is
-    used only to derive total duration; if it is outside the captured window,
-    duration-based metrics stay ``None`` rather than guessing.
+    The admission event anchors upstream timing. For older logs, the
+    downstream header timestamp can provide a bounded fallback. A result
+    without either anchor cannot measure elapsed time to completion.
     """
 
     header_logs: dict[str, datetime] = {}
@@ -230,11 +195,8 @@ def parse_journal(
             admission_logs[request_id] = timestamp
             continue
         if request_id and " http " in line and "upstream_result " not in line:
-            # BaseHTTPRequestHandler.log_message runs when the downstream
-            # response headers are written, not when the request arrives.
-            # Pairing the result with this line therefore measures the stream
-            # from header commit to terminal event, not queue plus upstream
-            # header time.  The header time is reported separately.
+            # log_message runs when downstream headers are written. Queued
+            # SSE writes them before admission, other paths after CPA headers.
             header_logs[request_id] = timestamp
             header_lines += 1
             continue
@@ -247,77 +209,71 @@ def parse_journal(
         first_text_ms = _parse_int(fields.get("first_text_ms"))
         sse_inspection = fields.get("sse_inspection_complete") or "na"
         admission_ts = admission_logs.get(request_id) if request_id else None
-        if admission_ts is None and header_at is not None and header_ms is not None:
+        if admission_ts is None and header_at is not None and header_at <= timestamp:
             if waited_ms is not None and sse_inspection != "na":
-                # A lane-owned SSE request commits its downstream headers before
-                # queueing, so the admit instant is the logged header time plus
-                # the measured queue wait.
+                # Older lane-owned SSE logs have only the early queue header.
                 admission_ts = header_at + timedelta(milliseconds=waited_ms)
-            else:
-                # A non-SSE request logs downstream headers only after the
-                # upstream has answered; subtract that upstream header time.
+            elif header_ms is not None:
                 admission_ts = header_at - timedelta(milliseconds=header_ms)
-        if admission_ts is None or admission_ts > timestamp:
+        if admission_ts is not None and admission_ts > timestamp:
             admission_ts = None
-        record = {
-            "waited_ms": waited_ms,
-            "header_ms": header_ms,
-            "first_byte_ms": first_byte_ms,
-            "first_text_ms": first_text_ms,
-            "header_at": header_at,
-            "sse_inspection": sse_inspection,
-            "lane": fields.get("lane") or "unknown",
-            "observed_model": fields.get("model") or "unknown",
-        }
-        total_duration_ms, first_output_ms = _metrics(record, timestamp)
-        stream_duration_s = None
-        if header_at is not None and timestamp >= header_at:
-            stream_duration_s = (timestamp - header_at).total_seconds()
-        # A result line is written at terminal delivery.  For a multi-event SSE
-        # turn, subtract its upstream first-byte directly; single-frame streams
-        # have no inner decode interval, so leave them unreported instead of
-        # turning a tiny terminal frame into fabricated throughput.  For
-        # non-SSE, subtract both queue and TTFB from the result.  The result
-        # itself is the precise receipt; a pre-header http timestamp would put
-        # queue time on the wrong side of a subtraction.
-        output_origin_at: datetime | None
-        terminal_seen = fields.get("sse_terminal_seen") == "true"
-        sse_events = _parse_int(fields.get("sse_events")) or 0
-        if sse_inspection != "na" and terminal_seen and sse_events > 1:
-            output_origin_at = (
-                timestamp - timedelta(milliseconds=first_byte_ms)
-                if first_byte_ms is not None
-                else None
-            )
-        elif (
-            sse_inspection == "na"
-            and waited_ms is not None
-            and first_byte_ms is not None
+        upstream_duration_ms = (
+            round((timestamp - admission_ts).total_seconds() * 1000)
+            if admission_ts is not None
+            else None
+        )
+        total_duration_ms = (
+            waited_ms + upstream_duration_ms
+            if waited_ms is not None and upstream_duration_ms is not None
+            else None
+        )
+        first_output_ms = (
+            waited_ms + first_byte_ms
+            if waited_ms is not None and first_byte_ms is not None
+            else None
+        )
+        # Mixed journal/monotonic clocks can disagree. Omit inconsistent
+        # samples instead of converting them to an apparent zero-second tail.
+        if (
+            total_duration_ms is not None
+            and first_output_ms is not None
+            and total_duration_ms < first_output_ms
         ):
-            output_origin_at = timestamp - timedelta(
-                milliseconds=waited_ms + first_byte_ms
-            )
-            if output_origin_at > timestamp:
-                output_origin_at = None
-        else:
-            output_origin_at = None
-        first_output_at = output_origin_at
+            total_duration_ms = None
+        stream_duration_s = (
+            (timestamp - header_at).total_seconds()
+            if header_at is not None and timestamp >= header_at
+            else None
+        )
+        sse_events = _parse_int(fields.get("sse_events")) or 0
+        # Terminal JSON and single-frame SSE have no observable token stream.
+        # Multi-event SSE can estimate delivery time after the first payload.
+        decode_ms = (
+            upstream_duration_ms - first_byte_ms
+            if upstream_duration_ms is not None
+            and first_byte_ms is not None
+            and upstream_duration_ms >= first_byte_ms
+            and sse_inspection == "true"
+            and fields.get("sse_terminal_seen") == "true"
+            and sse_events > 1
+            else None
+        )
         records.append(
             {
-                "lane": record["lane"],
-                "model": record["observed_model"],
+                "lane": fields.get("lane") or "unknown",
+                "model": fields.get("model") or "unknown",
                 "protocol_result": fields.get("protocol_result") or "unknown",
                 "waited_ms": waited_ms,
                 "header_ms": header_ms,
                 "first_byte_ms": first_byte_ms,
                 "first_text_ms": first_text_ms,
                 "sse_bytes": _parse_int(fields.get("sse_bytes")) or 0,
-                "sse_events": _parse_int(fields.get("sse_events")) or 0,
+                "sse_events": sse_events,
                 "sse_inspection": sse_inspection,
                 "text_finish": _text_finish_reason(line),
                 "first_output_ms": first_output_ms,
                 "total_duration_ms": total_duration_ms,
-                "first_output_at": first_output_at,
+                "decode_ms": decode_ms,
                 "usage_in": _parse_int(fields.get("usage_in")),
                 "usage_cached": _parse_int(fields.get("usage_cached")),
                 "usage_out": _parse_int(fields.get("usage_out")),
@@ -515,33 +471,24 @@ def summarize(
             for record in completed
             if record.get("first_byte_ms") is not None
         ]
-        decode_ms = [
-            max(0.0, record["total_duration_ms"] - record["first_output_ms"])
-            for record in completed
-            if record.get("first_output_ms") is not None
-            and record.get("total_duration_ms") is not None
-        ]
+        first_text_ms = _values(completed, "first_text_ms")
+        decode_ms = _values(completed, "decode_ms")
         slow_parts = {
             "queue": sum(value >= 5000 for value in queue_ms),
             "upstream": sum(value >= 5000 for value in upstream_ttft_ms),
             "decode": sum(value >= 5000 for value in decode_ms),
         }
-        throughput = [
-            record["sse_bytes"] / record["stream_duration_s"]
-            for record in completed
-            if record["sse_bytes"] > 0
-            and record["stream_duration_s"] is not None
-            and record["stream_duration_s"] > 0
-        ]
+        throughput = []
         output_rates = []
         for record in completed:
-            tokens = record["usage_out"]
-            output_start = record.get("first_output_at")
-            if tokens is None or tokens <= 0 or output_start is None:
+            duration_ms = record.get("decode_ms")
+            if duration_ms is None or duration_ms <= _MIN_STREAM_RATE_DURATION_MS:
                 continue
-            decode_seconds = (record["result_ts"] - output_start).total_seconds()
-            if decode_seconds > 0.05:
-                output_rates.append(tokens / decode_seconds)
+            if record["sse_bytes"] > 0:
+                throughput.append(1000 * record["sse_bytes"] / duration_ms)
+            tokens = record["usage_out"]
+            if tokens is not None and tokens > 0:
+                output_rates.append(1000 * tokens / duration_ms)
         tiny_sse = [
             record
             for record in completed
@@ -586,31 +533,57 @@ def summarize(
         # Most OAuth/OpenAI-shaped responses report total input, while the
         # WorkBuddy/DeepSeek shape observed on BWG reports uncached input and
         # places cache reads in `usage_cached`.  A cached count greater than the
-        # reported input is an unambiguous signal for the latter shape.  Keep
-        # the existing total-input ratio for the former, but use cached+input
-        # for the latter so the audit can never emit a hit ratio above 1.0.
+        # reported input is an unambiguous signal for the latter shape. Keep the
+        # existing total-input ratio for the former, but use cached+input for
+        # the latter. Record-level normalization prevents a single warm turn
+        # from losing all of its cached reads. `cache_candidate_*` additionally
+        # excludes tiny title/probe requests, whose tiny cold prefixes should
+        # not make a healthy long-context lane look broken.
         # Sums are observation-only; `token_reports` states the support.
         token_reports = [r for r in natural_items if r["usage_in"] is not None]
         tokens_input = sum(r["usage_in"] for r in token_reports)
         tokens_output = sum(
             r["usage_out"] for r in token_reports if r["usage_out"] is not None
         )
-        tokens_cached = sum(
-            r["usage_cached"] for r in token_reports if r["usage_cached"] is not None
-        )
         uncached_parts = []
+        cached_parts = []
+        candidate_uncached_parts = []
+        candidate_cached_parts = []
         additive_cache_shape = False
         for record in token_reports:
             reported_input = record["usage_in"]
             reported_cached = record["usage_cached"]
             if reported_cached is not None and reported_cached > reported_input:
                 # The provider's input count excludes cache reads.
-                uncached_parts.append(reported_input)
+                uncached = reported_input
+                cached = reported_cached
                 additive_cache_shape = True
             else:
                 # The provider's input count includes cache reads.
-                uncached_parts.append(max(0, reported_input - (reported_cached or 0)))
+                cached = min(reported_input, reported_cached or 0)
+                uncached = max(0, reported_input - cached)
+            uncached_parts.append(uncached)
+            cached_parts.append(cached)
+            if cached + uncached >= _CACHE_CANDIDATE_MIN_TOKENS:
+                candidate_uncached_parts.append(uncached)
+                candidate_cached_parts.append(cached)
         tokens_uncached = sum(uncached_parts)
+        tokens_cached = sum(cached_parts)
+        candidate_uncached = sum(candidate_uncached_parts)
+        candidate_cached = sum(candidate_cached_parts)
+        cache_shape_by_model: dict[str, set[str]] = {}
+        for record in token_reports:
+            reported_input = record["usage_in"]
+            reported_cached = record["usage_cached"]
+            shape = (
+                "additive"
+                if reported_cached is not None and reported_cached > reported_input
+                else "total"
+            )
+            cache_shape_by_model.setdefault(str(record["model"]), set()).add(shape)
+        cache_shape_mixed_models = sorted(
+            model for model, shapes in cache_shape_by_model.items() if len(shapes) > 1
+        )
         cost_reports = [r for r in natural_items if r.get("usage_cost_usd") is not None]
         cost_usd = sum(r["usage_cost_usd"] for r in cost_reports)
         zero_cost_reports = sum(1 for r in cost_reports if r["usage_cost_usd"] == 0)
@@ -625,6 +598,12 @@ def summarize(
         cache_denominator = tokens_cached + tokens_uncached
         cache_hit_ratio = (
             tokens_cached / cache_denominator if cache_denominator > 0 else None
+        )
+        candidate_denominator = candidate_cached + candidate_uncached
+        candidate_cache_hit_ratio = (
+            candidate_cached / candidate_denominator
+            if candidate_denominator > 0
+            else None
         )
         span_minutes = 0.0
         if len(natural_items) > 1:
@@ -663,17 +642,18 @@ def summarize(
                 "first_byte_p50_ms": _percentile(
                     _values(completed, "first_byte_ms"), 0.5
                 ),
-                "first_output_p50_ms": _percentile(upstream_ttft_ms, 0.5),
-                "first_output_p90_ms": _percentile(upstream_ttft_ms, 0.9),
+                "first_output_p50_ms": _percentile(
+                    _values(completed, "first_output_ms"), 0.5
+                ),
+                "first_output_p90_ms": _percentile(
+                    _values(completed, "first_output_ms"), 0.9
+                ),
                 "first_byte_p90_ms": _percentile(
                     _values(completed, "first_byte_ms"), 0.9
                 ),
-                "first_text_p50_ms": _percentile(
-                    _values(completed, "first_text_ms"), 0.5
-                ),
-                "first_text_p90_ms": _percentile(
-                    _values(completed, "first_text_ms"), 0.9
-                ),
+                "first_text_p50_ms": _percentile(first_text_ms, 0.5),
+                "first_text_p90_ms": _percentile(first_text_ms, 0.9),
+                "first_text_reports": len(first_text_ms),
                 "queue_ms_p50": _percentile(queue_ms, 0.5),
                 "queue_ms_p90": _percentile(queue_ms, 0.9),
                 "decode_ms_p50": _percentile(decode_ms, 0.5),
@@ -693,6 +673,10 @@ def summarize(
                 "output_tokens_per_s_p90": _percentile(output_rates, 0.9),
                 "output_rate_reports": len(output_rates),
                 "tiny_sse_completed": len(tiny_sse),
+                "tiny_sse_tool_call_completed": sum(
+                    record.get("text_finish") in _TOOL_CALL_FINISH_REASONS
+                    for record in tiny_sse
+                ),
                 "output_origins": len(origin_states),
                 "text_finish_reports": len(text_finishes),
                 "empty_text_completed": len(empty_text),
@@ -703,16 +687,33 @@ def summarize(
                 "unexplained_output_origins": len(unexplained),
                 "non_sse_completed": len(non_sse),
                 "token_reports": len(token_reports),
+                "community_consumer_signal": name.startswith("workbuddy-oauth/")
+                and (
+                    len(completed) > 0
+                    or len(capacity) > 0
+                    or len(disconnects) > 0
+                    or len(upstream_errors) > 0
+                    or len(tiny_sse) > 0
+                ),
                 "tokens_input": tokens_input if token_reports else None,
                 "tokens_cached": tokens_cached if token_reports else None,
                 "tokens_uncached": tokens_uncached if token_reports else None,
                 "tokens_output": tokens_output if token_reports else None,
                 "cache_hit_ratio": cache_hit_ratio,
+                "cache_candidate_reports": len(candidate_cached_parts),
+                "cache_candidate_cached": (
+                    candidate_cached if candidate_cached_parts else None
+                ),
+                "cache_candidate_uncached": (
+                    candidate_uncached if candidate_cached_parts else None
+                ),
+                "cache_candidate_hit_ratio": candidate_cache_hit_ratio,
                 "cache_accounting": (
                     "cached_plus_reported_input"
                     if additive_cache_shape
                     else "reported_input_total"
                 ),
+                "cache_accounting_mixed_models": cache_shape_mixed_models,
                 "cost_reports": len(cost_reports),
                 "cost_usd": cost_usd if cost_reports else None,
                 "zero_cost_reports": zero_cost_reports,
@@ -729,6 +730,11 @@ def summarize(
             name.startswith("workbuddy-oauth/")
             and admit_peak is not None
             and admit_peak >= 13
+            # The community signal concerns the consumer-session API. The
+            # workbuddy-oauth admission lane also carries the official codex
+            # API-key shape, so require evidence that the lane is handling
+            # generation traffic before attributing that signal to this lane.
+            and lane["community_consumer_signal"]
         ):
             warnings.append(
                 f"{name} admit_peak_60s={admit_peak} is at/above the community "
@@ -745,18 +751,28 @@ def summarize(
                 "review threshold; prefer fewer parallel title/summary requests. "
                 "This is a local risk-review threshold, not a provider limit"
             )
-        if lane["tiny_sse_completed"]:
+        tiny_non_tool = (
+            lane["tiny_sse_completed"] - lane["tiny_sse_tool_call_completed"]
+        )
+        if tiny_non_tool:
             warnings.append(
-                f"{name} tiny_sse_completed={lane['tiny_sse_completed']}; "
+                f"{name} tiny_sse_non_tool_completed={tiny_non_tool}; "
                 "inspect credits/protocol before attributing it to an account "
                 "or treating it as proof of empty output"
             )
-        cache_ratio = lane["cache_hit_ratio"]
+        cache_ratio = lane["cache_candidate_hit_ratio"]
         if lane["cache_accounting"] == "cached_plus_reported_input":
             warnings.append(
                 f"{name} cache_usage_shape=cached_plus_reported_input; "
                 "the provider reports cache reads separately from usage_in, "
                 "so the hit ratio uses cached/(cached+usage_in)"
+            )
+        if lane["cache_accounting_mixed_models"]:
+            warnings.append(
+                f"{name} cache_usage_shape_mixed_models="
+                f"{','.join(lane['cache_accounting_mixed_models'])}; "
+                "one model emitted both total and additive cache usage, so its "
+                "hit ratio is ambiguous until the provider's fields are confirmed"
             )
         if lane["zero_cost_reports"]:
             warnings.append(
@@ -781,14 +797,17 @@ def summarize(
                 "the model stopped on a token/length limit, not a complete answer"
             )
         if (
-            lane["token_reports"] >= _CACHE_HEALTH_MIN_REPORTS
-            and (lane["tokens_input"] or 0) >= _CACHE_HEALTH_MIN_INPUT_TOKENS
+            lane["cache_candidate_reports"] >= _CACHE_HEALTH_MIN_REPORTS
+            and (lane["cache_candidate_cached"] or 0)
+            + (lane["cache_candidate_uncached"] or 0)
+            >= _CACHE_HEALTH_MIN_INPUT_TOKENS
             and cache_ratio is not None
             and cache_ratio < _CACHE_HEALTH_WARN_RATIO
         ):
             warnings.append(
-                f"{name} cache_hit_ratio={cache_ratio:.2f} across "
-                f"{lane['tokens_input']} input tokens "
+                f"{name} cache_candidate_hit_ratio={cache_ratio:.2f} across "
+                f"{lane['cache_candidate_reports']} requests with >= "
+                f"{_CACHE_CANDIDATE_MIN_TOKENS}-token prompts "
                 f"(review threshold {_CACHE_HEALTH_WARN_RATIO:.2f}); inspect "
                 "prompt-prefix stability and session affinity before changing "
                 "cache keys"
@@ -858,6 +877,7 @@ def render(summary: dict[str, Any]) -> list[str]:
             "first_text "
             f"p50={_format_metric(lane['first_text_p50_ms'], 'ms')} "
             f"p90={_format_metric(lane['first_text_p90_ms'], 'ms')} "
+            f"reports={lane['first_text_reports']} "
             f"queue p50={_format_metric(lane['queue_ms_p50'], 'ms')} "
             f"p90={_format_metric(lane['queue_ms_p90'], 'ms')} "
             f"decode p50={_format_metric(lane['decode_ms_p50'], 'ms')} "
@@ -881,6 +901,7 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"p90={_format_metric(lane['output_tokens_per_s_p90'])} "
             f"reports={lane['output_rate_reports']} "
             f"tiny_sse_completed={lane['tiny_sse_completed']} "
+            f"tiny_sse_tool_call_completed={lane['tiny_sse_tool_call_completed']} "
             f"empty_text_completed={lane['empty_text_completed']} "
             f"truncated_text_completed={lane['truncated_text_completed']} "
             f"text_output_completed={lane['text_output_completed']} "
@@ -897,7 +918,21 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"uncached={_optional_int(lane['tokens_uncached'])} "
             f"out={_optional_int(lane['tokens_output'])} "
             f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])} "
-            f"accounting={lane['cache_accounting']}"
+            f"accounting={lane['cache_accounting']} "
+            "mixed_accounting_models="
+            + (
+                ",".join(lane["cache_accounting_mixed_models"])
+                if lane["cache_accounting_mixed_models"]
+                else "none"
+            )
+        )
+        lines.append(
+            "  cache_candidates "
+            f"reports={lane['cache_candidate_reports']} "
+            f"cached={_optional_int(lane['cache_candidate_cached'])} "
+            f"uncached={_optional_int(lane['cache_candidate_uncached'])} "
+            f"cache_hit_ratio={_format_metric(lane['cache_candidate_hit_ratio'])} "
+            f"min_prompt_tokens={_CACHE_CANDIDATE_MIN_TOKENS}"
         )
         if lane["cost_reports"]:
             lines.append(
@@ -913,7 +948,10 @@ def render(summary: dict[str, Any]) -> list[str]:
         "fields only when the provider reported them (reports=N is the support "
         "for cache_hit_ratio; providers may report usage_in as total input or "
         "uncached input, and the audit switches to cached+usage_in when "
-        "cached_tokens exceeds usage_in); cost_usd is provider-reported numeric "
+        "cached_tokens exceeds usage_in; cache_candidates further excludes "
+        f"requests whose total prompt is below {_CACHE_CANDIDATE_MIN_TOKENS} "
+        "tokens, and the cache review warning evaluates that long-prefix view; "
+        "neither ratio proves causal attribution; cost_usd is provider-reported numeric "
         "spend when present, not proof of free capacity; empty_text/truncated_text come from "
         "the additive sse_text_finish allowlist field when deployed; "
         "text_output comes only from explicit --origin canary dumps; natural "
@@ -925,10 +963,12 @@ def render(summary: dict[str, Any]) -> list[str]:
         "rolling window on completion timestamps; slow_5s counts one request "
         "in each stage that exceeded five seconds (categories can overlap); "
         "admit_peak_60s uses lane_admit when present and a bounded derivation "
-        "otherwise; output_tokens_per_s is a stream-window estimate, not a "
-        "provider benchmark; its denominator starts at the first upstream byte "
-        "and excludes admission queue and TTFB; first_text is the first "
-        "non-empty visible text event when the deployed build reports it; "
+        "otherwise; stream_duration starts at downstream headers, which queued "
+        "SSE sends before admission; total_duration includes the measured queue "
+        "and runs to terminal delivery; first_output_ttft adds queue wait to "
+        "upstream first byte; decode and stream rates cover the time from first "
+        "upstream byte to completion of an inspected multi-event SSE response; "
+        "first_text is the first non-empty visible text event when reported; "
         "health-probe counts remain visible but probe records are excluded "
         "from natural latency/protocol/cache/cost aggregates --"
     )

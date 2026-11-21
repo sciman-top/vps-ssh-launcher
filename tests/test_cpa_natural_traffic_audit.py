@@ -101,6 +101,69 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         rendered = "\n".join(render(summary))
         self.assertIn("cache_hit_ratio=0.70", rendered)
 
+    def test_additive_cache_shape_keeps_all_cached_reads(self) -> None:
+        """A single cold record must not classify a warm lane as total-input."""
+
+        log = (
+            "2026-10-31T00:00:05+00:00 host py[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=233269 usage_cached=232704 usage_out=100 request_id=r1\n"
+            "2026-10-31T00:00:06+00:00 host py[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=10 usage_cached=4000 usage_out=100 request_id=r2\n"
+        )
+        lane = summarize(parse_journal(io.StringIO(log))[0], 24)["lanes"][0]
+        self.assertEqual(lane["tokens_cached"], 236704)
+        self.assertEqual(lane["tokens_uncached"], 575)
+        self.assertGreater(lane["cache_hit_ratio"], 0.5)
+        self.assertEqual(lane["cache_accounting"], "cached_plus_reported_input")
+
+    def test_cache_candidates_exclude_tiny_probe_inputs(self) -> None:
+        log = (
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=500 usage_cached=0 usage_out=10 request_id=p1\n"
+            "2026-10-31T00:00:02+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=100000 usage_cached=98000 usage_out=100 request_id=p2\n"
+        )
+        summary = summarize(parse_journal(io.StringIO(log))[0], 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["cache_hit_ratio"], 98_000 / 100_500)
+        self.assertEqual(lane["cache_candidate_reports"], 1)
+        self.assertEqual(lane["cache_candidate_cached"], 98_000)
+        self.assertEqual(lane["cache_candidate_uncached"], 2_000)
+        self.assertAlmostEqual(lane["cache_candidate_hit_ratio"], 0.98)
+        self.assertIn("cache_candidates reports=1", "\n".join(render(summary)))
+
+    def test_mixed_cache_shapes_within_one_model_are_not_hidden(self) -> None:
+        """A provider-contract change cannot lower a lane ratio without a warning."""
+
+        log = (
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=100000 usage_cached=80000 usage_out=10 request_id=p1\n"
+            "2026-10-31T00:00:02+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=20000 usage_cached=80000 usage_out=10 request_id=p2\n"
+        )
+        summary = summarize(parse_journal(io.StringIO(log))[0], 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["cache_accounting_mixed_models"], ["gpt-6-luna"])
+        self.assertTrue(
+            any(
+                "cache_usage_shape_mixed_models=gpt-6-luna" in warning
+                for warning in summary["warnings"]
+            )
+        )
+        self.assertIn("mixed_accounting_models=gpt-6-luna", "\n".join(render(summary)))
+
     def test_pairs_start_and_result_and_keeps_aggregates_only(self) -> None:
         records, starts = parse_journal(io.StringIO(LOG))
         self.assertEqual(starts, 3)
@@ -123,7 +186,9 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertEqual(gpt["completed"], 1)
         self.assertEqual(gpt["capacity"], 0)
         self.assertEqual(gpt["header_completed_p50_ms"], 1000.0)
-        self.assertEqual(gpt["sse_bytes_per_s_p50"], 2500.0)
+        self.assertEqual(gpt["total_duration_p50_s"], 4.0)
+        self.assertAlmostEqual(gpt["sse_bytes_per_s_p50"], 10_000 / 2.997)
+        self.assertEqual(gpt["first_text_reports"], 1)
         workbuddy = next(
             lane
             for lane in summary["lanes"]
@@ -162,7 +227,23 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             any("community 14003 range" in item for item in summary["warnings"])
         )
         self.assertTrue(
-            any("tiny_sse_completed=16" in item for item in summary["warnings"])
+            any(
+                "tiny_sse_non_tool_completed=16" in item for item in summary["warnings"]
+            )
+        )
+
+        tool_records, _ = parse_journal(
+            f"{line} sse_text_finish=tool_use" for line in lines
+        )
+        tool_summary = summarize(tool_records, 24)
+        tool_lane = tool_summary["lanes"][0]
+        self.assertEqual(tool_lane["tiny_sse_completed"], 16)
+        self.assertEqual(tool_lane["tiny_sse_tool_call_completed"], 16)
+        self.assertFalse(
+            any(
+                "tiny_sse_non_tool_completed" in item
+                for item in tool_summary["warnings"]
+            )
         )
 
     def test_completed_peak_does_not_invent_an_admission_burst(self) -> None:
@@ -208,52 +289,45 @@ class NaturalTrafficAuditTests(unittest.TestCase):
 
         def result(
             request: str,
+            second: int,
             waited: int,
             header: int,
-            first_byte: int,
-            usage_out: int,
-            text_finish: str,
         ) -> str:
             return (
-                f"2026-10-31T00:00:20+00:00 host py[1]: INFO upstream_result "
+                f"2026-10-31T00:00:{second:02d}+00:00 host py[1]: "
+                "INFO upstream_result "
                 f"lane=chatgpt-oauth model=gpt-6-luna status=200 "
                 f"capacity=false waited_ms={waited} successful=true "
                 f"protocol_result=completed upstream_header_ms={header} "
-                f"upstream_first_byte_ms={first_byte} "
-                f"sse_bytes=10000 sse_events=20 "
-                f"sse_inspection_complete=true usage_in=1000 "
-                f"usage_cached=800 usage_out={usage_out} "
-                f"sse_text_finish={text_finish} request_id={request}\n"
+                f"upstream_first_byte_ms={header + 1} "
+                "sse_bytes=10000 sse_events=20 sse_terminal_seen=true "
+                f"sse_inspection_complete=true request_id={request}\n"
             )
 
         log = (
-            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
-            "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=q\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=q\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=u\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=d\n"
             "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
             "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=u\n"
             "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
             "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=d\n"
-            "2026-10-31T00:00:01+00:00 host py[1]: INFO http request_id=q\n"
-            "2026-10-31T00:00:01+00:00 host py[1]: INFO http request_id=u\n"
-            "2026-10-31T00:00:05+00:00 host py[1]: INFO http request_id=d\n"
-            + result("q", 10000, 1000, 1001, 100, "stop")
-            + result("u", 0, 8000, 8001, 100, "stop")
-            + result("d", 0, 1000, 1001, 100, "stop")
-            .replace(
-                "2026-10-31T00:00:20+00:00 host py[1]: INFO upstream_result",
-                "2026-10-31T00:00:31+00:00 host py[1]: INFO upstream_result",
-            )
-            .replace("sse_inspection_complete=true", "sse_inspection_complete=na")
+            + result("u", 10, 0, 8000)
+            + "2026-10-31T00:00:10+00:00 host py[1]: INFO lane_admit "
+            "lane=chatgpt-oauth model=gpt-6-luna waited_ms=10000 request_id=q\n"
+            + result("q", 13, 10000, 1000)
+            + result("d", 31, 0, 1000)
         )
         records, _ = parse_journal(io.StringIO(log))
-        self.assertEqual(records[2]["stream_duration_s"], 26.0)
+        self.assertEqual(records[2]["stream_duration_s"], 31.0)
         self.assertEqual(records[2]["first_output_ms"], 1001)
+        self.assertEqual(records[2]["decode_ms"], 29999)
         lane = summarize(records, 24)["lanes"][0]
         self.assertEqual(
             lane["slow_5s_attribution"],
             {"queue": 1, "upstream": 1, "decode": 1},
         )
-        self.assertEqual(lane["first_output_p50_ms"], 1001)
+        self.assertEqual(lane["first_output_p50_ms"], 8001)
         rendered = "\n".join(render(summarize(records, 24)))
         self.assertIn("slow_5s=queue:1,upstream:1,decode:1", rendered)
 
@@ -405,7 +479,7 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         summary = summarize(records, 24)
         lane = summary["lanes"][0]
         self.assertEqual(lane["output_rate_reports"], 1)
-        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 100.0)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 100.0 / 3.0)
         rendered = "\n".join(render(summary))
         self.assertIn("output_tokens_per_s", rendered)
         self.assertIn("uncached=200", rendered)
@@ -415,7 +489,7 @@ class NaturalTrafficAuditTests(unittest.TestCase):
 
         log = (
             "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=r1\n"
-            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "2026-10-31T00:00:05+00:00 host py[1]: INFO lane_admit "
             "lane=workbuddy-oauth model=deepseek-v4.1-flash waited_ms=5000 "
             "request_id=r1\n"
             "2026-10-31T00:00:16+00:00 host py[1]: INFO upstream_result "
@@ -430,17 +504,20 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         records, _ = parse_journal(io.StringIO(log))
         summary = summarize(records, 24)
         lane = summary["lanes"][0]
+        self.assertEqual(lane["total_duration_p50_s"], 16.0)
+        self.assertEqual(lane["first_output_p50_ms"], 9000.0)
+        self.assertEqual(lane["decode_ms_p50"], 7000.0)
         self.assertEqual(lane["output_rate_reports"], 1)
-        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 70.0 / 4.0)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 10.0)
 
-    def test_output_rate_uses_post_header_window_for_non_sse(self) -> None:
-        """A non-SSE http line includes upstream time and subtracts TTFB."""
+    def test_non_sse_reports_total_time_without_fabricating_output_rate(self) -> None:
+        """A buffered response has queue and delivery timing but no token stream."""
 
         log = (
-            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO lane_admit "
             "lane=workbuddy-oauth model=deepseek-v4.1-flash waited_ms=1000 "
             "request_id=r1\n"
-            "2026-10-31T00:00:12+00:00 host py[1]: INFO http request_id=r1\n"
+            "2026-10-31T00:00:04+00:00 host py[1]: INFO http request_id=r1\n"
             "2026-10-31T00:00:12+00:00 host py[1]: INFO upstream_result "
             "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
             "capacity=false waited_ms=1000 successful=true "
@@ -452,8 +529,10 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         records, _ = parse_journal(io.StringIO(log))
         summary = summarize(records, 24)
         lane = summary["lanes"][0]
-        self.assertEqual(lane["output_rate_reports"], 1)
-        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 1.5)
+        self.assertEqual(lane["total_duration_p50_s"], 12.0)
+        self.assertEqual(lane["first_output_p50_ms"], 4000.0)
+        self.assertEqual(lane["output_rate_reports"], 0)
+        self.assertIsNone(lane["output_tokens_per_s_p50"])
 
     def test_single_frame_stream_has_no_fabricated_output_rate(self) -> None:
         """A one-frame completion has no inner decode interval to measure."""
@@ -511,7 +590,8 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         summary = summarize(records, 24)
         self.assertTrue(
             any(
-                "cache_hit_ratio=0.00 across 1200000 input tokens" in warning
+                "cache_candidate_hit_ratio=0.00 across 10 requests with >= "
+                "20000-token prompts" in warning
                 for warning in summary["warnings"]
             )
         )
@@ -531,7 +611,8 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         summary = summarize(parse_journal(lines)[0], 24)
         self.assertTrue(
             any(
-                "cache_hit_ratio=0.40 across 1200000 input tokens "
+                "cache_candidate_hit_ratio=0.40 across 10 requests with >= "
+                "20000-token prompts "
                 "(review threshold 0.50)" in warning
                 for warning in summary["warnings"]
             )
@@ -586,7 +667,7 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertEqual(lane["tokens_cached"], 900)
         self.assertAlmostEqual(lane["cache_hit_ratio"], 0.9)
         self.assertEqual(lane["header_completed_p50_ms"], 100.0)
-        self.assertEqual(lane["first_output_p50_ms"], 101.0)
+        self.assertEqual(lane["first_output_p50_ms"], 102.0)
 
     def test_json_mode_writes_parseable_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

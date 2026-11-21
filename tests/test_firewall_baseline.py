@@ -10,6 +10,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 
 from script_validation_support import ScriptValidationMixin
 
@@ -69,14 +70,32 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertIn("HYSTERIA2_HOP_PORTS=", self.text)
 
-    def test_live_input_rules_must_match_the_exact_contract(self) -> None:
-        source = (
-            self.text.split("input_chain_state() {", 1)[1]
-            .split("<<'PY_FIREWALL'\n", 1)[1]
-            .split("\nPY_FIREWALL", 1)[0]
-        )
-        document = {
+    def test_live_all_chains_must_match_the_exact_contract(self) -> None:
+        source = self.lib.split("return @'\n", 1)[1].split("\n'@", 1)[0]
+        document: dict[str, Any] = {
             "nftables": [
+                {
+                    "chain": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "name": "prerouting",
+                        "type": "nat",
+                        "hook": "prerouting",
+                        "prio": -100,
+                        "policy": "accept",
+                    }
+                },
+                {
+                    "chain": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "name": "output",
+                        "type": "nat",
+                        "hook": "output",
+                        "prio": -100,
+                        "policy": "accept",
+                    }
+                },
                 {
                     "chain": {
                         "family": "inet",
@@ -86,6 +105,77 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                         "hook": "input",
                         "prio": -10,
                         "policy": "drop",
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "prerouting",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "!=",
+                                    "left": {"meta": {"key": "iifname"}},
+                                    "right": "lo",
+                                }
+                            },
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "dport",
+                                        }
+                                    },
+                                    "right": {"range": [20000, 20999]},
+                                }
+                            },
+                            {"counter": {"packets": 99, "bytes": 488}},
+                            {"redir": {"port": 8444}},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "output",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "fib": {
+                                            "result": "type",
+                                            "flags": ["local"],
+                                            "daddr": {
+                                                "payload": {
+                                                    "protocol": "ip",
+                                                    "field": "daddr",
+                                                }
+                                            },
+                                        }
+                                    },
+                                    "right": "local",
+                                }
+                            },
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "dport",
+                                        }
+                                    },
+                                    "right": {"range": [20000, 20999]},
+                                }
+                            },
+                            {"counter": {"packets": 20, "bytes": 100}},
+                            {"redir": {"port": 8444}},
+                        ],
                     }
                 },
                 {
@@ -304,7 +394,16 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             env = os.environ.copy()
             env["FIREWALL_NFT_JSON"] = json.dumps(candidate)
             result = subprocess.run(
-                [sys.executable, "-c", source, "443 8443", "443 8444"],
+                [
+                    sys.executable,
+                    "-c",
+                    source,
+                    "20000",
+                    "20999",
+                    "8444",
+                    "443 8443",
+                    "443 8444",
+                ],
                 env=env,
                 capture_output=True,
                 text=True,
@@ -314,34 +413,123 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout.strip()
 
-        extra_port = copy.deepcopy(document)
-        extra_port["nftables"].insert(
-            -1,
+        self.assertEqual(classify(document), "exact")
+        deleted_nat = copy.deepcopy(document)
+        deleted_nat["nftables"] = [
+            item
+            for item in deleted_nat["nftables"]
+            if not (
+                item.get("rule", {}).get("chain") == "prerouting"
+                or item.get("chain", {}).get("name") == "prerouting"
+            )
+        ]
+        self.assertEqual(classify(deleted_nat), "live-chain")
+        bad_target = copy.deepcopy(document)
+        indexes = [
+            index
+            for index, item in enumerate(bad_target["nftables"])
+            if item.get("rule", {}).get("chain") == "prerouting"
+        ]
+        self.assertEqual(len(indexes), 1)
+        expressions = bad_target["nftables"][indexes[0]]["rule"]["expr"]
+        redir_index = next(
+            index
+            for index, expression in enumerate(expressions)
+            if "redir" in expression
+        )
+        self.assertGreater(redir_index, 0)
+        expressions[redir_index - 1]["counter"]["bytes"] += 1
+        for index in indexes:
+            item = bad_target["nftables"][index]
+            if item.get("rule", {}).get("chain") == "prerouting":
+                item["rule"]["expr"][-1]["redir"]["port"] = 8443
+        self.assertEqual(classify(bad_target), "live-rules:prerouting")
+        extra_rule = copy.deepcopy(document)
+        extra_rule["nftables"].append(copy.deepcopy(extra_rule["nftables"][3]))
+        self.assertEqual(classify(extra_rule), "live-rules:prerouting")
+        extra_input_hook = copy.deepcopy(document)
+        extra_input_hook["nftables"].append(
+            {
+                "chain": {
+                    "family": "inet",
+                    "table": "vps_launcher_guard",
+                    "name": "shadow_input",
+                    "type": "filter",
+                    "hook": "input",
+                    "prio": -20,
+                    "policy": "accept",
+                }
+            }
+        )
+        self.assertEqual(classify(extra_input_hook), "live-hooks:input")
+        invalid_expr = copy.deepcopy(document)
+        invalid_expr["nftables"].append(
+            {
+                "rule": {
+                    "family": "inet",
+                    "table": "vps_launcher_guard",
+                    "chain": "prerouting",
+                    "expr": "not-an-expression-list",
+                }
+            }
+        )
+        self.assertEqual(classify(invalid_expr), "live-rules-unreadable")
+        missing_expr = copy.deepcopy(document)
+        missing_expr["nftables"].append(
             {
                 "rule": {
                     "family": "inet",
                     "table": "vps_launcher_guard",
                     "chain": "input",
-                    "expr": [
-                        {
-                            "match": {
-                                "op": "==",
-                                "left": {
-                                    "payload": {
-                                        "protocol": "tcp",
-                                        "field": "dport",
-                                    }
-                                },
-                                "right": 22,
-                            }
-                        },
-                        {"accept": None},
-                    ],
                 }
-            },
+            }
         )
-        self.assertEqual(classify(document), "exact")
-        self.assertEqual(classify(extra_port), "live-rules")
+        self.assertEqual(classify(missing_expr), "live-rules-unreadable")
+        for chain in ("prerouting", "output", "input"):
+            with self.subTest(chain=chain):
+                missing_target_expr = copy.deepcopy(document)
+                missing_target_expr["nftables"].append(
+                    {
+                        "rule": {
+                            "family": "inet",
+                            "table": "vps_launcher_guard",
+                            "chain": chain,
+                        }
+                    }
+                )
+                self.assertEqual(classify(missing_target_expr), "live-rules-unreadable")
+                invalid_target_expr = copy.deepcopy(document)
+                invalid_target_expr["nftables"].append(
+                    {
+                        "rule": {
+                            "family": "inet",
+                            "table": "vps_launcher_guard",
+                            "chain": chain,
+                            "expr": [{}],
+                        }
+                    }
+                )
+                self.assertEqual(classify(invalid_target_expr), "live-rules-unreadable")
+        deleted_output = copy.deepcopy(document)
+        deleted_output["nftables"] = [
+            item
+            for item in deleted_output["nftables"]
+            if not (
+                item.get("rule", {}).get("chain") == "output"
+                or item.get("chain", {}).get("name") == "output"
+            )
+        ]
+        self.assertEqual(classify(deleted_output), "live-chain")
+        unreadable = subprocess.run(
+            [sys.executable, "-c", source],
+            env={**os.environ, "FIREWALL_NFT_JSON": "invalid"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(unreadable.returncode, 0)
+        self.assertEqual(unreadable.stdout.strip(), "live-unreadable")
 
     def test_apply_validates_backs_up_and_disarms_signals(self) -> None:
         text = self.text
@@ -384,6 +572,12 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             .replace("__HOP_START__", "20000")
             .replace("__HOP_END__", "20999")
             .replace("__HOP_TARGET__", "8444")
+            .replace(
+                "__LIVE_FIREWALL_PYTHON__",
+                (LIB.read_text(encoding="utf-8"))
+                .split("return @'\n", 1)[1]
+                .split("\n'@", 1)[0],
+            )
         )
         sandbox = """set -u
 SB="$(mktemp -d)"
@@ -396,12 +590,29 @@ exit 0
 EOF
 cat > "$SB/stubs/systemctl" <<'EOF'
 #!/bin/bash
-case "${1:-}" in
-  is-active|is-enabled) exit 1 ;;
-  *) exit 0 ;;
-esac
+if [ "${1:-}" = "cat" ]; then
+ printf '# /etc/systemd/system/vps-launcher-firewall.service\n'
+ cat <<'UNIT'
+[Unit]
+Description=vps-ssh-launcher managed firewall baseline
+After=network-pre.target nftables.service
+Wants=network-pre.target
+Before=network.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft
+ExecStop=-/usr/sbin/nft delete table inet vps_launcher_guard
+[Install]
+WantedBy=multi-user.target
+UNIT
+  exit 0
+fi
+if [ "${1:-}" = "is-active" ] || [ "${1:-}" = "is-enabled" ]; then exit 1; fi
+exit 0
 EOF
-printf '#!/bin/bash\\nprintf "0\\n"\\n' > "$SB/stubs/id"
+printf '#!/bin/bash\\necho 0\\n' > "$SB/stubs/id"
 printf '#!/bin/bash\\nexit 0\\n' > "$SB/stubs/flock"
 chmod +x "$SB"/stubs/*
 export PATH="$SB/stubs:$PATH"
@@ -465,6 +676,12 @@ exit 0
             .replace("__HOP_START__", "20000")
             .replace("__HOP_END__", "20999")
             .replace("__HOP_TARGET__", "8444")
+            .replace(
+                "__LIVE_FIREWALL_PYTHON__",
+                (LIB.read_text(encoding="utf-8"))
+                .split("return @'\n", 1)[1]
+                .split("\n'@", 1)[0],
+            )
         )
         sandbox = """set -u
 SB="$(mktemp -d)"
@@ -486,9 +703,27 @@ EOF
 cat > "$SB/stubs/systemctl" <<'EOF'
 #!/bin/bash
 printf '%s\\n' "$*" >> "$SYSTEMCTL_CALLS"
+if [ "${1:-}" = "cat" ]; then
+  printf '# /etc/systemd/system/vps-launcher-firewall.service\n'
+  cat <<'UNIT'
+[Unit]
+Description=vps-ssh-launcher managed firewall baseline
+After=network-pre.target nftables.service
+Wants=network-pre.target
+Before=network.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/vps-ssh-launcher/firewall.nft
+ExecStop=-/usr/sbin/nft delete table inet vps_launcher_guard
+[Install]
+WantedBy=multi-user.target
+UNIT
+fi
 exit 0
 EOF
-printf '#!/bin/bash\\nprintf "0\\n"\\n' > "$SB/stubs/id"
+printf '#!/bin/bash\\necho 0\\n' > "$SB/stubs/id"
 printf '#!/bin/bash\\nexit 0\\n' > "$SB/stubs/flock"
 printf '#!/bin/bash\\nexec "__PYEXE__" "$@"\\n' > "$SB/stubs/python3"
 chmod +x "$SB"/stubs/*
@@ -526,11 +761,15 @@ exit 0
         )
         self.assertIn("SIM_RC=6", result.stdout)
         self.assertIn(
-            "FIREWALL_BASELINE_VERIFY_FAILED reason=contract_73", result.stderr
+            "FIREWALL_BASELINE_VERIFY_FAILED reason=contract_7", result.stderr
         )
         self.assertIn("ROLLBACK_VERIFIED backup=", result.stdout)
         self.assertIn("RULES_RESTORED=table inet old_guard_before {}", result.stdout)
         self.assertIn("UNIT_RESTORED=# pre-apply unit", result.stdout)
+        systemctl_calls = _stdout_section(result.stdout, "SYSTEMCTL_CALLS")
+        self.assertIn("daemon-reload", systemctl_calls)
+        self.assertIn("enable vps-launcher-firewall.service", systemctl_calls)
+        self.assertIn("start vps-launcher-firewall.service", systemctl_calls)
         self.assertIn("BACKUPS_KEPT=1", result.stdout)
         self.assertIn("result=failed", result.stdout)
         self.assertIn("exit_code=6", result.stdout)
@@ -547,7 +786,6 @@ exit 0
         self.assertEqual(len(apply_calls), 1)
         self.assertEqual(len(restore_calls), 1)
         self.assertIn("delete table inet vps_launcher_guard", nft_calls)
-        systemctl_calls = _stdout_section(result.stdout, "SYSTEMCTL_CALLS")
         self.assertEqual(systemctl_calls.count("daemon-reload"), 2)
         self.assertIn("enable --now vps-launcher-firewall.service", systemctl_calls)
         # The rollback must use the plain enable/start pair, not --now.

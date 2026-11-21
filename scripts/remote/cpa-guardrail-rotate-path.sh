@@ -31,6 +31,67 @@ if ! mkdir -m 700 "$BK"; then
 fi
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 chmod 700 "$BK"
+DIAGNOSTIC_DIR=$(mktemp -d /tmp/cpa-path-rotate.XXXXXXXXXX) || {
+  echo "ROTATION_REFUSED private diagnostic directory"
+  exit 1
+}
+chmod 700 -- "$DIAGNOSTIC_DIR" || {
+  echo "ROTATION_REFUSED diagnostic directory permissions"
+  exit 1
+}
+cleanup_path_rotation() {
+  local status=$?
+  trap '' HUP INT TERM
+  trap - EXIT
+  if [ "${MUTATED:-0}" = 1 ] && [ "${ROLLBACK_DONE:-0}" != 1 ]; then
+    set +e
+    restore_path
+    echo "ROLLBACK transaction_interrupted"
+    set -e
+  fi
+  rm -rf -- "$DIAGNOSTIC_DIR"
+  exit "$status"
+}
+trap cleanup_path_rotation EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+MUTATED=0
+VERIFY_TLS="$DIAGNOSTIC_DIR/verify_tls.py"
+cat >"$VERIFY_TLS" <<'PY'
+__VERIFIED_TLS_HELPER__
+PY
+chmod 600 -- "$VERIFY_TLS" || {
+  echo "ROTATION_REFUSED TLS helper permissions"
+  exit 1
+}
+tls_curl_args() {
+  python3 - "$VERIFY_TLS" "$DIAGNOSTIC_DIR/tls" "$1" "$2" <<'PY'
+import importlib.util
+import os
+import sys
+
+helper_path, verify_root, host, port = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("cpa_rotate_verify_tls", helper_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("cannot load local TLS verification helper")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+os.makedirs(verify_root, mode=0o700, exist_ok=True)
+os.chmod(verify_root, 0o700)
+os.environ["VPS_LOCAL_TLS_VERIFY_DIR"] = verify_root
+curl_args = module.verified_live_tls_curl_args(host, port)
+if (
+    len(curl_args) != 2
+    or curl_args[0] != "--cacert"
+    or not isinstance(curl_args[1], str)
+    or not os.path.isabs(curl_args[1])
+    or any(char in curl_args[1] for char in "\r\n")
+):
+    raise RuntimeError("unexpected local TLS curl arguments")
+print("\n".join(curl_args))
+PY
+}
 
 # || true keeps this pre-mutation refusal reachable: under pipefail a
 # no-match grep fails the assignment before the ROTATION_REFUSED message.
@@ -74,6 +135,7 @@ then
   echo "ROTATION_REFUSED path replacement"
   exit 1
 fi
+MUTATED=1
 
 assert_path_route_contract() {
   active_path=${1:-$NEW_PATH}
@@ -83,20 +145,27 @@ assert_path_route_contract() {
     return 1
   fi
   public_base="https://$server_name:8443"
-  active_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  if ! tls_verify_output="$(tls_curl_args "$server_name" 8443 2>"$DIAGNOSTIC_DIR/tls-8443.err")"; then
+    return 1
+  fi
+  mapfile -t tls_args <<<"$tls_verify_output"
+  if [ "${#tls_args[@]}" -ne 2 ] || [ "${tls_args[0]}" != "--cacert" ]; then
+    return 1
+  fi
+  active_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/$active_path/v1/models" 2>/dev/null || echo 000)
-  revoked_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  revoked_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/$revoked_path/v1/models" 2>/dev/null || echo 000)
-  bare_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  bare_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/v1/models" 2>/dev/null || echo 000)
   wrong_prefix=0000000000000000
   if [ "$wrong_prefix" = "$active_path" ] || [ "$wrong_prefix" = "$revoked_path" ]; then
     wrong_prefix=ffffffffffffffff
   fi
-  wrong_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  wrong_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/$wrong_prefix/v1/models" 2>/dev/null || echo 000)
   [ "$active_status" = "401" ] &&
@@ -124,6 +193,7 @@ assert_path_route_contract_settled() {
 
 restore_path() {
   set +e
+  ROLLBACK_DONE=1
   rollback_failed=0
   cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
   if nginx -t >/dev/null 2>&1; then

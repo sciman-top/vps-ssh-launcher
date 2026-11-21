@@ -1,5 +1,23 @@
 set -Eeuo pipefail
 
+GUARDRAIL_PREFLIGHT_TMP=""
+MUTATED=0
+cleanup_guardrail_preflight() {
+  local status=$?
+  trap '' HUP INT TERM
+  trap - EXIT
+  if [ -n "$GUARDRAIL_PREFLIGHT_TMP" ]; then
+    rm -rf -- "$GUARDRAIL_PREFLIGHT_TMP"
+  fi
+  exit "$status"
+}
+# Install the signal handlers before creating any private preflight material.
+# A dropped transport must not leave a credential-bearing payload copy behind.
+trap cleanup_guardrail_preflight EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # Same lock as auto-update.sh: the daily timer and guardrail transactions
 # refuse to overlap instead of interleaving backups, restarts, and rollbacks.
 exec 9>/run/vps-ssh-launcher-maintenance.lock
@@ -64,6 +82,7 @@ ADMISSION_UNIT=/etc/systemd/system/cpa-admission.service
 LEGACY_ADMISSION_SCRIPT="$DIR/cpa-luna-admission.py"
 LEGACY_ADMISSION_CONFIG="$DIR/cpa-luna-admission.json"
 LEGACY_ADMISSION_UNIT=/etc/systemd/system/cpa-luna-admission.service
+PROJECTION_COMMIT="__CPA_PROJECTION_COMMIT__"
 BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 # 2026-11-20 CN-lane protection: every INTL WorkBuddy credential stays disabled
 # while its plugin is closed dark. count_workbuddy_intl_disabled is the same
@@ -77,6 +96,7 @@ BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 # verb it never had refuses the transaction that would introduce it. The count
 # only reads auth files, so the payload copy is authoritative for the decision.
 INTL_COUNTER_DIR=$(mktemp -d /tmp/cpa-intl-counter.XXXXXXXXXX)
+GUARDRAIL_PREFLIGHT_TMP=$INTL_COUNTER_DIR
 python3 - "$INTL_COUNTER_DIR" <<'PY' || { echo "REFUSE intl_counter_payload_unwritable"; exit 1; }
 import base64
 import sys
@@ -92,6 +112,7 @@ case "$INTL_EXPECTED_DISABLED" in
     ;;
 esac
 rm -rf -- "$INTL_COUNTER_DIR"
+GUARDRAIL_PREFLIGHT_TMP=""
 # A count between zero and the file total is NOT evidence of a partial
 # projection: six of the seven INTL credentials were already disabled by the
 # 2026-11-17 cutover, so the reviewed expectation starts at six and the
@@ -313,6 +334,83 @@ cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 if [ -f "$FAIL2BAN_FILTER" ]; then cp -a "$FAIL2BAN_FILTER" "$BK/cpa-gateway-filter.conf"; fi
 if [ -f "$FAIL2BAN_JAIL" ]; then cp -a "$FAIL2BAN_JAIL" "$BK/cpa-gateway-jail.conf"; fi
 chmod 700 "$BK"
+# Keep the exact sources supplied to this transaction, not only the prior
+# host state. If a validation fails after a write, a later manual rollback can
+# restore the projected files to this snapshot without guessing which local
+# generation was applied. These are non-secret code/config payloads; auth and
+# provider API keys remain only in their dedicated mode-600 backups.
+printf '%s\n' "source_commit=$PROJECTION_COMMIT" >"$BK/projection-sources.txt"
+printf '%s\n' "source_tree=clean_payload_source_set" >>"$BK/projection-sources.txt"
+mkdir -m 700 "$BK/projected-sources"
+printf '%s' '__CPA_UPDATER_B64__' | base64 -d >"$BK/projected-sources/cpa-auto-update.sh"
+printf '%s' '__CPA_HEALTH_B64__' | base64 -d >"$BK/projected-sources/cpa-health.py"
+printf '%s' '__CPA_HEALTH_RUNTIME_B64__' | base64 -d >"$BK/projected-sources/cpa_health_runtime.py"
+printf '%s' '__CPA_POLICY_B64__' | base64 -d >"$BK/projected-sources/cpa_policy.py"
+printf '%s' '__CPA_PROVIDER_ROUTES_B64__' | base64 -d >"$BK/projected-sources/cpa_provider_routes.json"
+printf '%s' '__CPA_ADMISSION_B64__' | base64 -d >"$BK/projected-sources/cpa-admission.py"
+printf '%s' '__CPA_ADMISSION_CONFIG_B64__' | base64 -d >"$BK/projected-sources/cpa-admission.json"
+printf '%s' '__CPA_ADMISSION_UNIT_B64__' | base64 -d >"$BK/projected-sources/cpa-admission.service"
+printf '%s' '__CPA_ADMISSION_LAUNCHER_B64__' | base64 -d >"$BK/projected-sources/cpa-admission-launch.sh"
+printf '%s' '__CPA_ADMISSION_BOOTSTRAP_B64__' | base64 -d >"$BK/projected-sources/cpa_admission_bootstrap.py"
+printf '%s' '__CPA_REQUEST_GUARD_B64__' | base64 -d >"$BK/projected-sources/cpa_request_guard.py"
+printf '%s' '__CPA_ADMISSION_INTEGRITY_CHECK_B64__' | base64 -d >"$BK/projected-sources/cpa-admission-integrity-check.sh"
+printf '%s' '__CPA_ADMISSION_INTEGRITY_DROPIN_B64__' | base64 -d >"$BK/projected-sources/cpa-admission-integrity.conf"
+printf '%s' '__CPA_ADMISSION_INTEGRITY_PIN_B64__' | base64 -d >"$BK/projected-sources/cpa-admission-integrity-pin.txt"
+printf '%s' '__CPA_UPDATER_TIMEOUT_CONF_B64__' | base64 -d >"$BK/projected-sources/cpa-update-timeout.conf"
+printf '%s' '__CPA_FAIL2BAN_FILTER_B64__' | base64 -d >"$BK/projected-sources/cpa-gateway-filter.conf"
+printf '%s' '__CPA_FAIL2BAN_JAIL_B64__' | base64 -d >"$BK/projected-sources/cpa-gateway-jail.conf"
+chmod 600 "$BK/projected-sources/"*
+(
+  cd "$BK/projected-sources"
+  sha256sum -- cpa-gateway-filter.conf cpa-gateway-jail.conf
+) >"$BK/projected-sources/nginx-fail2ban.sha256"
+(
+  cd "$BK/projected-sources"
+  sha256sum -- cpa-auto-update.sh cpa-health.py cpa_health_runtime.py \
+    cpa_policy.py cpa_provider_routes.json cpa-admission.py \
+    cpa-admission.json cpa-admission.service cpa-admission-launch.sh \
+    cpa_admission_bootstrap.py cpa_request_guard.py \
+    cpa-admission-integrity-check.sh cpa-admission-integrity.conf \
+    cpa-admission-integrity-pin.txt cpa-update-timeout.conf \
+    cpa-gateway-filter.conf cpa-gateway-jail.conf
+) >"$BK/projected-sources/SHA256SUMS"
+echo "BACKUP scope=projected_sources files=17 nginx_fail2ban=3"
+# Source snapshots exist to reproduce a projection, not to retain credentials.
+# Fail closed if an unexpected payload contains an API-key-shaped field; the
+# known host auth files and provider-key backups remain outside this directory.
+projection_source_scan_dir="$BK/projected-sources"
+projection_source_scan="$projection_source_scan_dir/SHA256SUMS"
+if [ -L "$projection_source_scan_dir" ] || [ -L "$projection_source_scan" ]; then
+  rm -f -- "$BK/projection-sources.txt"
+  rm -rf -- "$projection_source_scan_dir"
+  echo "REFUSE projected source snapshot is a symlink" >&2
+  exit 4
+fi
+if [ ! -f "$projection_source_scan" ]; then
+  rm -f -- "$BK/projection-sources.txt"
+  rm -rf -- "$projection_source_scan_dir"
+  echo "REFUSE projected source checksum receipt is missing" >&2
+  exit 4
+fi
+scan_status=0
+(
+  cd -P -- "$projection_source_scan_dir" &&
+  [ "$(pwd -P)" = "$(cd -P -- "$BK" && pwd -P)/projected-sources" ] &&
+  PATH= && export PATH &&
+  /usr/bin/grep -Eqi "api[-_]?key" SHA256SUMS
+) || scan_status=$?
+if [ "$scan_status" = 0 ]; then
+  rm -f -- "$BK/projection-sources.txt"
+  rm -rf -- "$projection_source_scan_dir"
+  echo "REFUSE projected source snapshot contains API-key material" >&2
+  exit 4
+fi
+if [ "$scan_status" != 1 ]; then
+  rm -f -- "$BK/projection-sources.txt"
+  rm -rf -- "$projection_source_scan_dir"
+  echo "REFUSE projected source credential scan could not complete" >&2
+  exit 4
+fi
 
 ROLLBACK_DONE=0
 restore_all() {
@@ -518,6 +616,7 @@ restore_all() {
   fi
   assert_public_route_contract || rollback_failed=1
   ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]' || rollback_failed=1
+  rm -rf -- "$projection_source_scan_dir"
   if [ "$ADMISSION_WAS_ACTIVE" -eq 1 ] || [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; then
     ss -ltn | grep -Eq '127\.0\.0\.1:8318[[:space:]]' || rollback_failed=1
   fi
@@ -717,6 +816,70 @@ if ! assert_merged_nginx_route_contract; then
   exit 1
 fi
 
+DIAGNOSTIC_DIR=$(mktemp -d /tmp/cpa-apply.XXXXXXXXXX) || {
+  echo "REFUSE private diagnostic directory"
+  exit 1
+}
+GUARDRAIL_PREFLIGHT_TMP=$DIAGNOSTIC_DIR
+cleanup_preflight_and_mutated() {
+  local status=$?
+  trap '' HUP INT TERM
+  trap - EXIT
+  if [ "${MUTATED:-0}" = 1 ] && [ "$status" -ne 0 ]; then
+    MUTATED=0
+    set +e
+    restore_all
+    echo "ROLLBACK transaction_failed rc=$status"
+    set -e
+  fi
+  if [ -n "$DIAGNOSTIC_DIR" ]; then
+    rm -rf -- "$DIAGNOSTIC_DIR"
+  elif [ -n "$GUARDRAIL_PREFLIGHT_TMP" ]; then
+    rm -rf -- "$GUARDRAIL_PREFLIGHT_TMP"
+  fi
+  GUARDRAIL_PREFLIGHT_TMP=""
+  exit "$status"
+}
+chmod 700 -- "$DIAGNOSTIC_DIR" || {
+  echo "REFUSE diagnostic directory permissions"
+  exit 1
+}
+VERIFY_TLS="$DIAGNOSTIC_DIR/verify_tls.py"
+cat >"$VERIFY_TLS" <<'PY'
+__VERIFIED_TLS_HELPER__
+PY
+chmod 600 -- "$VERIFY_TLS" || {
+  echo "REFUSE TLS helper permissions"
+  exit 1
+}
+tls_curl_args() {
+  python3 - "$VERIFY_TLS" "$DIAGNOSTIC_DIR/tls" "$1" "$2" <<'PY'
+import importlib.util
+import os
+import sys
+
+helper_path, verify_root, host, port = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("cpa_apply_verify_tls", helper_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("cannot load local TLS verification helper")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+os.makedirs(verify_root, mode=0o700, exist_ok=True)
+os.chmod(verify_root, 0o700)
+os.environ["VPS_LOCAL_TLS_VERIFY_DIR"] = verify_root
+curl_args = module.verified_live_tls_curl_args(host, port)
+if (
+    len(curl_args) != 2
+    or curl_args[0] != "--cacert"
+    or not isinstance(curl_args[1], str)
+    or not os.path.isabs(curl_args[1])
+    or any(char in curl_args[1] for char in "\r\n")
+):
+    raise RuntimeError("unexpected local TLS curl arguments")
+print("\n".join(curl_args))
+PY
+}
+
 assert_public_route_contract() {
   server_name=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
   prefix=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
@@ -724,18 +887,25 @@ assert_public_route_contract() {
     return 1
   fi
   public_base="https://$server_name:8443"
-  valid_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  if ! tls_verify_output="$(tls_curl_args "$server_name" 8443 2>"$DIAGNOSTIC_DIR/tls-8443.err")"; then
+    return 1
+  fi
+  mapfile -t tls_args <<<"$tls_verify_output"
+  if [ "${#tls_args[@]}" -ne 2 ] || [ "${tls_args[0]}" != "--cacert" ]; then
+    return 1
+  fi
+  valid_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/$prefix/v1/models" 2>/dev/null || echo 000)
-  authenticated_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  authenticated_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -H "Authorization: Bearer $KEY" \
     -o /dev/null -w '%{http_code}' "$public_base/$prefix/v1/models" 2>/dev/null || echo 000)
-  bare_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  bare_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/v1/models" 2>/dev/null || echo 000)
   wrong_prefix=0000000000000000
   if [ "$wrong_prefix" = "$prefix" ]; then wrong_prefix=ffffffffffffffff; fi
-  wrong_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  wrong_status=$(curl --noproxy '*' -sS "${tls_args[@]}" --connect-timeout 5 --max-time 10 \
     --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "$public_base/$wrong_prefix/v1/models" 2>/dev/null || echo 000)
   [ "$valid_status" = "401" ] &&
@@ -768,15 +938,13 @@ fi
 # Arm before the first mutation. EXIT also covers unguarded set -e failures.
 # HUP must be trapped explicitly: an untrapped SIGHUP still runs the EXIT trap,
 # but with $? == 0, which is why the rollback decision cannot depend on it
-# alone. MUTATED tracks the phase from the first backup of live state onwards.
-MUTATED=0
-trap rollback_on_exit EXIT
+# alone. MUTATED tracks the phase from the first backup of live state onwards;
+# it is initialized before the first EXIT handler can run.
+trap cleanup_preflight_and_mutated EXIT
 # The backup directory is armed earlier, but nothing on the host has changed
 # yet. From here the transaction starts rewriting live state; restore_all only
 # becomes valid after the backup set holds every path it rewrites.
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
 MUTATED=1
 
 if ! python3 - <<'PY'
@@ -1225,13 +1393,10 @@ retry_after = routing_after.setdefault("retry", {})
 if not isinstance(retry_after, dict):
     raise SystemExit("REFUSE routing.retry must be a mapping")
 retry_after["request-retry"] = 0
-# 2026-11-08: 1 -> 3 (re-review per docs/change-evidence/20261106-bwg-cpa-
-# single-credential-retry-cap.md's re-review gate). cap=1 surfaced one
-# credential's billing-shaped 429 as the whole lane response and the workbuddy
-# admission hold turned two upstream blips into lane-wide operator outages;
-# cap=3 keeps the per-request fan-out bounded while a fallback attempt can
-# reach a live credential.
-retry_after["max-retry-credentials"] = 3
+# 2026-11-21 user-approved hardening: one credential per request. A failed
+# account is not replayed across sibling consumer accounts; callers or an
+# explicitly selected API-key route own later attempts.
+retry_after["max-retry-credentials"] = 1
 observability_after = config_after.setdefault("observability", {})
 if not isinstance(observability_after, dict):
     raise SystemExit("REFUSE observability must be a mapping")
@@ -1265,10 +1430,9 @@ routing_after.update({
     # established session across transient failures and rebind only for
     # quota/auth/model-support/permanent-unavailability signals.
     "session-affinity-rebind-on": "quota",
-    # Avoid concentrating a concurrent subagent fan-out on its parent's
-    # credential. Parent sessions still retain their normal affinity/cache
-    # locality; only child work falls back to pool distribution.
-    "session-affinity-subagents": False,
+    # Keep child tasks on the parent's credential so a shared prefix/model
+    # stays cache-local and a fork does not fan one burst across more accounts.
+    "session-affinity-subagents": True,
 })
 # 2026-10-31: 60 -> 30. The single Codex OAuth credential turned one upstream
 # server_is_overloaded into a whole-window zero-egress 503 auth_unavailable; an
@@ -1624,10 +1788,9 @@ antigravity_connection_pool_after["enabled"] = True
 antigravity_connection_pool_after["idle-conn-timeout"] = "30s"
 antigravity_connection_pool_after["max-idle-conns-per-host"] = 2
 antigravity_provider_after["connection-pool"] = antigravity_connection_pool_after
-# Literal replacements supersede the zero-width obfuscation above on the
-# system instruction: the 2026-11-18 probes showed the WAF matches through
-# zero-width-padded words, so this swap table is the effective masking
-# surface for the antigravity lane.
+# Retain exact replacement only for the System Instruction projection. Natural
+# user text is not rewritten below; this mapping's account-risk benefit remains
+# unproven and needs separate review before any further use.
 antigravity_provider_after["sensitive-words-replace"] = {
     "chatgpt": "chatservice",
     "openai": "vendor",
@@ -1996,40 +2159,10 @@ if (
         "REFUSE workbuddy_developer_role_override must carry from_protocol='responses' "
         "and unique non-empty model names"
     )
-# Google's antigravity WAF escalated on 2026-11-17 (user-role text matching
-# plus zero-width-defeated obfuscation; probe archive 2026-11-18). The
-# sanctioned lever is literal replacement on the antigravity gemini models:
-# sensitive-words-replace for the system instruction plus a
-# requests.payload.replace rule for user-role text. Mirror cpa_policy's
-# derivation exactly: the semantic_policy gate compares this block against
-# the policy, so any drift between the two derivations fails the apply.
-antigravity_fingerprint_swap = route_manifest.get("antigravity_fingerprint_swap")
-if (
-    not isinstance(antigravity_fingerprint_swap, dict)
-    or antigravity_fingerprint_swap.get("from_protocol") != "responses"
-    or not isinstance(antigravity_fingerprint_swap.get("models"), list)
-    or not antigravity_fingerprint_swap["models"]
-    or any(
-        not isinstance(name, str) or not name
-        for name in antigravity_fingerprint_swap["models"]
-    )
-    or len(antigravity_fingerprint_swap["models"])
-    != len(set(antigravity_fingerprint_swap["models"]))
-    or not isinstance(antigravity_fingerprint_swap.get("replacements"), list)
-    or not antigravity_fingerprint_swap["replacements"]
-    or any(
-        not isinstance(pair, list)
-        or len(pair) != 2
-        or any(not isinstance(side, str) or not side for side in pair)
-        for pair in antigravity_fingerprint_swap["replacements"]
-    )
-    or len({pair[0] for pair in antigravity_fingerprint_swap["replacements"]})
-    != len(antigravity_fingerprint_swap["replacements"])
-):
-    raise SystemExit(
-        "REFUSE antigravity_fingerprint_swap must carry from_protocol='responses', "
-        "unique non-empty model names, and unique two-string replacement pairs"
-    )
+# Natural user prompts and code identifiers are forwarded verbatim. The former
+# fingerprint swap rewrote those strings without a durable provider contract
+# and could break byte-stable cache prefixes. Older deployments may retain the
+# rule outside this managed payload; that needs a separately reviewed purge.
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
@@ -2117,19 +2250,7 @@ requests_after["payload"] = {
         }
         for name in apply_patch_filter_models
     ],
-    "replace": [
-        {
-            "models": [
-                {"name": name, "from-protocol": "responses"}
-                for name in sorted(set(antigravity_fingerprint_swap["models"]))
-            ],
-            "target": {"role": "user", "all": True},
-            "replacements": [
-                {pair[0]: pair[1]}
-                for pair in antigravity_fingerprint_swap["replacements"]
-            ],
-        }
-    ],
+    "replace": [],
 }
 
 # WorkBuddy 0.9.85 upstreamed priority reclaim as an opt-in scheduler field.
@@ -3068,6 +3189,33 @@ if ! systemctl daemon-reload >"$BK/cpa-admission-daemon-reload.log" 2>&1; then
   echo "ROLLBACK admission_daemon_reload"
   tail -n 5 "$BK/cpa-admission-daemon-reload.log"
   exit 1
+fi
+# A daemon-reload that succeeds proves only that the filesystem projection
+# parsed. TimersCalendar and RandomizedDelayUSec are the values the running
+# timer actually uses; a drop-in that shadows our unit or an unloaded old
+# generation must fail this transaction rather than appear green in its file.
+if [ -f "$UPDATER_TIMER_UNIT" ]; then
+  UPDATER_TIMER_CALENDAR=$(systemctl show "$UPDATER_TIMER_UNIT" -p TimersCalendar --value 2>/dev/null || true)
+  UPDATER_TIMER_DELAY_USEC=$(systemctl show "$UPDATER_TIMER_UNIT" -p RandomizedDelayUSec --value 2>/dev/null || true)
+  case "$UPDATER_TIMER_DELAY_USEC" in
+    300000000|5min)
+      ;;
+    *)
+      restore_all
+      echo "ROLLBACK updater_timer_effective_readback delay=$UPDATER_TIMER_DELAY_USEC"
+      exit 1
+      ;;
+  esac
+  case "$UPDATER_TIMER_CALENDAR" in
+    *"OnCalendar=*-*-* 04:00:00"*)
+      ;;
+    *)
+      restore_all
+      echo "ROLLBACK updater_timer_effective_readback calendar=$UPDATER_TIMER_CALENDAR"
+      exit 1
+      ;;
+  esac
+  echo "UPDATER_TIMER_EFFECTIVE on_calendar=0400 randomized_delay_usec=$UPDATER_TIMER_DELAY_USEC"
 fi
 if ! systemctl enable cpa-admission.service >"$BK/cpa-admission-enable.log" 2>&1; then
   restore_all

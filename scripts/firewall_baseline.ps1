@@ -24,6 +24,7 @@ $rulesSha = (
 $rulesBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($rulesText))
 $tcpLiteral = $contract.TcpPorts -join ' '
 $udpLiteral = $contract.UdpPorts -join ' '
+$liveStatePython = Get-ProxyFirewallLiveStatePython
 $applyLiteral = if ($Apply) { "1" } else { "0" }
 
 $remoteCommand = @'
@@ -93,124 +94,54 @@ WantedBy=multi-user.target
 EOF
 }
 
+normalize_systemd_cat() {
+    sed -e '/^$/d'
+}
 service_active() { systemctl is-active --quiet vps-launcher-firewall.service; }
 service_enabled() { systemctl is-enabled --quiet vps-launcher-firewall.service; }
 table_exists() { nft list table inet "$TABLE_NAME" >/dev/null 2>&1; }
-input_chain_state() {
+unit_current() {
+    local expected actual
+    expected="$(render_unit)"
+    actual="$(systemctl cat vps-launcher-firewall.service 2>/dev/null)" || return 1
+    [ -n "$actual" ] || return 1
+    # systemctl cat includes a "# /path..." comment before each fragment and
+    # omits absent properties. A "# /path (offset)" line identifies a
+    # drop-in; refuse it rather than letting a later ExecStart= reset this
+    # command. Other comments do not change the effective unit.
+    case "$actual" in
+        *" (offset)"*) return 1 ;;
+    esac
+    expected="$(printf '%s\n' "$expected" | normalize_systemd_cat || true)"
+    actual="$(printf '%s\n' "$actual" | normalize_systemd_cat)"
+    [ -n "$expected" ] || return 1
+    [ -n "$actual" ] && [ "$actual" = "$expected" ]
+}
+live_chain_state() {
     local nft_json
-    nft_json="$(nft -j list chain inet "$TABLE_NAME" input 2>/dev/null)" || return 1
-    FIREWALL_NFT_JSON="$nft_json" python3 - "$EXPECTED_TCP" "$EXPECTED_UDP" <<'PY_FIREWALL'
-import json
-import os
-import sys
-
-doc = json.loads(os.environ["FIREWALL_NFT_JSON"])
-objects = doc.get("nftables") or []
-chains = [
-    item["chain"] for item in objects
-    if isinstance(item, dict)
-    and "chain" in item
-    and item["chain"].get("table") == "vps_launcher_guard"
-    and item["chain"].get("name") == "input"
-]
-if len(chains) != 1:
-    print("live-chain")
-    raise SystemExit(0)
-
-chain = chains[0]
-if (
-    chain.get("family") != "inet"
-    or chain.get("type") != "filter"
-    or chain.get("hook") != "input"
-    or chain.get("prio") != -10
-):
-    print("live-chain")
-    raise SystemExit(0)
-if chain.get("policy") != "drop":
-    print("live-policy")
-    raise SystemExit(0)
-
-tcp = [int(value) for value in sys.argv[1].split()]
-udp = [int(value) for value in sys.argv[2].split()]
-expected = [
-    # CVE-2026-98432 mitigation (rendered by nft 1.0.9, verified in a
-    # throwaway netns 2026-11-10): meta l4proto tcp ip hdrlength > 5 drop.
-    [
-        {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "tcp"}},
-        {"match": {"op": ">", "left": {"payload": {"protocol": "ip", "field": "hdrlength"}}, "right": 5}},
-        {"drop": None},
-    ],
-    [
-        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "invalid"}},
-        {"drop": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "lo"}},
-        {"accept": None},
-    ],
-    [
-        {
-            "match": {
-                "op": "==",
-                "left": {"meta": {"key": "l4proto"}},
-                "right": {"set": ["icmp", "ipv6-icmp"]},
-            }
-        },
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 67}},
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 68}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 547}},
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 546}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"set": tcp}}},
-        {"accept": None},
-    ],
-    [
-        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": {"set": udp}}},
-        {"accept": None},
-    ],
-]
-actual = [
-    item["rule"].get("expr")
-    for item in objects
-    if isinstance(item, dict)
-    and "rule" in item
-    and item["rule"].get("table") == "vps_launcher_guard"
-    and item["rule"].get("chain") == "input"
-]
-print("exact" if actual == expected else "live-rules")
+    nft_json="$(nft -j list table inet "$TABLE_NAME" 2>/dev/null)" || return 1
+    FIREWALL_NFT_JSON="$nft_json" python3 - \
+        "$HOP_START" "$HOP_END" "$HOP_TARGET" "$EXPECTED_TCP" "$EXPECTED_UDP" \
+        <<'PY_FIREWALL'
+__LIVE_FIREWALL_PYTHON__
 PY_FIREWALL
 }
 contract_ok() {
-    local tmp input_state
+    local tmp live_state
     [ "$(id -u)" = '0' ] || return 2
     command -v nft >/dev/null 2>&1 || return 3
     command -v python3 >/dev/null 2>&1 || return 9
     systemctl cat vps-launcher-firewall.service >/dev/null 2>&1 || return 4
+    unit_current || return 7
     [ -f "$RULES_FILE" ] || return 5
     tmp="$(mktemp)"
     render_expected > "$tmp"
     cmp -s "$tmp" "$RULES_FILE" || { rm -f -- "$tmp"; return 6; }
     rm -f -- "$tmp"
     table_exists || return 70
-    input_state="$(input_chain_state)" || return 73
-    if [ "$input_state" = 'live-policy' ]; then
-        nft list chain inet "$TABLE_NAME" input >&2 2>/dev/null || true
-        return 71
-    fi
-    if [ "$input_state" != 'exact' ]; then
-        nft list chain inet "$TABLE_NAME" input >&2 2>/dev/null || true
+    live_state="$(live_chain_state)" || return 73
+    if [ "$live_state" != 'exact' ]; then
+        nft list table inet "$TABLE_NAME" >&2 2>/dev/null || true
         return 72
     fi
     service_active && service_enabled || return 8
@@ -312,6 +243,10 @@ trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
 mkdir -p "$RULES_DIR"
+expected_unit="$(render_unit)"
+printf '%s' "$expected_unit" | cmp -s - "$UNIT_FILE" || {
+    echo 'RECONCILE firewall unit drift; existing unit backed up before replacement' >&2
+}
 tmp_rules="$(mktemp "$RULES_DIR/.firewall.nft.XXXXXX")"
 tmp_unit="$(mktemp "$UNIT_FILE.XXXXXX")"
 render_expected > "$tmp_rules"
@@ -323,6 +258,7 @@ fi
 render_unit > "$tmp_unit"
 chmod 644 "$tmp_unit"
 mv -f -- "$tmp_rules" "$RULES_FILE"
+chmod 644 "$tmp_unit"
 mv -f -- "$tmp_unit" "$UNIT_FILE"
 systemctl daemon-reload
 nft -f "$RULES_FILE"
@@ -357,6 +293,7 @@ echo 'FIREWALL_BASELINE_APPLIED'
   Replace("__SSH_PORT__", "$($contract.SshPort)").
   Replace("__HOP_START__", "$($contract.Hysteria2HopStart)").
   Replace("__HOP_END__", "$($contract.Hysteria2HopEnd)").
-  Replace("__HOP_TARGET__", "$($contract.Hysteria2HopTarget)")
+  Replace("__HOP_TARGET__", "$($contract.Hysteria2HopTarget)").
+  Replace("__LIVE_FIREWALL_PYTHON__", $liveStatePython)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "firewall-baseline"

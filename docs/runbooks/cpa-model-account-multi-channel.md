@@ -26,7 +26,7 @@ API key 渠道同时挂在一台 CPA 上，怎样不把账号打死、不把自�
 | 封号 | 账号画像、IP 信誉、第三方反向代理行为、上游政策 | 并发上限、每请求凭据数上限、长期限制立刻停手 | 政策判定、申诉、支付与设备关联 |
 | 限流 | 每（凭据 × 模型）窗口、池化别名扩散 | 冷却作用域、退避时长、探测节奏 | 上游真实容量 |
 | 降智 | 上游响应模型、客户端请求形态 | 只做**观测**（`model_substitution`），不改写 | 模型选择本身 |
-| 吐字慢 | **上下文长度与前缀稳定性** | 排队时延、连接复用、bootstrap 重试 | prefill 物理成本 |
+| 吐字慢 | **上游思考时长、首包与稳定前缀** | 排队时延、连接复用、bootstrap 重试、子任务亲和 | prefill 物理成本 |
 
 ---
 
@@ -68,11 +68,19 @@ API key 渠道同时挂在一台 CPA 上，怎样不把账号打死、不把自�
 | 凭据 | 该账号在这条 lane 上整体不可用，其他 lane 正常 | CPA 凭据池 | 账号级 429 / 配额 |
 | lane | `cooldown_scope=lane`，整条 lane 429 且带 `Retry-After` | admission | 账号级过载、`server_is_overloaded`、`RESOURCE_EXHAUSTED` |
 
-**池化别名例外（2026-11-16）**：一个模型名同时由两个 provider 承载时（本栈
-`deepseek-v4.1-flash` = WorkBuddy 主 + OpenCode 备），**按名字冻结整条 lane 会顺手删掉
-唯一的备份路由**。admission 因此把这类信号收窄到模型作用域并封顶 300 s
-（`pooled_models` + `POOLED_LANE_MODEL_COOLDOWN_SECONDS`）；真正的"每（凭据 × 模型）"
-park 仍由插件注册表持有。
+模型级窗口可单独存在：被点名的模型可能按其上游 `Retry-After` 保留冷却，而其他模型
+仍可服务。读 `/healthz.model_cooldowns`，不能因兄弟模型成功就判定该窗口不存在；
+也不能为了尽快恢复而换号、换 IP 或缩短真实等待。模型冷却默认受
+`retry_after_max_seconds` 约束；Antigravity 尚无模型级容量标记，其 429/503 可停整条
+`strict_backoff` lane 并保留完整正等待。这不是“最多 24 小时”的保证，也不是缩短
+真等待的理由。
+
+**池化别名例外（2026-11-16；当前无池化）**：一个模型名同时由两个 provider 承载时，
+**按名字冻结整条 lane 会顺手删掉另一个合法承载路由**。admission 因此把这类信号收窄到
+模型作用域并封顶 300 s（`pooled_models` + `POOLED_LANE_MODEL_COOLDOWN_SECONDS`）；
+真正的"每（凭据 × 模型）"park 仍由插件注册表持有。2026-11-20 OpenCode 槽退役后，
+`deepseek-v4.1-flash` 只由 WorkBuddy 提供，`pooled_aliases` 为空；不能用上述例外
+自动恢复或轮换其他 OAuth 账号。
 
 **不要做的事**：
 
@@ -85,7 +93,7 @@ park 仍由插件注册表持有。
 - `routing.session-affinity-rebind-on` 三个取值语义：`any`（上游默认）在任何失败含瞬态 5xx
   时都重绑凭据；`quota`（本栈钉定）仅在 429/403 等配额/鉴权/永久不可用信号时重绑、瞬态 5xx
   留在原凭据保缓存；`never` 永不换号。
-- 在 `max-retry-credentials: 3` + `session-affinity-rebind-on: quota` 下，若 Antigravity 收到
+- 当前生产若仍是 `max-retry-credentials: 3` + `session-affinity-rebind-on: quota`，一旦 Antigravity 收到
   Google WAF/内容过滤返回的**裸 `429 RESOURCE_EXHAUSTED`（无 `details`）**，CPA 默认会当成配额
   冷却首号并把同一标红 payload 重放到最多 3 个账号。本栈通过 `oauth.request-scoped-errors.antigravity`
   （正则 `(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$`，`action: "stop"`）在首号立即止损、
@@ -119,6 +127,7 @@ park 仍由插件注册表持有。
 | 排队时延 | `waited_ms` p90 > 50 ms 且 `pending` 常年非零 | 调整 inflight/queue 预算（属契约变更，需与测试同提交） |
 | 首字前失败重放 | 首字节前失败被当成"死轮" | `requests.streaming.bootstrap-retries = 1`（本栈已钉住） |
 | 连接复用与压缩 | 大请求体（1 MB+）上传占满首字预算、或每轮新建跨海 TLS 握手 | Codex `upstream-request-compression`；`api-keys.openai-compatibility` 的 `connection-pool: {}`；Antigravity 每凭据隔离 `oauth.providers.antigravity.connection-pool`（`enabled: true`、`idle-conn-timeout: "30s"`、`max-idle-conns-per-host: 2`，按 `auth.ID` 严格隔离、不跨号共享连接）；`requests.tls-handshake-timeout-seconds: 15` |
+| 子任务缓存与账号扩散 | 多子任务共享父会话前缀、却分落到不同凭据 | 目标为 `session-affinity=true`、TTL `6h`、`session-affinity-subagents=true`；前两项已在 bwg 加载，子任务项仍待独立投影与自然流量 A/B。保持模型不变，新工作流另开父会话 |
 
 **禁区**：任何在网关层改写 prompt 前缀的动作（截断旧消息、重排 system/tools、注入摘要）。
 命中率已在 90–99%，改写把 90% 打到 0，同时把单账号每分钟 token 消耗抬一个数量级——
@@ -135,7 +144,7 @@ park 仍由插件注册表持有。
 |---|---|---|---|
 | 消费级 OAuth（订阅） | ChatGPT Plus、Google AI Pro、WorkBuddy、Claude 订阅 | 账号是**唯一**资源，封号不可逆；并发与频率是主要触发面 | 单 lane 小并发（1–3）、每请求凭据数 ≤ 3、长期限制立刻停手 |
 | Coding Plan | 智谱 GLM Coding Plan | 协议限制（`developer` 角色 400/1214）、并发按套餐 | 保持协议兼容层（payload.override），不越套餐并发 |
-| 官方/中转 API key | OpenCode、input.im、自建 bridge | 无账号风险，只有账单与对方限流 | 作为**备份路由**与低成本重负载通道；不要与订阅模型共用裸名 |
+| 官方/中转 API key | input.im、自有官方 API 项目、自建 bridge | 无消费级订阅封号风险，仍有账单、组织/项目配额和 relay 条款风险 | 作为经授权的**备份路由**与重负载通道；不要与订阅模型共用裸名。第三方 relay 的信任与数据边界仍需单独评审 |
 
 **裸名归属纪律**：一个裸名只能有一个"主"承载者；确有池化时必须在清单
 `pooled_aliases` 登记，由审计器的 `alias-multi-slot-pooled` 保留可见性。未登记的裸名
@@ -148,8 +157,9 @@ park 仍由插件注册表持有。
 1. `scripts/cpa_status.py` —— 每个模型为什么不可用（车道/模型冷却、配额、凭据失效、手动 hold）。
 2. `scripts/cpa_failure_triage.py --hours 4` —— 这次 429 出自哪一层。
 3. `scripts/cpa_admission_risk_audit.py --hours 24` —— 这份配置自洽吗、宣告的名字还活着吗。
-4. `scripts/cpa_cache_reset_probe.py --ssh-profile bwg --hours 48` —— 缓存为什么掉了、
-   冷重启归给谁（`rebind`/`model_switch`/`lane_switch`/`cache_eviction`）。
+4. `scripts/cpa_cache_reset_probe.py --ssh-profile bwg --hours 48` —— 对照冷请求前后的客户端实例、
+   请求模型、准入车道和缓存读取。上游凭据重绑与缓存驱逐需另行取证。首次轮次不能当作
+   “可避免的缓存丢失”；`warm_to_cold` 也只是现场 census，不是 cache reset 的因果证明。
 5. `scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24` —— 分 lane 的压力画像。
 
 四者不可互相替代：**绿灯不代表上游健康，归因全绿不代表配置自洽**。

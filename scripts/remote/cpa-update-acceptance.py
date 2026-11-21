@@ -61,7 +61,10 @@ with (r/'docker-calls').open('a') as h:h.write(' '.join(args)+'\\n')
 if args[:2]==['image','inspect']:
  if '--format' in args and args:
   ref=args[-1]
-  print('sha256:'+('a'*64 if 'v0.0.1' in ref else 'b'*64))
+  if 'RepoDigests' in args[-2]:
+   print('golang@sha256:'+'a'*64)
+  else:
+   print('sha256:'+('a'*64 if 'v0.0.1' in ref else 'b'*64))
  sys.exit(0)
 if args[:2]==['inspect','--format']:
  text=(r/'compose.yml').read_text()
@@ -107,7 +110,15 @@ if not (mode=='start_fail' and new):
     env = dict(
         os.environ, PATH=str(bins) + ":" + os.environ["PATH"], PYTHONPATH=str(stub)
     )
-    old = "services:\n  cli-proxy-api:\n    image: eceasy/cli-proxy-api:v0.0.1\n"
+    old_digest = "sha256:" + "a" * 64
+    old = (
+        "services:\n  cli-proxy-api:\n"
+        f"    image: eceasy/cli-proxy-api:v0.0.1@{old_digest}\n"
+    )
+    new = (
+        "services:\n  cli-proxy-api:\n"
+        f"    image: eceasy/cli-proxy-api:v0.0.2@{old_digest}\n"
+    )
     results = []
     # /run is shared with the host inside this mount namespace, so the
     # updater's exclusive-lock phase must target the fixture-local lock that
@@ -302,5 +313,8 @@ if not (mode=='start_fail' and new):
             PENDING_PATH.unlink()
         elif mode in ("start_fail", "model_exposure"):
             assert result["rollback_logged"]
+            assert (ROOT / "compose.yml").read_text() == old
+        else:
+            assert (ROOT / "compose.yml").read_text() == new
         results.append(result)
     return results

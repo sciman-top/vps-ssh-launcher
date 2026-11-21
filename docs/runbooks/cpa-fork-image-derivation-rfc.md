@@ -29,7 +29,8 @@ bind-mount 已移除，`CLIProxyAPI-patched` 保留为只读留档。实施偏�
  pwsh -NoProfile -File .\scripts\cpa_fork_rebuild.ps1 `
    -UpstreamTag v8.0.75 -UpstreamCommit c19787b25262b5e6e46a9e8da62f4333e7e478bc `
    -PortSha256 <sha of outputs/cpa-gemini-raw-<tag>.tar.gz> `
-   -StageDir /root/cpa-v8075-gemini-raw-build -Apply
+   -StageDir /root/cpa-v8075-gemini-raw-build `
+   -BuildImage golang:1.26.10-bookworm@sha256:<index-digest> -Apply
 
 # 2) 派生镜像（base 按 index digest 钉定，构建后读回标签）
  pwsh -NoProfile -File .\outputs\build-fork-image-20261109.ps1 -UpstreamTag v8.0.75 `
@@ -46,6 +47,11 @@ bind-mount 已移除，`CLIProxyAPI-patched` 保留为只读留档。实施偏�
 并在回执里记下移植后文件哈希。原始补丁继续作为移植的源保留。
 
 **两条硬边界**：
+
+`-Apply` 必须显式传入带 digest 的 `-BuildImage`。只给 tag 的 dry-run 会输出
+本地 `BUILD_IMAGE_ID`；生产重建还会从 `RepoDigests` 回读该引用，tag 被重指向
+或本地镜像不匹配时拒绝编译。该门禁只绑定工具链输入，不证明源码、补丁、镜像
+制成品或宿主业务已验收。
 
 1. `scripts/remote/fork-binary.sha256` 必须与二进制在**同一提交**更新——doctor 用它判断
    "容器里跑的到底是不是台账说的那个"，漏更新会以 `runtime_binary_hash=MISMATCH` 阻断。

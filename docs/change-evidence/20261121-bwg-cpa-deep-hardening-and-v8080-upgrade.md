@@ -69,5 +69,78 @@ Git 回滚不能替代远端恢复；以下备份均保留在 `bwg`：
 - 本次受控在线验收仅覆盖非 OAuth 车道（`zhipu-coding-plan` / `glm-5.3-flash`），未向 OpenAI/Codex、Antigravity 或 WorkBuddy OAuth 车道发送额外生成探针；上述 OAuth 账号的自然流量缓存命中、思考吐字体感以及长期封号/风控安全性无法通过单次网关升级彻底消除或一次性证明，仍需在日常自然流量与 strict doctor 周期中持续观察。
 - **用户侧操作建议**：
   - 同一会话内尽量避免中途切换模型，以免破坏前缀 KV 缓存命中。
-  - 若需进一步降低 7 个 Antigravity 账号共享同一 BWG 出口 IP 的关联风险，可按需评估按账号分流的独立代理出口隔离。
+  - **不把代理/IP 分流当作防封措施**。7 个 Antigravity 账号共享同一 BWG 出口是既有拓扑；
+    按账号做代理出口隔离、换 IP、轮换设备伪装或预防性换号都属于规避风控，不能降低条款与
+    身份归属风险，本仓不实施。若把账号迁回真实设备/合规网络，须先按平台条款、账号归属和
+    迁移回滚单独评审，不能把代理池包装成保护。
   - 若需进一步压降空闲时段来自 `aliyun` 的后台合成请求，可在 `qq-astrbot-stack` 仓复核 `provider_background_probes_enabled` 与稳态/全扫探测间隔。
+
+**2026-11-21 本地复审增量（此前远端已验收阶段的后续修复，尚未重新远端投影）**：CPA doctor、`-Apply` 预检及随机路径轮换的
+TLS 回环探测已统一使用 CA 与 hostname 校验；临时校验材料位于 mode-700 私有目录，
+不再接受 `curl -k`。路径轮换在原子替换配置后即记录 mutation，信号中断会恢复原配置并
+复核旧路径。该批改动只证明本地契约与测试，未重新连接 VPS，也未声称已消除封号、
+限流或降智风险。本地修复结论仍以最新 full gate 为准；真实远端投影、服务加载与
+受控验收是独立层级。
+
+本轮自然流量审计（24h、4620 条）显示长前缀缓存总体健康，主要首字等待来自模型
+思考/上游首包，WorkBuddy 存在突发排队；这些是观测，不是账号“未封”或“未降智”
+证明。本地 Antigravity 策略已停止改写自然 user 提示词，避免破坏代码、复合标识符
+和 byte-stable prefix；System Instruction 的 `sensitive-words-replace` 仍待单独
+复核。该策略尚未投影到 bwg，旧远端规则不因本地清单改动而自动消失。旧状态没有
+验证替换是否每次成功命中、改写后是否仍能缓存，或是否带来长期质量收益，故本次
+停用是前向修正而非宣称原有证据完全无效；清理残留规则仍须独立预演与远端回读。
+
+后续只读复核又定位并修复了以下本地缺陷（仍未重新投影）：doctor/apply/rotate 将
+`--cacert` TLS 参数以 NUL 分隔传给 Bash，command substitution 会丢弃 NUL，导致
+回环严格探测拿到空参数并报告 `000`，现改为独立行的参数数组；防火墙 `-Apply`
+遇到受管 unit 漂移时不再永久拒绝，而是在已有备份后原子替换并复验；updater 的
+`INT`/`TERM` 在创建备份前延迟、在 Compose 改后走已验证回滚，并限制 Docker 启动
+中断后的停止与旧镜像恢复时间，只接受 CPA 目录内的备份路径。更新器把 pull 600s、
+Compose 180s、启停 45s、恢复 30s、Docker kill grace 15s、健康请求 120s 声明为
+六条独立单腿的上界（合计 990s）；systemd drop-in 的 `TimeoutStartSec=40min` 是
+整体 fail-stop，不是这些可选步骤相加后的实测时间。schedule checker 要求显式值
+与 Effective 一致，任一冲突或不可读均拒绝；日常 04:00 更新之后仍有 04:10 系统
+维护，不能把 40min 解释为固定的空闲窗口。防火墙 JSON 对受管表中缺 `expr`、空
+表达式或非法表达式规则统一 fail-closed。`projected-sources` 会写入本次无凭据的
+源快照及 `SHA256SUMS`，并绑定 `PROJECTION_COMMIT`；`auth/` 与 provider API key
+不进入该目录。上述修复的本地门禁结果以本轮最终 Full 收口为准；不能据此宣称本轮
+已经重新上机。
+
+本地策略已将 `session-affinity-subagents` 从 `false` 改为 `true`：设计目标是在多子任务
+共享父会话前缀时继续落到同一凭据，减少同前缀跨账号分叉与缓存局部性丢失。该字段
+只对已识别 parent 的子任务生效，不能据此声称并发突发自动被限流。它尚未投影或做
+OAuth/子任务自然流量 A/B；生产仍是旧值。局部修复还前移了
+`-Apply` 的 EXIT/HUP 处理与私有预检清理，并修正 CDN 订阅路径、主机和地址比较：
+`/a` 正常时 `/b`、`/left/right` 或错误发布主机必须判漂移，避免已发布的 dead secret
+或错误 WS 发布被误报为健康。两者均为本地 `repo_verified`，不等于远端已加载。
+
+本轮另将 `max-retry-credentials` 目标从 `3` 降为 `1`，即一次请求只使用一份
+OAuth 凭据，`request-retry` 继续保持 `0`；以后是否重试由调用方的下一次明确请求
+或选定的 API-key route 承担。代价是单个账号的瞬时 429 会更直接地显现。这个取舍
+减少同一失败提示词与并发突发扩散到多个消费级账号，但没有证明能“防封”；它既
+不是对平台条款的授权，也不能消除限流或模型质量风险。
+
+**最终本地收口（仍未重新投影）**：以当前工作树运行 `scripts/run_gates.ps1 -RunParallel`，
+结果为 `1813 passed, 30 skipped, 884 subtests passed in 107.30s`，`ruff check`、`ruff format
+--check`（178 files）、`mypy`（165 source files）、`bandit` 与 `CATALOG_CHECK=PASS` 均通过；
+`scripts/check_docs.py` 为 `DOCS_CHECK=PASS (42 documents)`。Windows 上新加的 updater
+中断恢复行为夹具在 native WSL 中通过，验证停止启动、还原备份 compose 并从原镜像重新
+启动后返回 `31`；原失败来自 Git Bash 不能复现 Linux `/proc` 与进程组边界，已移除仅供
+夹具使用的生产分支。这些结果只证明本地代码与门禁，不证明 bwg 已加载。
+
+同日最终只读 strict doctor（`scripts/cpa_bwg_guardrails.ps1 -Profile bwg`）结果为
+`DOCTOR_CONTRACT_FAILED`：运行镜像为 `v8.0.80-gemini-raw`，投影/运行时二进制约束仍为
+17/17 `MATCH`，但生产仍显示旧 `session-affinity-subagents=false`、updater 超时仍为
+`20min`、TLS 探测仍报 `000`。这些是本地契约与部署差异信号，不是账号封禁证据。doctor
+读数为 ChatGPT OAuth `1`、Antigravity `7`（刷新失败 `0`）、WorkBuddy CN `9`、INTL `7`
+（`closed_dark`）、Claude `RETIRED`；当前账号/凭据数以此现场只读结果为准。
+
+近 7 天出现 `106` 次 `model_substitution`，均归属同一脱敏凭据哈希；这是质量复核信号，
+不能单独证明上游降智或账号受限。24h 自然流量中 WorkBuddy CN 的
+`waited_ms` p50/p90 约 `3.6s/8.3s`，上游响应头约 `2.7s/4.5s`，首文约
+`2.4s/4.0s`；ChatGPT `gpt-6.2-sol` 长前缀缓存命中约 `92%`，首文 p50/p90 约
+`8.29s/26.36s`；`gpt-6-luna` 缓存约 `76%`，首文约 `3.68s/52.62s`；
+Antigravity `neon-xhigh` 缓存约 `92%`、首文约 `8.96s/24.18s`，
+`hydrogen-xhigh` 缓存约 `65%`、首文约 `6.86s/14.89s`；Zhipu `glm-5.3-flash`
+缓存约 `92%`、首文约 `7.25s/26.61s`。因此缓存总体健康，主要待优化项是
+WorkBuddy 突发排队与消费级账号的瞬时并发，而不是继续改 prompt 追缓存。

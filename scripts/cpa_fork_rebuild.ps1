@@ -26,12 +26,21 @@ param(
   [string]$PortSha256,
   [Parameter(Mandatory = $true)]
   [string]$StageDir,
+  # A tag alone may be repointed. A production apply must supply the exact
+  # digest (tag@sha256:...); the dry-run may use this reviewed tag only after
+  # reporting the local image ID so the operator can pin it.
   [string]$BuildImage = 'golang:1.26.10-bookworm',
   [switch]$Apply
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot 'scripts/lib/project_environment.ps1')
+if ($Apply -and $BuildImage -notmatch '^golang:[0-9]+\.[0-9]+\.[0-9]+-bookworm@sha256:[0-9a-f]{64}$') {
+  throw 'REFUSE -Apply requires -BuildImage golang:<version>-bookworm@sha256:<digest>.'
+}
+if ($BuildImage -notmatch '^golang:[0-9]+\.[0-9]+\.[0-9]+-bookworm(?:@sha256:[0-9a-f]{64})?$') {
+  throw 'REFUSE -BuildImage must be a versioned golang bookworm tag, optionally pinned by sha256 digest.'
+}
 $python = Resolve-ProjectPython -ProjectRoot $repoRoot
 $config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot
 # The port is the repository's copy, never a host file: drift between them
@@ -129,7 +138,39 @@ if [ "$MODE" = apply ]; then
   log "PATCHED_TRANSLATOR_SHA=$PATCHED_TRANSLATOR_SHA"
 fi
 
-docker image inspect "$BUILD_IMAGE" >/dev/null 2>&1 || { log "BUILD_IMAGE_MISSING $BUILD_IMAGE"; exit 20; }
+BUILD_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$BUILD_IMAGE" 2>/dev/null) || {
+  log "BUILD_IMAGE_MISSING $BUILD_IMAGE"; exit 20;
+}
+log "BUILD_IMAGE_ID=$BUILD_IMAGE_ID image=$BUILD_IMAGE"
+if [[ "$MODE" = apply && "$BUILD_IMAGE" == *'@sha256:'* ]]; then
+  EXPECTED_PLATFORM_DIGEST=${BUILD_IMAGE##*@}
+  BUILD_PLATFORM_DIGESTS=$(docker image inspect \
+    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "$BUILD_IMAGE_ID" 2>/dev/null | sort -u) || {
+    log "BUILD_IMAGE_DIGEST_UNREADABLE image=$BUILD_IMAGE";
+    exit 20;
+  }
+  if [[ ! "$EXPECTED_PLATFORM_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    log "BUILD_IMAGE_DIGEST_INVALID image=$BUILD_IMAGE";
+    exit 20;
+  fi
+  # Docker may publish both an exact platform digest and a manifest digest.
+  # Match one complete RepoDigest line literally; do not let a mirror or a
+  # different platform digest be treated as the requested builder.
+  BUILD_DIGEST_MATCHED=0
+  while IFS= read -r BUILD_IMAGE_REPO_DIGEST; do
+    if [ "$BUILD_IMAGE_REPO_DIGEST" = "golang@$EXPECTED_PLATFORM_DIGEST" ]; then
+      BUILD_DIGEST_MATCHED=1
+      break
+    fi
+  done <<<"$BUILD_PLATFORM_DIGESTS"
+  if [ "$BUILD_DIGEST_MATCHED" != 1 ]; then
+    BUILD_DIGEST_OBSERVED=$(printf '%s\n' "$BUILD_PLATFORM_DIGESTS" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
+    log "BUILD_IMAGE_DIGEST_MISMATCH expected=golang@$EXPECTED_PLATFORM_DIGEST observed=${BUILD_DIGEST_OBSERVED:-none}";
+    exit 20;
+  fi
+  log "BUILD_IMAGE_DIGEST_VERIFIED $EXPECTED_PLATFORM_DIGEST"
+fi
 
 if [ "$MODE" = dry-run ]; then
   log "DRY_RUN_OK tag=$VERSION_TAG commit=$UPSTREAM_COMMIT port=$PORT_SHA tarball=$TARBALL_SHA"

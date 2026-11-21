@@ -36,6 +36,9 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+$tlsContractPath = Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1"
+. $tlsContractPath
+$verifiedTlsHelper = Get-VerifiedLocalTlsCaPython
 
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot
 $sourcePath = Join-Path $repoRoot "scripts\cpa_status.py"
@@ -205,12 +208,14 @@ else:
   $insert = "printf %s '$snippetB64' | base64 -d | python3 -"
   $result = Invoke-Remote -Command $insert -Capture
   $outcome = ($result.Lines | Select-Object -Last 1)
+  if ($result.ExitCode -ne 0) {
+    # A malformed fragment exits before this script writes its nginx backup.
+    # Preserve the named failure rather than treating it as an idempotent skip.
+    throw "nginx fragment insertion failed: outcome=$outcome $($result.Lines -join '; ')"
+  }
   if ($outcome -ne "INSERTED" -and $outcome -ne "REPLACED") {
     Write-Output "CPA_STATUS_NGINX=$outcome"
     return
-  }
-  if ($result.ExitCode -ne 0) {
-    throw "nginx fragment insertion failed: $($result.Lines -join '; ')"
   }
   $gate = Invoke-Remote -Capture -Command (
     "if nginx -t 2>/dev/null; then systemctl reload nginx && echo RELOADED; " +
@@ -222,22 +227,40 @@ else:
   if ($verdict -ne "RELOADED") {
     throw "nginx gate failed and fragment was restored: $($gate.Lines -join '; ')"
   }
+  $tlsHelperB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($verifiedTlsHelper))
   $probe = Invoke-Remote -Capture -Command (
-    "curl -k -s -o /dev/null -w '%{http_code}' -u cpa-audit:wrong " +
-    "-H 'Host: fq.sciman.top' https://127.0.0.1:28317/cpa-status/ && echo && " +
-    "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$servicePort/"
+    "umask 077; probe_work=`$(mktemp -d); trap 'rm -rf -- `"`$probe_work`"' EXIT INT TERM; " +
+    "printf %s '$tlsHelperB64' | base64 -d >`"`$probe_work/verify_tls.py`" || exit 1; " +
+    "verify_args=`$(cd `"`$probe_work`" && python3 -c " +
+    "'import sys; from verify_tls import verified_system_tls_curl_args as v; print(\`"\\n\`".join(v(sys.argv[1])))'" +
+    " 'fq.sciman.top') || exit 1; mapfile -t curl_args <<<`"`$verify_args`"; " +
+    "curl -sS -o /dev/null -w '%{http_code}' " +
+    "`"`${curl_args[@]}`" --resolve 'fq.sciman.top:28317:127.0.0.1' " +
+    "-u cpa-audit:wrong 'https://fq.sciman.top:28317/cpa-status/' && echo && " +
+    "curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:$servicePort/'"
   )
   Write-Output "CPA_STATUS_NGINX_GATE=$($probe.Lines -join ' ')"
 }
 
 function Invoke-StatusRollback {
-  Invoke-Remote -Command (
-    "systemctl disable --now cpa-status.service 2>/dev/null; " +
+  # The service must be stopped before removing source or the unit. Otherwise
+  # restart=on-failure can race the directory removal and leave an ambiguous
+  # partial rollback for the operator.
+  $stop = Invoke-Remote -Capture -Command (
+    "if [ -f '$unitPath' ]; then systemctl disable --now cpa-status.service; fi"
+  )
+  if ($stop.ExitCode -ne 0) {
+    throw "status page service could not be stopped; rollback did not continue: $($stop.Lines -join '; ')"
+  }
+  $result = Invoke-Remote -Capture -Command (
     "rm -f '$unitPath'; systemctl daemon-reload; " +
     "LATEST=`$(ls -1t /etc/nginx/conf.d/cpamc-management.conf.bak.* 2>/dev/null | head -1); " +
     "if [ -n `"`$LATEST`" ]; then cp -a `"`$LATEST`" $nginxConf; nginx -t && systemctl reload nginx; fi; " +
     "rm -rf '$remoteDir'; echo ROLLED_BACK"
-  ) | Out-Null
+  )
+  if ($result.ExitCode -ne 0) {
+    throw "status page rollback did not complete: $($result.Lines -join '; ')"
+  }
   Write-Output "CPA_STATUS_ROLLBACK=DONE"
 }
 

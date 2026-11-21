@@ -24,28 +24,6 @@
       "deepseek-v4.1-flash-sg"
     ]
   },
-  "antigravity_fingerprint_swap": {
-    "from_protocol": "responses",
-    "models": [
-      "gemini-3.8-flash-high",
-      "gemini-4-hydrogen-xhigh",
-      "gemini-4-argon-high",
-      "gemini-4-neon-xhigh",
-      "claude-opus-5-5-high",
-      "claude-sonnet-5-5-high"
-    ],
-    "replacements": [
-      ["ChatGPT", "Chatservice"],
-      ["chatgpt", "chatservice"],
-      ["OpenAI", "Vendor"],
-      ["openai", "vendor"],
-      ["Codex", "Agentx"],
-      ["CODEX", "AGENTX"],
-      ["codex", "agentx"],
-      ["GPT", "Agentx"],
-      ["gpt", "agentx"]
-    ]
-  },
   "providers": [
     {
       "slot": 1,

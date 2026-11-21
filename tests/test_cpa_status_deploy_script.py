@@ -62,10 +62,38 @@ class CpaStatusDeployScriptTests(unittest.TestCase):
         self.assertLess(gate_index, reload_index)
         self.assertIn("RESTORED", self.text)
 
+    def test_nginx_probe_uses_hostname_verified_tls(self) -> None:
+        self.assertIn("proxy_tls_contract.ps1", self.text)
+        self.assertIn("verified_system_tls_curl_args", self.text)
+        self.assertIn("--resolve 'fq.sciman.top:28317:127.0.0.1'", self.text)
+        self.assertNotIn("curl -k", self.text)
+        self.assertIn("--noproxy '*'", self.text)
+
+    def test_fragment_failure_cannot_look_like_successful_skip(self) -> None:
+        insertion = self.text[
+            self.text.index(
+                "$result = Invoke-Remote -Command $insert -Capture"
+            ) : self.text.index(
+                "$gate = Invoke-Remote -Capture",
+                self.text.index("$result = Invoke-Remote -Command $insert -Capture"),
+            )
+        ]
+        self.assertLess(
+            insertion.index("if ($result.ExitCode -ne 0)"),
+            insertion.index('$outcome -ne "INSERTED"'),
+        )
+
     def test_rollback_removes_service_dir_and_restores_nginx(self) -> None:
         self.assertIn("systemctl disable --now cpa-status.service", self.text)
         self.assertIn("rm -rf '$remoteDir'", self.text)
         self.assertIn("CPA_STATUS_ROLLBACK=DONE", self.text)
+        stop = self.text.index(
+            "if [ -f '$unitPath' ]; then systemctl disable --now cpa-status.service; fi"
+        )
+        remove = self.text.index("rm -f '$unitPath'", stop)
+        self.assertLess(stop, remove)
+        self.assertIn("status page service could not be stopped", self.text)
+        self.assertIn("status page rollback did not complete", self.text)
 
     def test_service_unit_hardening_and_loopback(self) -> None:
         self.assertIn("--remote-serve", self.text)

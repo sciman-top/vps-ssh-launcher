@@ -9,6 +9,7 @@ non-zero only when something drifted.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import subprocess
 import sys
@@ -56,10 +57,16 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("/etc/vps-ssh-launcher/firewall.nft", text)
         self.assertIn("__FIREWALL_RULES_SHA__", text)
         self.assertIn("systemctl is-active --quiet", text)
-        self.assertIn("firewall_input_state", text)
+        self.assertIn("firewall_live_state", text)
+        self.assertIn("__LIVE_FIREWALL_PYTHON__", text)
+        self.assertIn("__VERIFIED_TLS_HELPER__", text)
+        self.assertIn("verified_tls_curl_args", text)
+        self.assertNotIn("STEALTH_CERT_FILE", text)
+        self.assertNotIn("curl -sk", text)
+        self.assertIn("__FIREWALL_HOP_START__", text)
         self.assertIn("__FIREWALL_TCP__", text)
         self.assertIn("__FIREWALL_UDP__", text)
-        self.assertIn("live-rules", text)
+        self.assertIn("__LIVE_FIREWALL_PYTHON__", text)
 
     def test_merged_subscription_detects_a_stale_published_uuid(self) -> None:
         text = self.text
@@ -157,6 +164,11 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("merged_sub_fetch=drift", text)
         self.assertIn("obfs-credential", text)
         self.assertIn('--resolve "$EXPECTED_REALITY_HOST', text)
+        section = text.split("echo '==merged-sub-fetch=='", 1)[1].split(
+            "standby_code=", 1
+        )[0]
+        self.assertIn('--cacert "$CA_BUNDLE"', section)
+        self.assertNotIn("curl -sk", section)
         # v2rayN reads Hysteria2 port hopping from mport and rejects a comma in
         # the authority; the drift gate must enforce the importable shape.
         self.assertIn("obfs-hop", text)
@@ -280,7 +292,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
         self.assertIn("echo '==cdn-fallback=='", text)
-        self.assertIn("print('not-proxied')", text)
         self.assertIn("cdn=not-applicable", text)
         # A green origin with a dead edge (SSL-mode flip) must still drift.
         self.assertIn(
@@ -291,12 +302,146 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("cdn_cert_ok=0", text)
         self.assertIn('-checkhost "$CDN_HOST"', text)
         self.assertIn("https://www.cloudflare.com/ips-v4", text)
+        self.assertIn("socket.AF_UNSPEC", text)
+        self.assertIn("print('direct-source')", text)
         self.assertIn("ipaddress.ip_address(address) in network", text)
         self.assertIn("print('unverified')", text)
+        self.assertIn("https://www.cloudflare.com/ips-v6", text)
+        self.assertIn("def upstream(addresses, networks):", text)
+        self.assertIn("published-contract-mismatch", text)
+        self.assertIn("listen-mismatch", text)
+        self.assertIn("security-mismatch", text)
+        self.assertIn(
+            '"$XRAY_CONF" "$cdn_frag" "$CDN_HOST" <<\'PY_CDN_CONTRACT\'',
+            text,
+        )
         self.assertNotIn(
             'getent ahostsv4 "$EXPECTED_REALITY_HOST" 2>/dev/null | awk',
             text,
         )
+
+    def test_cdn_published_contract_mismatch_is_drift(self) -> None:
+        source = self.text.split("$cdnContractPython = @'\n", 1)[1]
+        source = source.split("\n'@", 1)[0]
+        if not source.lstrip().startswith("import"):
+            self.skipTest("CDN contract classifier not found")
+        self.assertIn("subscription_root = Path(conf_dir) / 'subscribe'", source)
+        self.assertNotIn("file=sys.stderr", source)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            xray = root / "xray"
+            subscriptions = xray / "subscribe" / "default"
+            subscriptions.mkdir(parents=True)
+            fragment = xray / "15_vps_ssh_launcher_cdn_ws.json"
+            uuid = "11111111-1111-1111-1111-111111111111"
+            (xray / "00_base.json").write_text(
+                json.dumps(
+                    {
+                        "inbounds": [
+                            {
+                                "protocol": "vless",
+                                "settings": {"clients": [{"id": uuid}]},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fragment.write_text(
+                json.dumps(
+                    {
+                        "inbounds": [
+                            {
+                                "listen": "127.0.0.1",
+                                "streamSettings": {
+                                    "security": "none",
+                                    "wsSettings": {"path": "/a"},
+                                },
+                                "settings": {"clients": [{"id": uuid}]},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for path, expected in (
+                ("/a", "ok"),
+                ("/b", "path-mismatch"),
+                ("/left/right", "path-mismatch"),
+            ):
+                node = (
+                    f"vless://{uuid}@cdn.example.com:2087?type=ws&security=tls"
+                    f"&host=cdn.example.com&path={path}#cdn"
+                )
+                encoded_text = base64.b64encode(f"{node}\n".encode()).decode()
+                # vasma may wrap a base64 share link; the classifier must
+                # decode the whole subscription, not only its first line.
+                encoded = "\n".join(
+                    encoded_text[i : i + 76] for i in range(0, len(encoded_text), 76)
+                )
+                (subscriptions / "active.txt").write_text(encoded, encoding="ascii")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-",
+                        str(xray),
+                        str(fragment),
+                        "cdn.example.com",
+                    ],
+                    input=source,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.stdout.strip(), expected, result.stdout + result.stderr
+                )
+            (subscriptions / "active.txt").unlink()
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(xray),
+                    str(fragment),
+                ],
+                input=source,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.stdout.strip(), "ok", result.stderr)
+            node = (
+                f"vless://{uuid}@cdn-a.example.com:2087?type=ws&security=tls"
+                "&host=wrong.example.com&path=%2Fa#cdn"
+            )
+            encoded_text = base64.b64encode(f"{node}\n".encode()).decode()
+            (subscriptions / "active.txt").write_text(
+                "\n".join(
+                    encoded_text[i : i + 76] for i in range(0, len(encoded_text), 76)
+                ),
+                encoding="ascii",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(xray),
+                    str(fragment),
+                    "cdn.example.com",
+                ],
+                input=source,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(
+                result.stdout.strip(),
+                "published-contract-mismatch",
+                result.stdout + result.stderr,
+            )
 
     def test_served_hy2_obfs_node_accepts_the_slash_delimiter(self) -> None:
         # The lanes emit 'hysteria2://<auth>@host:8444/?...&mport=20000-20999';

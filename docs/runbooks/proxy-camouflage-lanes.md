@@ -8,6 +8,10 @@ nginx 静态伪装页（含 stock `50x.html` 与模板制作残留清理）、RE
 另以独立 nftables 表建立默认拒绝防火墙和 UDP 端口跳跃；不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认证密码或证书。
 
+回环健康检查必须通过系统/显式 CA 及部署证书的 hostname 校验，并在私有目录
+生成临时校验材料；`curl -k` 的证书失败、证书/密钥不匹配和未知 SNI 均不能算健康。
+这些改动只减少假阳性与自伤封禁，不能保证 IP、端口或账户长期可用。
+
 ## 当前入口
 
 - `scripts/nginx_camouflage_site.ps1`：把 vasma 已生成的 `/usr/share/nginx/html/en`

@@ -1,10 +1,6 @@
 """Tests for the cache-reset attribution probe.
 
-The probe exists because a review misread two low cache-hit ratios as a
-gateway defect. These tests pin the distinctions that mistake depended on:
-probe traffic is not a prefix, a provider-echoed variant is not a model
-switch, and a cold turn is only a gateway-relevant restart when nothing the
-gateway chose changed.
+Tests cover cache usage accounting and what correlated journal rows support.
 """
 
 from __future__ import annotations
@@ -42,16 +38,25 @@ def _line(
     conversation: str = "abc123",
     instance: str = "-",
     usage_in: int = 1000,
-    usage_cached: int = 900,
+    usage_cached: int | str = 900,
     status: str = "200",
+    successful: str = "true",
 ) -> str:
     return (
         "{0} INFO upstream_result lane={1} model={2} status={3} capacity=false "
-        "retry_after=absent waited_ms=1 successful=true upstream_header_ms=10 "
+        "retry_after=absent waited_ms=1 successful={8} upstream_header_ms=10 "
         "upstream_first_byte_ms=11 first_text_ms=12 usage_in={4} usage_cached={5} "
         "usage_out=8 request_id=deadbeef route=responses "
         "client_request_hash={6} instance_hash={7}".format(
-            stamp, lane, model, status, usage_in, usage_cached, conversation, instance
+            stamp,
+            lane,
+            model,
+            status,
+            usage_in,
+            usage_cached,
+            conversation,
+            instance,
+            successful,
         )
     )
 
@@ -102,7 +107,7 @@ def test_provider_variant_is_not_a_model_switch() -> None:
         ),
     ]
     findings = probe.attribute(probe.parse_journal(lines))
-    assert [f.mechanism for f in findings] == ["cache_eviction"]
+    assert [f.mechanism for f in findings] == ["warm_to_cold"]
 
 
 def test_model_switch_is_named_when_the_client_changed_model() -> None:
@@ -164,8 +169,8 @@ def test_lane_switch_is_a_model_switch_in_practice() -> None:
     assert [f.mechanism for f in findings] == ["lane_switch"]
 
 
-def test_instance_rebind_outranks_model_switch() -> None:
-    """A re-picked credential is the strongest mechanism; report it first."""
+def test_client_instance_switch_outranks_model_switch() -> None:
+    """The observed instance change comes from the client header."""
 
     lines = [
         _line(
@@ -174,21 +179,20 @@ def test_instance_rebind_outranks_model_switch() -> None:
         _line(instance="bbbb", model="gpt-6-luna", usage_in=101_000, usage_cached=0),
     ]
     findings = probe.attribute(probe.parse_journal(lines))
-    assert [f.mechanism for f in findings] == ["rebind"]
+    assert [f.mechanism for f in findings] == ["client_instance_switch"]
 
 
-def test_first_uncached_turn_is_unattributed_not_eviction() -> None:
-    """Without a preceding turn there is no evidence of a lost prefix."""
+def test_consecutive_cold_turns_are_unattributed() -> None:
 
     lines = [
         _line(usage_in=213_752, usage_cached=0),
         _line(usage_in=232_012, usage_cached=0),
     ]
     findings = probe.attribute(probe.parse_journal(lines))
-    assert [f.mechanism for f in findings] == ["unattributed", "cache_eviction"]
+    assert [f.mechanism for f in findings] == ["unattributed", "unattributed"]
 
 
-def test_summary_counts_lost_tokens_and_ratio() -> None:
+def test_summary_counts_cold_input_tokens_and_ratio() -> None:
     lines = [
         _line(usage_in=100_000, usage_cached=100_000),
         _line(usage_in=240_000, usage_cached=0),
@@ -196,9 +200,26 @@ def test_summary_counts_lost_tokens_and_ratio() -> None:
     turns = probe.parse_journal(lines)
     summary = probe.summarise(turns, probe.attribute(turns))
     assert summary["restarts"] == 1
+    assert summary["cold_input_tokens"] == 240_000
     assert summary["restart_lost_tokens"] == 240_000
     assert summary["cache_hit_ratio"] == pytest.approx(100_000 / 340_000, abs=1e-4)
-    assert summary["mechanisms"] == {"cache_eviction": 1}
+    assert summary["mechanisms"] == {"warm_to_cold": 1}
+
+
+def test_failed_and_unreported_cache_usage_do_not_inflate_misses() -> None:
+    lines = [
+        _line(usage_in=240_000, usage_cached=0, status="400"),
+        _line(usage_in=240_000, usage_cached=0, successful="false"),
+        _line(usage_in=240_000, usage_cached="na"),
+        _line(usage_in=100_000, usage_cached=90_000),
+    ]
+    turns = probe.parse_journal(lines)
+    summary = probe.summarise(turns, probe.attribute(turns))
+    assert summary["turns"] == 2
+    assert summary["turns_with_usage"] == 2
+    assert summary["turns_with_cache_usage"] == 1
+    assert summary["restarts"] == 0
+    assert summary["cache_hit_ratio"] == 0.9
 
 
 def test_additive_provider_usage_stays_bounded_and_eligible() -> None:

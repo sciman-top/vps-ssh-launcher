@@ -294,9 +294,9 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 不自动修复配置或阻断已运行的数据面。
 
 `credits` 不按积分余额最大值排序，而是粘住当前合格账号，再选其他合格候选。
-宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=3`（2026-11-08 再评审，
-原为 1）将单个客户端请求的上游凭据触达限制为至多 3 个。它不是客户端重试，
-也不保证上游配额隔离；`account_max_concurrent=1`、
+宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=1` 将单个客户端
+请求的上游凭据触达限制为一份。它不是客户端重试，也不保证上游配额隔离；
+`account_max_concurrent=1`、
 入口 lane 与会话粘性仍限制并发和请求扩散。6004 的模型级 reset 由插件内存表
 负责；CN、INTL、Global 均按独立账号/模型（0.9.85 的 realm 共享补丁已退役），
 普通失败冷却与 admission 的入口冷却是不同状态；配置热重载保留插件
@@ -330,12 +330,12 @@ system-first / 会话头格式问题应先修正协议。selected 的拒绝行�
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
 无所选账号时仍会初始化候选，不承诺跨重启持久绑定。
 
-当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。2026-11-06 将 `routing.retry.max-retry-credentials` 收紧为 `1`（6004 扇出止损）；2026-11-08 按该收紧台账的再评审门槛放宽为 `3`：单请求至多触达 3 个凭据，在役凭据上的后备尝试可吸收单凭据拒绝、避免其成为整条车道响应（详见 change-evidence 2026-11-08 台账）；后续独立请求仍可由 `credits` 选择其他合格凭据。现有账号与 API key 未删除。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 当作账号保护。
+当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。`routing.retry.max-retry-credentials` 的目标与当前生产值均为 `1`：单请求只用一份凭据，失败直接暴露而不再把同一请求重放到兄弟账号。后续独立请求仍可由 `credits` 选择其他合格凭据。现有账号与 API key 未删除。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 当作账号保护。
 
 | 信号 | 处置 |
 | --- | --- |
 | `403 request illegal`、`11140`、官方客户端也提示账号受限 | 暂停当前调用任务并关闭调用端重试；保持凭据，不换账号、IP、设备或 token，不刷新 OAuth、不清冷却、不再用探针确认。保存时间、客户端/插件版本、模型、request ID 与脱敏错误，按官方支持渠道反馈。没有官方恢复信号前不要自动续打。 |
-| `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止调用端自动重试并保留 `Retry-After` / reset 信息；同一请求只允许 CPA 当前配置的最多 3 个凭据做有界回退，不调用 cooldown-clear。CN/INTL admission lane 分离不约束 WorkBuddy scheduler 的 auth 候选，不能把 lane 名当作“不得跨 realm 续打”的凭据保证。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。2026-10-21 晚实测（CPA v8.0.35）：6004 生产 wrapper 形状=HTTP 500+`server_error`/`internal_server_error` 信封（message 尾段内嵌转义的上游 JSON，raw 正文自带 reset 时间戳），admission 归冷却阶梯自恢复、无 hold，与官方频率限制自恢复语义一致，勿当缺陷或回归。 |
+| `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止调用端自动重试并保留 `Retry-After` / reset 信息；单请求只用一份凭据，不调用 cooldown-clear，不把同一请求换号续打。CN/INTL admission lane 分离不约束 WorkBuddy scheduler 的 auth 候选，不能把 lane 名当作“不得跨 realm 续打”的凭据保证。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。2026-10-21 晚实测（CPA v8.0.35）：6004 生产 wrapper 形状=HTTP 500+`server_error`/`internal_server_error` 信封（message 尾段内嵌转义的上游 JSON，raw 正文自带 reset 时间戳），admission 归冷却阶梯自恢复、无 hold，与官方频率限制自恢复语义一致，勿当缺陷或回归。 |
 | `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。INTL lane 曾有的零成本例外（`hy4free`/`hy4flash-free`）已随 2026-11-17 该模型退役而摘除，lane 现关闭暗置不产生流量。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
 | `14003` "模型繁忙"（官方归模型侧；2026-10-20 增补，同日策略更新） | 先分流：双账号同现且面板额度未耗尽支持模型/通道侧故障的判断，但不能单独排除共享出口或账号风控；单账号独现也不足以确认账号受限，须结合完整错误及官方账号状态。停止调用端连点重试（实测 Codex 客户端 5 连发会加深突发画像）。自 2026-10-20 起 admission 对模型侧 14003 **不再置 operator-review hold**：无 `Retry-After` 的 429 只落冷却阶梯首档（当前首档 60 秒，阶梯 60/120/240/480/900 秒；可信上游期限可延长窗口），窗后允许后续请求但不保证上游恢复；账号型信号（`rate_limit_error`/6003/6004/11140/认证类）仍照旧持锁。人工干预仅在整个阶梯走完仍失败时按 [cpa-gateway 人工恢复](cpa-gateway.md#oauth-持久化风险状态的人工恢复) 评估。实测窗口 2026-10-20 为 ~31 分钟自愈（[台账 §6](../change-evidence/20261020-bwg-cpa-v8035-canary.md)）；社区"按出口 IP 聚合"属非官方观测，不将换网络试探作为常规恢复动作。**2026-10-21 缺陷收口**：部署后首波 14003 经 CPA 包装信封（wrapper `type=rate_limit_error`）误置 durable hold——wrapper 标签击败 header 层阶梯改动（生产形状未被原钉住测试覆盖）；已修复并部署（[台账](../change-evidence/20261021-bwg-workbuddy-14003-wrapper-fix.md)，pin `19d64361`）：分类按 wrapper message 内嵌上游 code，wrapper-14003 归阶梯自恢复，裸 rate_limit_error/内嵌 6003/6004 仍持锁。 |
 | `11115 INPUT TOO LONG` | 按官方错误码说明缩短输入或压缩上下文，在本地检查请求大小；该码本身不是账号受限证据，不换号重发超长请求。 |
@@ -358,7 +358,7 @@ admission 按瞬时信号走冷却阶梯、不再落持久人工锁；只有 JSO
 `deepseek-v4.1-flash-oc` 单宿别名访问。CN 裸名与 INTL fork alias 分属两个
 admission lane；INTL 的 `deepseek-v4.1-flash-sg` 仍是可单独观察和冷却的第二模型桶。
 此模型级状态属于 admission，不改插件的 auth 选择，也不解除 provider 限制。
-单请求最多 3 个凭据（`request-retry=0`）的有界回退仍按现有配置执行。
+单请求只用一份凭据（`request-retry=0`、`max-retry-credentials=1`），不再跨号回退。
 
 与[事故响应 runbook](cpa-ban-throttle-incident-response.md) 的词汇对应（2026-10-19 增补）：本页 `6003/6004`（官方频率限制）、`11128/11140`（需结合完整错误判断的 request illegal 信号）、`11115`（官方 INPUT TOO LONG）对应其增补词汇表 workbuddy 各行；社区观测另录 `14003`（按出口 IP 聚合的限流定量画像）、`11158`（intl 免费号模型级墙）、`11134/11102`（模型级故障/下线）、`14018`（credits）；另有 HTTP 200 空内容完成形态（额度到量的降智式表现，上游 [#6526](https://github.com/router-for-me/CLIProxyAPI/issues/6526)，2026-10-21 增补）——先查面板 credits/额度再归因，勿当健康绿灯。处置入口仍是本页 §4 表 + 事故 runbook 分级；账号级 vs 通道级的判别法（官方桌面同账号 A/B 单发）以事故 runbook 行为准。
 
@@ -404,10 +404,10 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取
   文件名序最前 live 的软顺序（见 runbook 顶部），已有会话亲和可以暂时
   保持原 provider。
-- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=3` 让单个请求至多触达
-  三个合格凭据（2026-11-08 再评审，原为 1），因此深度双宿请求不会遍历整池，
-  也不会无限扇出到 OpenCode。`credits` 仍负责后续请求的粘性选择，不能因凭据数
-  增加便提高并发。多个 API key 可能共享组织/项目额度。
+- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=1` 让单个请求只触达
+  一份合格凭据，因此深度双宿请求不会遍历整池，也不会扇出到 OpenCode。
+  `credits` 仍负责后续请求的粘性选择，不能因凭据数增加便提高并发。多个
+  API key 可能共享组织/项目额度。
 - 限流同时核对上游错误、HTTP/SSE 信封、可信 reset 与调用方重试；并发上限
   不是 RPM/TPM 预算。未知供应商额度不设置猜测的安全阈值。
 - 明文 HTTP 渠道在用户要求保留时如实提示传输风险；2026-10-31 只读

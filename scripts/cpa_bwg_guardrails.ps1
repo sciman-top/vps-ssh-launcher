@@ -25,10 +25,19 @@ $ErrorActionPreference = "Stop"
 if ($Profile -ne "bwg") {
   throw "This guardrail workflow is intentionally limited to the bwg profile."
 }
-if ($AuditProjection -and @($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 0) {
+$contentActions = @(
+  $Apply, $Observe, $RotatePath, $DeactivateOAuthLuna,
+  $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity,
+  $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth
+)
+if ($AuditProjection -and @($contentActions | Where-Object { $_ }).Count -gt 0) {
   throw "REFUSE -AuditProjection must be used alone."
 }
-if (@($Apply, $Observe, $AuditProjection, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 1) {
+$requestedActionCount = @(
+  @($contentActions | Where-Object { $_ }) +
+  @(if ($AuditProjection) { $true } else { $false })
+) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
+if ($requestedActionCount -gt 1) {
   throw "Choose exactly one action: strict doctor, -Observe, -AuditProjection, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, -RestoreAntigravity, -QuarantineClaudeOAuth, or -RestoreClaudeOAuth."
 }
 # 2026-10-17 an agent session quarantined the claude lane on its own ToS
@@ -119,6 +128,22 @@ function Read-ProjLeafText {
 
 $connectText = Read-ProjLeafText -Path (Join-Path $repoRoot "connect.ps1") -Description "connect.ps1"
 $updaterText = Read-ProjLeafText -Path $updaterPath -Description "CPA updater source"
+$updaterBudgetMatch = [regex]::Match(
+  $updaterText,
+  "(?m)^AUTO_UPDATE_BUDGETS='(?<value>[^'\r\n]+)'\r?$"
+)
+if (-not $updaterBudgetMatch.Success -or
+    $updaterBudgetMatch.Groups["value"].Value -notmatch
+      '^(?:[a-z_]+=[0-9]+)(?: [a-z_]+=[0-9]+)*$') {
+  throw "The CPA updater budget declaration is missing or malformed."
+}
+$updaterBudgetDeclaration = $updaterBudgetMatch.Value -replace "`r", ""
+$updaterBudgetFirst = $updaterText.IndexOf($updaterBudgetDeclaration)
+$updaterMutationFirst = $updaterText.IndexOf("MUTATED=0")
+if ($updaterBudgetFirst -lt 0 -or $updaterMutationFirst -lt 0 -or
+    $updaterBudgetFirst -ge $updaterMutationFirst) {
+  throw "The CPA updater budget declaration must precede its first remote mutation."
+}
 $healthText = Read-ProjLeafText -Path $healthPath -Description "CPA health source"
 $healthRuntimeText = Read-ProjLeafText -Path $healthRuntimePath -Description "CPA health runtime source"
 $policyText = Read-ProjLeafText -Path $policyPath -Description "CPA policy source"
@@ -137,6 +162,13 @@ $fail2banFilterText = Read-ProjLeafText -Path $fail2banFilterPath -Description "
 $fail2banJailText = Read-ProjLeafText -Path $fail2banJailPath -Description "CPA fail2ban jail source"
 $workBuddyVersionCheckText = Read-ProjLeafText -Path $workBuddyVersionCheckPath -Description "CPA WorkBuddy version check source"
 $updaterScheduleCheckText = Read-ProjLeafText -Path $updaterScheduleCheckPath -Description "CPA updater schedule check source"
+$updaterScheduleCheckText = $updaterScheduleCheckText.Replace(
+  "__CPA_UPDATER_BUDGETS__",
+  $updaterBudgetDeclaration
+)
+if ($updaterScheduleCheckText.Contains("__CPA_UPDATER_BUDGETS__")) {
+  throw "CPA updater budget placeholder was not substituted."
+}
 
 function Get-LfNormalizedSha256 {
   param([Parameter(Mandatory = $true)][string]$Text)
@@ -166,6 +198,19 @@ foreach ($entry in $guardrailTemplates.GetEnumerator()) {
   $path = Join-Path $repoRoot $entry.Value
   $text = Read-ProjLeafText -Path $path -Description "CPA guardrail template $($entry.Key)"
   $guardrailTemplateTexts[$entry.Key] = $text
+}
+$tlsContractPath = Join-Path $repoRoot "scripts\lib\proxy_tls_contract.ps1"
+$tlsContractText = Read-ProjLeafText -Path $tlsContractPath -Description "Shared proxy TLS contract"
+. $tlsContractPath
+$verifiedTlsHelper = Get-VerifiedLocalTlsCaPython
+foreach ($name in $guardrailTemplates.Keys) {
+  $guardrailTemplateTexts[$name] = $guardrailTemplateTexts[$name].Replace(
+    "__VERIFIED_TLS_HELPER__",
+    $verifiedTlsHelper
+  )
+  if ($guardrailTemplateTexts[$name].Contains("__VERIFIED_TLS_HELPER__")) {
+    throw "CPA guardrail TLS helper placeholder was not substituted."
+  }
 }
 
 function Get-CpaGuardrailTemplate {
@@ -204,6 +249,12 @@ $healthRuntimeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(
 $healthRuntimeSha256 = Get-LfNormalizedSha256 -Text $healthRuntimeText
 $policyBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyText))
 $policySha256 = Get-LfNormalizedSha256 -Text $policyText
+$projectionCommit = @(git -C $repoRoot rev-parse --verify HEAD 2>&1)
+if ($LASTEXITCODE -ne 0 -or $projectionCommit.Count -ne 1 -or
+    $projectionCommit[0] -notmatch '^[0-9a-f]{40}(?:[0-9a-f]{24})?$') {
+  throw "Unable to resolve the CPA projection source commit."
+}
+$projectionCommit = $projectionCommit[0]
 $providerRoutes = $providerRoutesText | ConvertFrom-Json
 $providerRoutesBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes($providerRoutesText)
@@ -877,6 +928,13 @@ if ([string]::IsNullOrWhiteSpace($ProviderEnvPath)) {
 if (-not (Test-Path -LiteralPath $ProviderEnvPath -PathType Leaf)) {
   throw "Provider env source was not found at $ProviderEnvPath"
 }
+# The apply payload carries every selected API_KEY_n to the host. Refuse a
+# broadly inherited or symlinked source before reading it; this also applies
+# to an explicit -ProviderEnvPath, whose filename alone proves nothing.
+Assert-LauncherPrivateSecretFile `
+  -Path $ProviderEnvPath `
+  -Python $script:Python `
+  -ProjectRoot $repoRoot
 $providerSlots = @($providerRoutes.providers | ForEach-Object { [int]$_.slot })
 $providerSlotSet = @{}
 foreach ($slot in $providerSlots) {
@@ -941,6 +999,9 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_POLICY_SHA256__",
   $policySha256
+).Replace(
+  "__CPA_PROJECTION_COMMIT__",
+  $projectionCommit
 ).Replace(
   "__CPA_ADMISSION_B64__",
   $admissionBase64

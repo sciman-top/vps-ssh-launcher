@@ -23,14 +23,14 @@ from script_validation_support import (
 
 
 class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
-    def test_retry_cap_keeps_one_consumer_credential_per_request(self) -> None:
-        """A request must not fan out across multiple consumer OAuth accounts."""
+    def test_retry_cap_is_bounded_but_not_zero(self) -> None:
+        """A failed request may fail over, but may not walk the whole pool."""
         import runpy
 
         repo_root = Path(__file__).resolve().parents[1]
         policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
         retry_path = ("routing", "retry", "max-retry-credentials")
-        self.assertEqual(policy["EXPECTED_CONFIG_PATHS"][retry_path], 3)
+        self.assertEqual(policy["EXPECTED_CONFIG_PATHS"][retry_path], 1)
         self.assertEqual(
             policy["EXPECTED_CONFIG_PATHS"][("routing", "retry", "request-retry")],
             0,
@@ -38,7 +38,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         apply_source = (
             repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn('retry_after["max-retry-credentials"] = 3', apply_source)
+        self.assertIn('retry_after["max-retry-credentials"] = 1', apply_source)
 
     def test_session_affinity_ttl_preserves_workday_cache_locality(self) -> None:
         import runpy
@@ -440,10 +440,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("switch-project" in issue for issue in issues))
         config["quota-exceeded"]["switch-project"] = False
-        config["routing"]["session-affinity-subagents"] = True
+        config["routing"]["session-affinity-subagents"] = False
         issues = policy["validate_config"](config)
         self.assertTrue(any("session-affinity-subagents" in issue for issue in issues))
-        config["routing"]["session-affinity-subagents"] = False
+        config["routing"]["session-affinity-subagents"] = True
         config["routing"]["session-affinity-rebind-on"] = "any"
         issues = policy["validate_config"](config)
         self.assertTrue(any("session-affinity-rebind-on" in issue for issue in issues))
@@ -1948,16 +1948,15 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         compat_entry["connection-pool"] = {}
         self.assertEqual(policy["validate_config"](config), [])
 
-    def test_antigravity_fingerprint_swap_covers_claude_models_too(self) -> None:
-        """Antigravity payload.replace must cover Claude models on the same endpoint."""
+    def test_antigravity_natural_prompts_are_not_rewritten(self) -> None:
+        """Natural user text must remain verbatim to preserve cache prefixes."""
         import runpy
 
         repo_root = Path(__file__).resolve().parents[1]
         policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
         manifest = policy["ROUTE_MANIFEST"]
-        swap_models = set(manifest["antigravity_fingerprint_swap"]["models"])
-        self.assertIn("claude-opus-5-5-high", swap_models)
-        self.assertIn("claude-sonnet-5-5-high", swap_models)
+        self.assertNotIn("antigravity_fingerprint_swap", manifest)
+        self.assertEqual(policy["EXPECTED_PAYLOAD_TOOL_RULES"]["replace"], [])
 
 
 class CpaPolicyProbeTests(unittest.TestCase):

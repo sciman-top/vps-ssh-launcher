@@ -93,7 +93,10 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
         # through to `location /` and serve this path from the shared root.
         self.assertIn("/usr/share/nginx/html", text)
         self.assertIn('MERGED_DIR="$ROOT/s/merged"', text)
-        self.assertIn('chmod 644 "$TARGET"', text)
+        tightened = text.index('chmod 644 "$tmp_target"')
+        replaced = text.index('mv -f -- "$tmp_target" "$TARGET"', tightened)
+        self.assertLess(tightened, replaced)
+        self.assertNotIn('chmod 644 "$TARGET"', text)
         self.assertIn("MERGED_SUB_VERIFY_FAILED", text)
 
     def test_reapply_is_idempotent_on_content(self) -> None:
@@ -126,6 +129,30 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("merged_sub_http=", text)
         self.assertIn("Standby =", text)
         self.assertIn("$($lane.Standby)/s/merged/$Token", text)
+        self.assertNotIn("curl -sk", text)
+        self.assertIn('--cacert "$CA_BUNDLE"', text)
+
+    def test_secrets_are_private_before_atomic_replacement(self) -> None:
+        text = self.text
+        self.assertIn("function New-MergedSubscriptionTempFile", text)
+        self.assertIn("function Set-MergedSubscriptionSecret", text)
+        self.assertIn(
+            "Set-MergedSubscriptionSecret -Path $tokenStore -Content $Token", text
+        )
+        self.assertIn(
+            "Set-MergedSubscriptionSecret -Path $urlFile -Content $urls", text
+        )
+        self.assertNotIn("Set-Content -LiteralPath $tokenStore", text)
+        self.assertNotIn("Set-Content -LiteralPath $urlFile", text)
+        protect = text.index("Protect-MergedSubscriptionFile -Path $temporary")
+        replace = text.index("[IO.File]::Replace", protect)
+        self.assertLess(protect, replace)
+        local_write = text.index(
+            'token_tmp="$(mktemp', text.index("$remoteCommand = @'")
+        )
+        tightened = text.index('chmod 600 "$token_tmp"', local_write)
+        replaced = text.index('mv -f -- "$token_tmp" "$TOKEN_FILE"', tightened)
+        self.assertLess(tightened, replaced)
 
     def test_vision_flow_is_derived_from_the_live_inbound(self) -> None:
         text = self.text

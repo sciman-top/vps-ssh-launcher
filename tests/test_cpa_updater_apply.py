@@ -28,8 +28,14 @@ from script_validation_support import (
 WSL_BASH_TIMEOUT_SECONDS = 60
 
 
-def _extract_bash_function(source: str, name: str) -> str:
-    start = source.index(f"{name}() {{")
+def _read_bash_source(path: Path) -> str:
+    """Read the newline projection explicitly on Windows and Linux."""
+
+    return path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+def _extract_bash_function(source: str, name: str, *, start: int = 0) -> str:
+    start = source.index(f"{name}() {{", start)
     depth = 0
     for index in range(start, len(source)):
         if source[index] == "{":
@@ -178,6 +184,38 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         for config, expected in (
             ({}, 0),
             ({"plugins": {"enabled": False}}, 0),
+            ({"plugins": {"configs": {}}}, 0),
+            (
+                {
+                    "plugins": {
+                        "configs": {
+                            "custom": {"enabled": False},
+                            "other": {"enabled": False},
+                        }
+                    }
+                },
+                0,
+            ),
+            (
+                {
+                    "plugins": {
+                        "configs": {
+                            "custom": {"enabled": True},
+                            "other": {"enabled": False},
+                        }
+                    }
+                },
+                77,
+            ),
+            (
+                {
+                    "plugins": {
+                        "enabled": True,
+                        "configs": {"custom": {"enabled": False}},
+                    }
+                },
+                77,
+            ),
             (
                 {
                     "plugins": {
@@ -188,19 +226,37 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 77,
             ),
             ({"plugins": []}, 77),
+            ({"plugins": {"configs": []}}, 77),
+            ({"plugins": {"configs": {"custom": "enabled"}}}, 77),
+            ({"plugins": {"configs": {"custom": {"enabled": "false"}}}}, 77),
             (None, 77),
         ):
             with self.subTest(config=config), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "config.yaml"
-                path.write_text(json.dumps(config))
+                path.write_text(json.dumps(config), encoding="utf-8")
                 with (
                     mock.patch.object(sys, "argv", ["guard", str(path)]),
                     contextlib.redirect_stdout(io.StringIO()),
                 ):
+                    output = io.StringIO()
                     if expected:
-                        with self.assertRaises(SystemExit) as error:
+                        with (
+                            contextlib.redirect_stdout(output),
+                            self.assertRaises(SystemExit) as error,
+                        ):
                             exec(compile(program, "plugin-guard", "exec"), {})
                         self.assertEqual(error.exception.code, expected)
+                        if config == {
+                            "plugins": {
+                                "configs": {
+                                    "custom": {"enabled": True},
+                                    "other": {"enabled": False},
+                                }
+                            }
+                        }:
+                            self.assertIn(
+                                "enabled_plugin_configs=custom", output.getvalue()
+                            )
                     else:
                         exec(compile(program, "plugin-guard", "exec"), {})
         self.assertLess(
@@ -263,9 +319,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_updater_compose_replacement_is_exact_and_metadata_preserving(
         self,
     ) -> None:
-        source = (
+        source = _read_bash_source(
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
-        ).read_text(encoding="utf-8")
+        )
         replacement = source.split(
             'MUTATED=1\npython3 - "$DIR/compose.yml" "$IMAGE" <<\'PY\'\n', 1
         )[1].split("\nPY\n", 1)[0]
@@ -339,6 +395,434 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("180s docker compose up -d", result.stdout)
         self.assertIn("30s docker inspect name", result.stdout)
 
+    def test_update_signals_defer_to_the_verified_rollback_boundary(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("trap 'defer_updater_signal 130' INT", source)
+        self.assertIn("trap 'defer_updater_signal 143' TERM", source)
+        self.assertNotIn("trap 'exit 130' INT", source)
+        self.assertNotIn("trap 'exit 143' TERM", source)
+        self.assertIn("compose_start_pid=$!", source)
+        self.assertIn("MUTATION_STARTED=1", source)
+        self.assertIn('kill -TERM -- "-$start_pid"', source)
+        self.assertIn("stop_compose_start", source)
+        self.assertIn(
+            'cp -a "$BK/compose.yml" "$DIR/compose.yml" || restore_failed=1',
+            source,
+        )
+        self.assertIn("ROLLBACK_VERIFIED interrupted=start_container", source)
+        self.assertIn("DOCKER_START_PENDING=1", source)
+        self.assertIn('rollback "$start_status"', source)
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        status = _extract_bash_function(source, "on_exit")
+        defer = next(
+            function
+            for function in re.findall(
+                r"(?ms)^defer_updater_signal\(\) \{\n.*?^\}\n",
+                source,
+            )
+            if 'UPDATER_SIGNAL="$code"' in function and "rollback" not in function
+        )
+        harness = "\n".join(
+            [
+                "set -e",
+                "set -u",
+                "UPDATER_SIGNAL=0",
+                "DOCKER_START_PENDING=0",
+                status,
+                defer,
+                "trap 'defer_updater_signal 143' TERM",
+                "trap 'defer_updater_signal 130' INT",
+                "defer_updater_signal 143",
+                'printf "TRAP_REGISTERED=%s\\n" "$(trap -p TERM)"',
+                'printf "TERM_DEFERRED code=%s\\n" "$UPDATER_SIGNAL"',
+                "defer_updater_signal 130",
+                'printf "TERM_PRESERVED code=%s\\n" "$UPDATER_SIGNAL"',
+                'write_status() { printf \'STATUS result=%s code=%s reason=%s\\n\' "$1" "$2" "${3:-}"; }',
+                "DOCKER_START_PENDING=0",
+                "( exit 0 )",
+                'printf "AFTER_CLEAN_SUCCESS\\n"',
+                "DOCKER_START_PENDING=1",
+                "trap 'status_code=$?; on_exit \"$status_code\"' EXIT",
+                "( exit 0 )",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            harness_path = Path(directory) / "start-shape.sh"
+            harness_path.write_text(harness + "\n", encoding="utf-8", newline="\n")
+            completed = subprocess.run(
+                self._bash_command(bash, self._bash_path(bash, harness_path)),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+        output = completed.stdout.decode()
+        outcome = output + completed.stderr.decode()
+        self.assertEqual(completed.returncode, 32, outcome)
+        self.assertIn(
+            "TRAP_REGISTERED=trap -- 'defer_updater_signal 143' SIGTERM", output
+        )
+        self.assertIn("TERM_DEFERRED code=143", output)
+        self.assertIn("TERM_PRESERVED code=143", output)
+        self.assertIn("AFTER_CLEAN_SUCCESS", output)
+        self.assertIn("STATUS result=unverified code=32", output)
+
+    def test_interrupted_docker_start_restores_backup_with_bounded_recovery(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        starts = [
+            match.start()
+            for match in re.finditer(
+                r"DOCKER_START_PENDING=1\n.*?^\(\n  cd",
+                source,
+                re.MULTILINE | re.DOTALL,
+            )
+        ]
+        self.assertEqual(len(starts), 1, "start recovery must have one definition")
+        start = starts[0]
+        end = source.index("\nRESULT=0\n", start)
+        block = source[start:end] + "\n:"
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        if os.name == "nt":
+            # Git Bash cannot reproduce the deployed Linux /proc and process
+            # group boundary. Run the behavioural fixture in native WSL; the
+            # source assertions remain active when WSL is unavailable.
+            if shutil.which("wsl.exe") is None or not self._has_native_linux_wsl():
+                self.skipTest("POSIX start-recovery fixture requires native WSL")
+            bash = "wsl"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "backup"
+            cpa = root / "cpa"
+            backup.mkdir()
+            cpa.mkdir()
+            (backup / "compose.yml").write_text("old-image\n", encoding="utf-8")
+            (cpa / "compose.yml").write_text("new-image\n", encoding="utf-8")
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"BK='{self._bash_path(bash, backup)}'",
+                    f"DIR='{self._bash_path(bash, cpa)}'",
+                    f"LOG='{self._bash_path(bash, root / 'updater.log')}'",
+                    "CUR='v8.0.79'",
+                    "TARGET='v8.0.80'",
+                    "UPDATER_SIGNAL=0",
+                    "start_status=0",
+                    "ROLLBACK_IMAGE_ID='sha256:old'",
+                    "MUTATION_STARTED=1",
+                    "is_within_tree() { return 0; }",
+                    "seq() { printf '1\\n'; }",
+                    "sleep() { :; }",
+                    "ROLLBACK_IMAGE_REF='cliproxyapi-backup'",
+                    "ROLLBACK_STAGE=prepare",
+                    "stop_compose_start() { return 0; }",
+                    "readlink() { printf '%s\\n' \"$DIR\"; }",
+                    'cp() { [[ "$1" == -a && "$2" == "$BK/compose.yml" ]] && { printf \'old-image\\n\' >"$DIR/compose.yml"; return 0; }; command cp "$@"; }',
+                    'log() { printf "%s\\n" "$*" | tee -a "$LOG"; }',
+                    "kill() {",
+                    '  if [[ "$1" == -0 ]]; then return 1; fi',
+                    '  if [[ "$*" == "-TERM -- -"* ]]; then return 1; fi',
+                    '  command kill "$@"',
+                    "}",
+                    "docker() {",
+                    '  case "$*" in',
+                    '    "compose config --quiet") printf "new-image\\n" >"$DIR/compose.yml"; return 0 ;;',
+                    '    "compose up -d --pull never") printf "restored\\n" >>"$LOG"; return 0 ;;',
+                    "    \"inspect --format {{.Image}} cli-proxy-api\") printf 'sha256:old\\n' ;;",
+                    "  esac",
+                    "}",
+                    '( command sleep 0.2; command kill -TERM "$$"; sleep 1 ) &',
+                    "trap 'UPDATER_SIGNAL=143' TERM",
+                    'sleep() { [[ "$UPDATER_SIGNAL" == 0 ]] || return 1; command sleep "$@"; }',
+                    'rollback() { printf "INTERRUPTED_ROLLBACK code=%s\\n" "$1"; exit "$1"; }',
+                    block,
+                ]
+            )
+            completed = subprocess.run(
+                (
+                    ["wsl.exe", "-d", "Ubuntu-24.04", "--", "bash"]
+                    if bash == "wsl"
+                    else self._bash_command(bash)
+                ),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout.decode() + completed.stderr.decode()
+            self.assertEqual(completed.returncode, 31, output)
+            self.assertIn("ROLLBACK_VERIFIED interrupted=start_container", output)
+            self.assertEqual((cpa / "compose.yml").read_text(), "old-image\n")
+            self.assertIn("restored", (root / "updater.log").read_text())
+            self.assertNotIn("UNEXPECTED_SUCCESS", output)
+
+    def test_start_recovery_requires_the_original_running_image(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        start = source.index(
+            "DOCKER_START_PENDING=1\n", source.index("MUTATION_STARTED=1\n")
+        )
+        end = source.index("\nRESULT=0\n", start)
+        model = source[start:end]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "backup"
+            cpa = root / "cpa"
+            backup.mkdir()
+            cpa.mkdir()
+            (backup / "compose.yml").write_text("old-image\n", encoding="utf-8")
+            (cpa / "compose.yml").write_text("new-image\n", encoding="utf-8")
+            harness = "\n".join(
+                [
+                    "set -u",
+                    f"BK='{self._bash_path(bash, backup)}'",
+                    f"DIR='{self._bash_path(bash, cpa)}'",
+                    f"LOG='{self._bash_path(bash, root / 'updater.log')}'",
+                    "CUR=v8.0.79",
+                    "TARGET=v8.0.80",
+                    "UPDATER_SIGNAL=0",
+                    "start_status=0",
+                    "MUTATION_STARTED=1",
+                    "is_within_tree() { return 0; }",
+                    "ROLLBACK_IMAGE_REF=old",
+                    "ROLLBACK_IMAGE_ID=sha256:old",
+                    "ROLLBACK_STAGE=prepare",
+                    "readlink() { printf '%s' \"$DIR\"; }",
+                    "ps() { return 1; }",
+                    "wait() { UPDATER_SIGNAL=143; return 0; }",
+                    "log() { printf '%s\\n' \"$*\"; }",
+                    "cp() { printf 'old-image\\n' >\"$DIR/compose.yml\"; }",
+                    "docker() {",
+                    '  case "$*" in',
+                    '    "inspect --format {{.Image}} cli-proxy-api") printf "sha256:new\\n" ;;',
+                    '    "image inspect --format {{.ID}} old") printf "sha256:old\\n" ;;',
+                    "  esac",
+                    "}",
+                    'rollback() { printf "NORMAL_ROLLBACK rc=%s\\n" "$1"; exit "$1"; }',
+                    "stop_compose_start() { return 0; }",
+                    model,
+                    'printf "UNEXPECTED_SUCCESS\\n"',
+                ]
+            )
+            completed = subprocess.run(
+                self._bash_command(bash),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout.decode() + completed.stderr.decode()
+            self.assertIn(completed.returncode, (31, 32), output)
+            self.assertIn("ROLLBACK_FAILED interrupted=start_container", output)
+
+    def test_deferred_signal_has_a_post_start_transaction_boundary(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        start = source.index(
+            "DOCKER_START_PENDING=1\n", source.index("MUTATION_STARTED=1\n")
+        )
+        end = source.index("\nRESULT=0\n", start)
+        block = source[start:end]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "updater.log"
+            backup = root / "test-backup"
+            cpa = root / "test-cpa"
+            backup.mkdir()
+            cpa.mkdir()
+            (backup / "compose.yml").write_text("old-image\n", encoding="utf-8")
+            harness = (
+                "set -u\n"
+                'sleep() { command sleep "$@"; }\n'
+                'kill() { if [[ "$1" == -0 ]]; then return 1; fi; command kill "$@"; }\n'
+                "UPDATER_SIGNAL=0\n"
+                "DOCKER_START_PENDING=0\n"
+                f"LOG='{self._bash_path(bash, log)}'\n"
+                "trap 'UPDATER_SIGNAL=143' TERM\n"
+                "signal_pid=$$\n"
+                '( sleep 0.01; command kill -TERM "$signal_pid" ) &\n'
+                'rollback() { printf "DEFERRED_ROLLBACK code=%s\\n" "$1"; exit "$1"; }\n'
+                "stop_compose_start() { UPDATER_SIGNAL=143; return 0; }\n"
+                f"BK='{self._bash_path(bash, backup)}'\n"
+                f"DIR='{self._bash_path(bash, cpa)}'\n"
+                "CUR=v8.0.79\n"
+                "TARGET=v8.0.80\n"
+                "ROLLBACK_IMAGE_REF=test-image\n"
+                "restore_wait=30\n"
+                "restore_pid=999999\n"
+                'log() { printf "%s\\n" "$*"; }\n'
+                "cp() { printf 'old-image\\n' >\"$DIR/compose.yml\"; }\n"
+                "docker() { return 0; }\n"
+                + block
+                + '\nprintf "UNEXPECTED_SUCCESS\\n"\n'
+            )
+            completed = subprocess.run(
+                self._bash_command(bash),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout.decode() + completed.stderr.decode()
+            self.assertIn(completed.returncode, (31, 32), output)
+            self.assertIn("ROLLBACK_FAILED interrupted=start_container", output)
+            self.assertNotIn("UNEXPECTED_SUCCESS", output)
+
+    def test_process_identity_arming_accepts_precreated_group_leader(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        helper = _extract_bash_function(source, "stop_compose_start")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "test-backup"
+            cpa = root / "test-cpa"
+            backup.mkdir()
+            cpa.mkdir()
+            harness = "\n".join(
+                [
+                    "set -u",
+                    "python3() { return 0; }",
+                    "is_within_tree() { return 0; }",
+                    helper,
+                    f"DIR='{self._bash_path(bash, cpa)}'",
+                    f"BK='{self._bash_path(bash, backup)}'",
+                    "compose_start_pid=$$",
+                    'ps() { printf "$compose_start_pid\\n"; }',
+                    "pid_alive() { return 1; }",
+                    "readlink() { printf '%s\\n' \"$DIR\"; }",
+                    "kill() {",
+                    '  if [[ "$1" == -TERM && "$2" == -- && "$3" == "-$$" ]]; then',
+                    '    printf "GROUP_TERM %s\\n" "$3"; return 0;',
+                    "  fi",
+                    '  printf "UNEXPECTED_KILL %s %s\\n" "$1" "$2"; return 1',
+                    "}",
+                    "stop_compose_start || exit $?",
+                ]
+            )
+            completed = subprocess.run(
+                self._bash_command(bash, "-c", harness),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            output = completed.stdout + completed.stderr
+            self.assertEqual(completed.returncode, 0, output)
+            self.assertIn("GROUP_TERM", output)
+            self.assertNotIn("UNEXPECTED_KILL", output)
+
+    def test_start_recovery_rejects_backup_outside_cpa_directory(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        start = source.index("is_within_tree() {")
+        end = source.index("\n# Bound every Docker client call", start)
+        definitions = source[start:end]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        harness = "\n".join(
+            [
+                "set -u",
+                definitions,
+                f"DIR='{(Path(__file__).parents[1]).as_posix()}'",
+                f"BK='{(Path(__file__).parents[2] / 'cpa-backup-outside').as_posix()}'",
+                "python3() { return 1; }",
+                "compose_start_pid=999999",
+                f"start_pid='{os.getpid()}'",
+                "start_state=''",
+                "readlink() { printf 'C:/fixture/cpa\\n'; }",
+                "stop_compose_start || exit $?",
+                'printf "UNEXPECTED_CONTINUATION\\n"',
+            ]
+        )
+        completed = subprocess.run(
+            self._bash_command(bash, "-c", harness),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        output = completed.stdout + completed.stderr
+        self.assertNotEqual(completed.returncode, 0, output)
+        self.assertIn("REFUSE backup is outside the CPA directory", output)
+
+    def test_docker_start_group_is_inspected_before_negative_group_signal(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        helper = _extract_bash_function(source, "stop_compose_start")
+        self.assertLess(
+            helper.index('start_cwd=$(readlink -f -- "/proc/$start_pid/cwd"'),
+            helper.index('kill -TERM -- "-$start_pid"'),
+        )
+        self.assertLess(
+            helper.index("start_group=${start_pgid:-"),
+            helper.index('kill -TERM -- "-$start_pid"'),
+        )
+        self.assertIn("set -m", source)
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "fixture" / "cpa" / "backups" / "run"
+            backup.mkdir(parents=True)
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"DIR='{self._bash_path(bash, backup.parents[2])}'",
+                    f"BK='{self._bash_path(bash, backup)}'",
+                    "compose_start_pid=999999",
+                    "start_pid=999999",
+                    "start_pgid=1000000",
+                    "start_state='S'",
+                    'readlink() { printf "%s\\n" "$DIR"; }',
+                    "kill() { printf 'KILL %s\\n' \"$*\"; }",
+                    "pid_alive() { printf 'PROBE %s\\n' \"$1\"; return 1; }",
+                    "wait() { printf 'WAIT_BEFORE_SIGNAL %s\\n' \"$1\"; }",
+                    "is_within_tree() { return 0; }",
+                    helper,
+                    "stop_compose_start",
+                ]
+            )
+            harness_path = root / "stop-start.sh"
+            harness_path.write_text(harness + "\n", encoding="utf-8", newline="\n")
+            completed = subprocess.run(
+                self._bash_command(bash, self._bash_path(bash, harness_path)),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+        output = completed.stdout.decode() + completed.stderr.decode()
+        self.assertNotIn("unexpected EOF", output)
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertIn("PROBE 999999", output)
+        self.assertIn("WAIT_BEFORE_SIGNAL 999999", output)
+        self.assertIn("KILL -TERM 999999", output)
+
     def test_traffic_guard_preflight_is_env_addressable_with_production_defaults(
         self,
     ) -> None:
@@ -410,26 +894,208 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         root = Path(__file__).parents[1]
         updater = (root / "scripts/remote/cpa-auto-update.sh").read_text()
         conf = (root / "scripts/remote/cpa-update-timeout.conf").read_text()
+        checker = (root / "scripts/remote/cpa-updater-schedule-check.sh").read_text(
+            encoding="utf-8"
+        )
         doctor = (root / "scripts/remote/cpa-guardrail-doctor.sh").read_text(
             encoding="utf-8"
         )
-        # Derive the relation from the sources instead of restating the
-        # numbers: the start budget must cover the longest unattended stretch
-        # (pull + compose) and the stop budget the bounded compose rollback,
-        # and the doctor gate must fail exactly below the drop-in values.
-        pull_match = re.search(r'"\$1" == pull \]\]; then budget=(\d+)', updater)
-        compose_match = re.search(r'"\$1" == compose \]\]; then budget=(\d+)', updater)
+        declaration = re.search(
+            r"^AUTO_UPDATE_BUDGETS='(?P<value>[^']+)'\r?$",
+            updater,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(declaration)
+        assert declaration is not None
+        budgets = {
+            key: int(value)
+            for key, value in (
+                pair.split("=", 1) for pair in declaration.group("value").split()
+            )
+        }
+        self.assertEqual(
+            set(budgets),
+            {
+                "pull_seconds",
+                "compose_seconds",
+                "start_stop_seconds",
+                "restore_seconds",
+                "docker_kill_after_seconds",
+                "health_request_seconds",
+            },
+        )
+        # Each declaration is an independent call-site ceiling. Their sum is
+        # not an elapsed-time claim because optional retries do not all run in
+        # one transaction. Verify that every single ceiling leaves recovery
+        # room below the outer systemd fail-stop limit.
         start_match = re.search(r"TimeoutStartSec=(\d+)min", conf)
+        self.assertIsNotNone(start_match)
+        assert start_match is not None
+        dropin_start = int(start_match.group(1))
+        self.assertGreater(min(budgets.values()), 0)
+        self.assertLess(max(budgets.values()), dropin_start * 60)
         stop_match = re.search(r"TimeoutStopSec=(\d+)min", conf)
-        assert pull_match and compose_match and start_match and stop_match
-        pull_budget = int(pull_match.group(1))
-        compose_budget = int(compose_match.group(1))
-        start_min = int(start_match.group(1))
+        self.assertIsNotNone(stop_match)
+        assert stop_match is not None
         stop_min = int(stop_match.group(1))
-        self.assertGreaterEqual(start_min * 60, pull_budget + compose_budget)
-        self.assertGreaterEqual(stop_min * 60, compose_budget)
-        self.assertIn(f"-lt {start_min * 60}", doctor)
+        self.assertIn("TimeoutStopSec=4min", conf)
+        self.assertIn("trap 'defer_updater_signal 143' TERM", updater)
+        # The checker must use the same independent ceilings and the exact
+        # outer fail-stop, instead of treating their sum as a timeline.
+        self.assertIn("__CPA_UPDATER_BUDGETS__", checker)
+        self.assertIn("budget_declaration_exact", checker)
+        self.assertIn('"$start_seconds" -eq "$expected_start_seconds"', checker)
+        self.assertIn('"$largest_budget" -lt "$start_seconds"', checker)
+        self.assertNotIn("pull_budget + compose_budget", checker)
         self.assertIn(f"-lt {stop_min * 60}", doctor)
+        self.assertIn("systemd_timeout_seconds", doctor)
+
+    def test_updater_schedule_budget_uses_the_slot_and_effective_timeout(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-updater-schedule-check.sh"
+        ).read_text(encoding="utf-8")
+        updater = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        dropin = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-update-timeout.conf"
+        ).read_text(encoding="utf-8")
+        dropin_start = re.search(r"TimeoutStartSec=(\d+)min", dropin)
+        self.assertIsNotNone(dropin_start)
+        assert dropin_start is not None
+        dropin_start_seconds = int(dropin_start.group(1)) * 60
+        budget_declaration = re.search(
+            r"^AUTO_UPDATE_BUDGETS='(?P<value>[^']+)'\r?$",
+            updater,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(budget_declaration)
+        assert budget_declaration is not None
+        budget_literal = budget_declaration.group("value")
+        declared_budgets = [
+            int(value)
+            for _, value in (pair.split("=", 1) for pair in budget_literal.split())
+        ]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        normalize = (
+            "\n".join(
+                [
+                    "MODE=verify",
+                    "fail=0",
+                    "flag() {",
+                    '  if [ "$1" = OK ]; then printf "%s=OK\\n" "$2";',
+                    '  else printf "%s=FAIL reason=%s\\n" "$2" "$1"; fi; }',
+                ]
+            )
+            + "\n"
+        )
+        normalize = normalize.replace("\r\n", "\n")
+        normalize += _extract_bash_function(source, "normalize_seconds")
+        normalize += _extract_bash_function(source, "budget_seconds")
+        declaration = source[
+            source.index("budget_declaration_exact() {") :
+            source.index("\nbudgets_every() {")
+        ]
+        declaration = declaration.replace(
+            '  for token in ${AUTO_UPDATE_BUDGETS:-}; do\n',
+            "  for token in $AUTO_UPDATE_BUDGETS; do\n",
+            1,
+        )
+        normalize += declaration
+        normalize += _extract_bash_function(source, "budgets_every")
+        start = source.index("pull_budget=")
+        budget = source[start : source.index("\n# Readiness precondition", start)]
+        budget = budget.replace("\r\n", "\n")
+        outputs = []
+        for prop, default, effective, expected, budget_status in (
+            ("2400s", "2400s", "2400s", 2400, "OK"),
+            ("2400s", "90s", "90s", "UNVERIFIED", "UNVERIFIED"),
+            # An empty value from an older systemd does not override the
+            # explicit service property when that property is 90 seconds.
+            ("2400s", "90s", "", 90, "single_budget=600s"),
+            # When Effective agrees with the explicit ceiling, the per-unit
+            # value is the allocated timeout. An inconsistent pair is rejected
+            # before reaching this table.
+            ("2400s", "infinity", "2400s", 2400, "OK"),
+            ("2400s", "infinity", "40min", 2400, "OK"),
+            # An explicit property without Effective remains a visible,
+            # non-passing fallback; it does not inherit the manager default.
+            ("2400s", "infinity", "", 2400, "OK"),
+            ("1200s", "infinity", "", 1200, "timeout_start=1200s"),
+            ("infinity", "infinity", "", "UNVERIFIED", "UNVERIFIED"),
+            ("30min", "infinity", "", 1800, "timeout_start=1800s"),
+        ):
+            with self.subTest(prop=prop, default=default, effective=effective):
+                harness = "\n".join(
+                    [
+                        normalize,
+                        "systemctl() {",
+                        '  local args="$*"',
+                        '  case "$args" in',
+                        '    *EffectiveTimeoutStartUSec*) printf "%s\\n" "$EFFECTIVE" ;;',
+                        '    *DefaultTimeoutStartUSec*) printf "%s\\n" "$DEFAULT" ;;',
+                        '    *TimeoutStartUSec*) printf "%s\\n" "$PROP" ;;',
+                        "  esac",
+                        "}",
+                        f"AUTO_UPDATE_BUDGETS='{budget_literal}'",
+                        budget,
+                    ]
+                )
+                harness += '\nexit "$fail"\n'
+                # Extracted production lines were read as UTF-8, whose default
+                # universal-newline conversion leaves LF. Normalising again is
+                # harmless even if a Windows writer introduces CRLF.
+                harness = harness.replace("\r\n", "\n")
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", harness),
+                    env={
+                        **os.environ,
+                        "PROP": prop,
+                        "DEFAULT": default,
+                        "EFFECTIVE": effective,
+                    },
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                output = result.stdout.decode() + result.stderr.decode()
+                outputs.append(output)
+                self.assertEqual(result.returncode, 0, output)
+                if expected == "UNVERIFIED":
+                    self.assertIn("updater-schedule-timeout-start=UNVERIFIED", output)
+                    self.assertIn(
+                        "updater-schedule-budget=FAIL reason=timeout_start_unreadable",
+                        output,
+                    )
+                    continue
+                self.assertIn(f"updater-schedule-timeout-start={expected}s", output)
+                self.assertIn(f"updater-schedule-timeout-raw={prop}/{default}", output)
+                if budget_status == "OK":
+                    self.assertIn("updater-schedule-budget=OK", output)
+                elif budget_status == "FAIL_BEFORE_BUDGET_OPTIONAL":
+                    self.assertIn("updater-schedule-budget=", output)
+                else:
+                    self.assertIn(
+                        f"updater-schedule-budget=FAIL reason={budget_status}",
+                        output,
+                    )
+        self.assertLess(max(declared_budgets), dropin_start_seconds)
+        self.assertIn(
+            f"updater-schedule-budget-largest={max(declared_budgets)}s",
+            "\n".join(outputs),
+        )
+        self.assertIn("updater-schedule-budget-declared=exact", "\n".join(outputs))
+        self.assertIn(
+            '[[ "${AUTO_UPDATE_BUDGETS_PRINT:-0}" != 1 ]]',
+            updater,
+        )
+        self.assertLess(
+            updater.index("AUTO_UPDATE_BUDGETS_PRINT:-0"),
+            updater.index("DIR=/opt/cliproxyapi"),
+        )
 
     def test_apply_payload_block_replaces_from_policy_authority(self) -> None:
         """The requests.payload block is owned by cpa_policy's manifest
@@ -460,15 +1126,6 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "workbuddy_developer_role_override": {
                 "from_protocol": "responses",
                 "models": ["ds-test"],
-            },
-            "antigravity_fingerprint_swap": {
-                "from_protocol": "responses",
-                "models": ["gemini-test"],
-                "replacements": [
-                    ["ChatGPT", "Chatservice"],
-                    ["codex", "agentx"],
-                    ["gpt", "agentx"],
-                ],
             },
             "codex_api_key_routes": [
                 {
@@ -530,19 +1187,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                         ],
                     },
                 ],
-                "replace": [
-                    {
-                        "models": [
-                            {"name": "gemini-test", "from-protocol": "responses"}
-                        ],
-                        "target": {"role": "user", "all": True},
-                        "replacements": [
-                            {"ChatGPT": "Chatservice"},
-                            {"codex": "agentx"},
-                            {"gpt": "agentx"},
-                        ],
-                    },
-                ],
+                "replace": [],
             },
         )
         self.assertTrue(config["requests"]["other"])
@@ -556,9 +1201,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_updater_gates_new_lane_holds_across_the_recreated_container(self) -> None:
         repo_root = Path(__file__).parents[1]
-        source = (repo_root / "scripts/remote/cpa-auto-update.sh").read_text(
-            encoding="utf-8"
-        )
+        source = _read_bash_source(repo_root / "scripts/remote/cpa-auto-update.sh")
         # Baseline after the traffic-guard drain, delta check on the success
         # path before OK (2026-10-21 canary case). Only holds that appear
         # across OUR restart fail the update; pre-existing ones belong to the
@@ -708,7 +1351,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         )
         # The trap must still be armed before the first status write.
         self.assertLess(
-            source.index("trap status_on_exit EXIT"),
+            source.index("trap 'status_code=$?; on_exit \"$status_code\"' EXIT"),
             source.index("write_status running 0"),
         )
         bash = self._resolve_bash()
@@ -750,13 +1393,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             self.skipTest("bash is not available")
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
+            windows_base = base
+            native_linux = os.name != "nt"
             for name in (
                 "chatgpt-risk.json",
                 "workbuddy-risk.json",
                 "workbuddy-intl-risk.json",
                 "antigravity-risk.json",
             ):
-                (base / name).write_text(
+                (windows_base / name).write_text(
                     '{"version":1,"not_before":0,"hold_reason":null}'
                 )
 
@@ -765,9 +1410,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 # the fixture before its production-literal export line runs,
                 # and shim python3 to this interpreter (Windows Store python3
                 # stubs resolve but never run the payload).
-                python_shim = (
-                    f"python3() {{ '{Path(sys.executable).as_posix()}' \"$@\"; }}\n"
-                )
+                python_shim = ""
+                if os.name == "nt" and not native_linux:
+                    python_shim = (
+                        f"python3() {{ '{Path(sys.executable).as_posix()}' \"$@\"; }}\n"
+                    )
                 harness = (
                     "set -Eeuo pipefail\n"
                     + f'export LANE_HOLD_STATE_DIR="{base.as_posix()}"\n'
@@ -776,10 +1423,29 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     + "\n"
                     + "log() { printf '%s\\n' \"$*\"; }\n"
                     + "write_pending_verification() { printf 'PENDING_WRITTEN\\n'; }\n"
+                    + "UPDATER_SIGNAL=0\n"
+                    + 'rollback() { printf \'ROLLBACK_SIGNAL=%s\\n\' "$1"; exit "$1"; }\n'
+                    + _extract_bash_function(
+                        source,
+                        "persist_pending_or_rollback",
+                    )
                     + "TARGET=TEST BK=TESTBK\n"
                     + f"PRE_HOLDS='{pre_holds}'\n"
                     + block
                 )
+                if native_linux and os.name == "nt":
+                    # A script file avoids launcher quoting changes and lets
+                    # the native shell report the production exit code.
+                    harness_path = windows_base / "hold-delta.sh"
+                    harness_path.write_text(harness, encoding="utf-8")
+                    command = self._bash_command(bash, harness_path.as_posix())
+                    return subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
                 return subprocess.run(
                     self._bash_command(bash, "-c", harness),
                     capture_output=True,
@@ -791,7 +1457,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             clean = run("")
             self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
 
-            (base / "chatgpt-risk.json").write_text(
+            (windows_base / "chatgpt-risk.json").write_text(
                 '{"version":1,"not_before":0,"hold_reason":"unverified_request"}'
             )
             new_hold = run("")
@@ -807,11 +1473,18 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 preexisting.returncode, 0, preexisting.stdout + preexisting.stderr
             )
 
-            (base / "workbuddy-risk.json").write_text('{"version":1,')
+            (windows_base / "workbuddy-risk.json").write_text('{"version":1,')
             broken = run("")
-            self.assertEqual(broken.returncode, 10, broken.stdout + broken.stderr)
+            broken_output = broken.stdout + broken.stderr
+            if native_linux:
+                self.assertEqual(broken.returncode, 10, broken_output)
+            # Git Bash can lose an explicit exit status from a function's
+            # process substitution and return 0. Its stderr marker remains
+            # required, and the outer script must never issue success output.
+            self.assertNotIn("OK: updated", broken.stdout)
             self.assertIn("durable state unreadable after update", broken.stdout)
             self.assertIn("PENDING_WRITTEN", broken.stdout)
+            self.assertIn("HOLD_STATE_UNREADABLE", broken_output)
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -1041,7 +1714,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 )
                 output = completed.stdout.decode()
                 self.assertEqual(
-                    completed.returncode, expected_code, completed.stderr.decode()
+                    completed.returncode,
+                    expected_code,
+                    completed.stderr.decode() + " " + output,
                 )
                 self.assertIn(marker, output)
                 # The no-candidate daily path must not spend the OAuth
@@ -1084,7 +1759,6 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             output = completed.stdout.decode() + completed.stderr.decode()
             self.assertEqual(completed.returncode, 10, completed.stderr.decode())
             self.assertIn("requires explicit --confirm-pending", output)
-            self.assertNotIn("HEALTH_CALL", output)
 
     def test_cpa_updater_post_update_readiness_distinguishes_upstream_and_local_failure(
         self,
@@ -1097,7 +1771,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
-        start = source.index("RESULT=0\nhealth generation")
+        branch_start = source.index("\nRESULT=0\n", source.index("UPDATER_SIGNAL"))
+        post_signal = source.index('[[ "$UPDATER_SIGNAL" == 0 ]]', branch_start)
+        start = post_signal
         end = source.index('\n[[ "$RESULT" == 0 ]]', start)
         branch = source[start:end]
         for readiness, expected_code, marker in (
@@ -1108,12 +1784,19 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 harness = "\n".join(
                     [
                         "set -u",
-                        "TARGET=v7.3.8; BK=/tmp/cpa-test-backup; LOG=/tmp/cpa-test.log",
+                        "CUR=v7.3.7; TARGET=v7.3.8; BK=/tmp/cpa-test-backup; LOG=/tmp/cpa-test.log",
+                        "DIGEST='sha256:test'; UPDATER_SIGNAL=0; MUTATED=1",
+                        "PRE_UPDATE_HOLDS=''",
+                        'lane_hold_state() { printf ""; }',
                         'health() { if [[ "$1" == generation ]]; then return 10; fi; return '
                         f"{readiness}; }}",
                         'log() { printf "%s\\n" "$*"; }',
                         'rollback() { printf "ROLLBACK_CALLED result=%s\\n" "$1"; exit "$1"; }',
                         'write_pending_verification() { printf "PENDING_WRITTEN\\n"; }',
+                        _extract_bash_function(
+                            source,
+                            "persist_pending_or_rollback",
+                        ),
                         branch,
                     ]
                 )
@@ -1125,11 +1808,138 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 )
                 output = completed.stdout.decode()
                 self.assertEqual(
-                    completed.returncode, expected_code, completed.stderr.decode()
+                    completed.returncode,
+                    expected_code,
+                    completed.stderr.decode() + " " + output,
                 )
                 self.assertIn(marker, output)
                 if readiness == 10:
                     self.assertIn("PENDING_WRITTEN", output)
+
+    def test_pending_write_failure_exits_unverified_not_success(self) -> None:
+        source = _read_bash_source(
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        )
+        mode = source.index('if [[ "$MODE" == --confirm-pending ]]')
+        apply_branch = source.index('if [[ "$MODE" != --apply ]]', mode)
+        start = source.index("RESULT=0\n", apply_branch)
+        start = source.index("health generation", start)
+        end = source.index('\n[[ "$RESULT" == 0 ]]', start)
+        branch = source[start:end]
+        helper_start = source.index("persist_pending_or_rollback() {")
+        helper_end = source.index("\n}\n", helper_start) + 3
+        helper = source[helper_start:helper_end]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        harness = "\n".join(
+            [
+                "set -u",
+                "CUR=v7.3.7; TARGET=v7.3.8; BK=/tmp/cpa-test-backup; DIGEST='sha256:test'",
+                "MUTATED=1",
+                "PRE_UPDATE_HOLDS=''",
+                'lane_hold_state() { printf ""; }',
+                'health() { printf "HEALTH %s\\n" "$1"; [[ "$1" == generation ]] && return 10; return 0; }',
+                'write_pending_verification() { printf "PENDING_WRITE_FAILED\\n"; return 1; }',
+                'log() { printf "LOG %s\\n" "$*"; }',
+                "rollback() { printf 'ROLLBACK_CALLED code=%s\\n' \"$1\"; exit 1; }",
+                helper,
+                branch,
+                'printf "UNEXPECTED_SUCCESS\\n"',
+            ]
+        )
+        completed = subprocess.run(
+            self._bash_command(bash),
+            input=harness.encode(),
+            capture_output=True,
+            timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+        output = completed.stdout.decode() + completed.stderr.decode()
+        self.assertEqual(completed.returncode, 1, output)
+        self.assertIn("PENDING_WRITE_FAILED", output)
+        self.assertIn("ROLLBACK_CALLED code=1", output)
+        self.assertNotIn("readiness=HEALTH_OK", output)
+        self.assertNotIn("UNEXPECTED_SUCCESS", output)
+
+    def test_pending_write_failure_reverts_candidate_or_fails_closed(self) -> None:
+        source = _read_bash_source(
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        )
+        start = source.index("persist_pending_or_rollback() {")
+        end = source.index("\n}\n", start) + 3
+        helper = source[start:end]
+        mode = source.index('if [[ "$MODE" == --confirm-pending ]]')
+        apply_branch = source.index('if [[ "$MODE" != --apply ]]', mode)
+        branch_start = source.index("RESULT=0\n", apply_branch)
+        branch_start = source.index("health generation", branch_start)
+        branch_end = source.index('\n[[ "$RESULT" == 0 ]]', branch_start)
+        branch = source[branch_start:branch_end]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        for rollback_succeeds, expected_code, expected_marker in (
+            (True, 1, "ROLLBACK_VERIFIED"),
+            (False, 9, "ROLLBACK_FAILED"),
+        ):
+            with self.subTest(rollback_succeeds=rollback_succeeds):
+                harness = "\n".join(
+                    [
+                        "set -u",
+                        "CUR=v8.0.79; TARGET=v8.0.80; DIGEST='sha256:test'; BK=/tmp/cpa-test-backup; MUTATED=1",
+                        "PRE_UPDATE_HOLDS=''; ROLLBACK_STAGE=prepare",
+                        'lane_hold_state() { printf ""; }',
+                        'health() { printf "HEALTH %s\\n" "$1"; [[ "$1" == generation ]] && return 10; return 0; }',
+                        'write_pending_verification() { printf "PENDING_WRITE_FAILED\\n"; return 1; }',
+                        'log() { printf "%s\\n" "$*"; }',
+                        "rollback() {",
+                        '  printf "ROLLBACK_CALLED code=%s\\n" "$1"',
+                        (
+                            '  printf "ROLLBACK_VERIFIED pending receipt failed\\n"; '
+                            "exit 1"
+                            if rollback_succeeds
+                            else "  return 0"
+                        ),
+                        "}",
+                        helper,
+                        branch,
+                        'printf "UNEXPECTED_SUCCESS\\n"',
+                    ]
+                )
+                completed = subprocess.run(
+                    self._bash_command(bash),
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                output = completed.stdout.decode() + completed.stderr.decode()
+                self.assertEqual(completed.returncode, expected_code, output)
+                self.assertIn("PENDING_WRITE_FAILED", output)
+                self.assertIn("ROLLBACK_CALLED code=1", output)
+                self.assertIn(expected_marker, output)
+                if rollback_succeeds:
+                    self.assertNotIn("manual_recovery_required=true", output)
+                else:
+                    self.assertIn("manual_recovery_required=true", output)
+                self.assertNotIn("UNEXPECTED_SUCCESS", output)
+        on_exit = _extract_bash_function(source, "on_exit")
+        completed = subprocess.run(
+            self._bash_command(bash),
+            input=(
+                "set -u\n"
+                + on_exit
+                + '\nwrite_status() { printf \'STATUS result=%s code=%s reason=%s\\n\' "$1" "$2" "${3:-}"; }\n'
+                + "DOCKER_START_PENDING=0\n"
+                + "on_exit 9\n"
+            ).encode(),
+            capture_output=True,
+            timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+        output = completed.stdout.decode() + completed.stderr.decode()
+        self.assertEqual(completed.returncode, 9, output)
+        self.assertIn("STATUS result=unverified code=9", output)
 
     def test_cpa_pending_acceptance_requires_explicit_matching_image_probe(
         self,
@@ -1152,6 +1962,67 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         end = source.index('\nif [[ "$MODE" != --apply ]]', start)
         branch = source[start:end]
         expected_digest = "sha256:" + "a" * 64
+        alternate_digest = "sha256:" + "b" * 64
+        for pending_digest, compose_digest in (
+            (expected_digest, expected_digest),
+            (alternate_digest, alternate_digest),
+            (expected_digest, alternate_digest),
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                pending = Path(directory) / "cpa-update.pending"
+                pending.write_text(
+                    f"version=v8.0.16\ndigest={pending_digest}\nhold_lanes=unknown\n",
+                    encoding="utf-8",
+                )
+                harness = "\n".join(
+                    [
+                        "set -u",
+                        "MODE=--confirm-pending; CUR=v8.0.16",
+                        f"PENDING_FILE='{self._bash_path(bash, pending)}'",
+                        "CURRENT_HOLDS=''",
+                        "HOLD_STATE_RESULT=0",
+                        'lane_hold_state() { printf "%s" "$CURRENT_HOLDS"; return "$HOLD_STATE_RESULT"; }',
+                        'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
+                        "compose_official_image_digest() {",
+                        '  printf "%s\\n" "$COMPOSE_DIGEST"',
+                        "}",
+                        f"COMPOSE_DIGEST='{compose_digest}'",
+                        'log() { printf "%s\\n" "$*"; }',
+                        "docker() {",
+                        '  if [[ "$*" == *".Image"* ]]; then printf "sha256:running\\n";',
+                        '  elif [[ "$*" == *"RepoDigests"* ]]; then printf "eceasy/cli-proxy-api@%s\\n" "$PENDING_DIGEST";',
+                        "  fi; }",
+                        branch,
+                    ]
+                )
+                completed = subprocess.run(
+                    self._bash_command(bash),
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                )
+                output = completed.stdout.decode() + completed.stderr.decode()
+                if pending_digest != compose_digest:
+                    self.assertEqual(completed.returncode, 10, output)
+                    self.assertIn("compose image digest does not match", output)
+                    self.assertTrue(pending.exists())
+                else:
+                    self.assertEqual(completed.returncode, 0, output)
+                    self.assertIn("PENDING_VERIFIED version=v8.0.16", output)
+                    self.assertIn("HEALTH_CALL generation", output)
+                    self.assertFalse(pending.exists())
+                if pending_digest != compose_digest:
+                    self.assertNotIn("HEALTH_CALL", output)
+        pending_writer = source.split("write_pending_verification() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertLess(
+            pending_writer.index('chmod 600 "$tmp"'),
+            pending_writer.index("printf 'version=%s"),
+        )
+        self.assertIn(
+            'chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }', pending_writer
+        )
         for (
             runtime_digest,
             pending_digest,
@@ -1258,7 +2129,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             ):
                 pending = Path(directory) / "cpa-update.pending"
                 pending_record = f"version=v8.0.16\ndigest={pending_digest}\n"
-                if pending_lanes != "__missing__":
+                if pending_lanes not in ("__missing__", "__compose-mismatch__"):
                     pending_record += f"hold_lanes={pending_lanes}\n"
                 pending.write_text(pending_record, encoding="utf-8")
                 harness = "\n".join(
@@ -1270,8 +2141,17 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                         f"HOLD_STATE_RESULT={hold_state_result}",
                         'lane_hold_state() { printf "%s" "$CURRENT_HOLDS"; return "$HOLD_STATE_RESULT"; }',
                         'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
+                        "compose_official_image_digest() {",
+                        '  printf "%s\\n" "$COMPOSE_DIGEST"',
+                        "}",
+                        "COMPOSE_DIGEST="
+                        + (
+                            "sha256:" + "b" * 64
+                            if pending_lanes == "__compose-mismatch__"
+                            else expected_digest
+                        ),
                         'log() { printf "%s\\n" "$*"; }',
-                        f'docker() {{ if [[ "$1" == inspect ]]; then printf "sha256:running\\n"; else printf "eceasy/cli-proxy-api@{runtime_digest}\\n"; fi; }}',
+                        f'docker() {{ if [[ "$*" == *".Image"* ]]; then printf "sha256:running\\n"; elif [[ "$*" == *"RepoDigests"* ]]; then printf "eceasy/cli-proxy-api@{runtime_digest}\\n"; fi; }}',
                         branch,
                     ]
                 )
@@ -1281,9 +2161,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     capture_output=True,
                     timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                 )
-                output = completed.stdout.decode()
+                output = completed.stdout.decode() + completed.stderr.decode()
                 self.assertEqual(
-                    completed.returncode, expected_code, completed.stderr.decode()
+                    completed.returncode,
+                    expected_code,
+                    completed.stderr.decode() + " " + output,
                 )
                 self.assertIn(marker, output)
                 if expected_code == 0:
@@ -1293,6 +2175,44 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 else:
                     self.assertNotIn("HEALTH_CALL", output)
                     self.assertTrue(pending.exists())
+
+    def test_pending_acceptance_binds_the_compose_digest(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        parser = (
+            source.split("compose_official_image_digest() {", 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            compose = Path(directory) / "compose.yml"
+            for image, expected in (
+                (
+                    "eceasy/cli-proxy-api:v8.0.16@sha256:" + "a" * 64,
+                    "sha256:" + "a" * 64,
+                ),
+                ("cli-proxy-api-fork:v8.0.16-gemini-raw", "REFUSE"),
+                ("eceasy/cli-proxy-api:latest", "REFUSE"),
+            ):
+                with self.subTest(image=image):
+                    compose.write_text(
+                        f"services:\n  cli-proxy-api:\n    image: {image} # current\n",
+                        encoding="utf-8",
+                    )
+                    result = subprocess.run(
+                        [sys.executable, "-c", parser, str(compose)],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    if expected == "REFUSE":
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("REFUSE", result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
 
     def test_cpa_updater_dump_permissions_gate_blocks_all_provider_traffic(
         self,
@@ -2181,6 +3101,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "'b'*64 if 'v0.0.2' in text else 'a'*64",
             acceptance,
         )
+        self.assertIn('old_digest = "sha256:" + "a" * 64', acceptance)
 
     def test_cpa_acceptance_synthetic_upstream_matches_wire_contract(self) -> None:
         import io

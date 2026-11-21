@@ -51,9 +51,6 @@ class ZzXhttpFrontTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("$accessRulesValid = @($verified.Access).Count -eq 3", text)
         self.assertIn("AccessControlType]::Allow", text)
         self.assertIn("Assert-LauncherPrivateSecretFile", text)
-        for path in ("$tokenStore", "$urlFile"):
-            with self.subTest(path=path):
-                self.assertIn(f"Protect-MergedSubscriptionFile -Path {path}", text)
         token_read = text.index("Get-Content -LiteralPath $tokenStore")
         token_privacy = text.index("Assert-LauncherPrivateSecretFile")
         token_protect = text.index("Protect-MergedSubscriptionFile -Path $tokenStore")
@@ -67,18 +64,16 @@ class ZzXhttpFrontTests(ScriptValidationMixin, unittest.TestCase):
             token_read,
             "an existing token must be protected before it is read",
         )
-        # Each write must be followed by the tightening call.
-        for write, tighten in (
-            ("Set-Content -LiteralPath $tokenStore", "-Path $tokenStore"),
-            ("Set-Content -LiteralPath $urlFile", "-Path $urlFile"),
+        for invocation in (
+            "Set-MergedSubscriptionSecret -Path $tokenStore -Content $Token",
+            "Set-MergedSubscriptionSecret -Path $urlFile -Content $urls",
         ):
-            with self.subTest(write=write):
-                written = text.index(write)
-                self.assertGreater(
-                    text.rindex(f"Protect-MergedSubscriptionFile {tighten}"),
-                    written,
-                    "the ACL must be tightened after the credential is written",
-                )
+            with self.subTest(invocation=invocation):
+                self.assertIn(invocation, text)
+        # Do not reintroduce a broad local write that bypasses the private
+        # temp file, atomic replacement, and final ACL check.
+        self.assertNotIn("Set-Content -LiteralPath $tokenStore", text)
+        self.assertNotIn("Set-Content -LiteralPath $urlFile", text)
 
     def test_published_port_stays_on_the_xray_wrapper(self) -> None:
         text = self.text

@@ -41,7 +41,7 @@ flag() {
 # duration ("20min", "1h 30min") on others. Normalise both to seconds so the
 # thresholds below compare numbers, never strings.
 normalize_seconds() {
-  total=0
+  local total=0 token suffix value matched
   for token in $1; do
     case "$token" in
       ''|infinity|*infinity) printf '\n'; return 0 ;;
@@ -76,7 +76,69 @@ normalize_seconds() {
   printf '%s\n' "$total"
 }
 
+budget_seconds() {
+  local key="$1" token value
+  for token in ${AUTO_UPDATE_BUDGETS:-}; do
+    case "$token" in
+      "$key"=*)
+        value=${token#*=}
+        case "$value" in
+          ''|*[!0-9]*) return 1 ;;
+        esac
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+budget_declaration_exact() {
+  local token seen=" "
+  # Reject unknown, missing and duplicate keys, not merely the six values the
+  # schedule currently reads. An added retry leg must be reviewed before the
+  # budget can claim exact coverage.
+  for token in ${AUTO_UPDATE_BUDGETS:-}; do
+    case "$token" in
+      pull_seconds=*|compose_seconds=*|start_stop_seconds=*|\
+      restore_seconds=*|docker_kill_after_seconds=*|health_request_seconds=*)
+        ;;
+      *) return 1 ;;
+    esac
+    case "$seen" in
+      *" ${token%%=*} "*) return 1 ;;
+    esac
+    seen="$seen${token%%=*} "
+  done
+  for token in pull_seconds compose_seconds start_stop_seconds restore_seconds \
+    docker_kill_after_seconds health_request_seconds; do
+    case "$seen" in
+      *" $token "*) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+budgets_every() {
+  local key value
+  local -a seen=''
+  for key in pull_seconds compose_seconds start_stop_seconds restore_seconds \
+    docker_kill_after_seconds health_request_seconds; do
+    value="$(budget_seconds "$key" || true)"
+    case "$value" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    for seen_value in "${seen[@]}"; do
+      [[ "$seen_value" == "$key" ]] && return 1
+    done
+    seen+=("$key")
+  done
+}
+
 timer_block="$(systemctl cat "$TIMER" 2>/dev/null || true)"
+# The guardrail projection replaces this line from the updater source so the
+# timing check cannot silently use a stale copy of the budgets.
+__CPA_UPDATER_BUDGETS__
 if [ -z "$timer_block" ]; then
   # A host without the timer is a different fact from a wrong schedule, and
   # --status must never fail: it is the read-only description.
@@ -152,48 +214,154 @@ case "$random_delay" in
     ;;
 esac
 
-# A start budget longer than the slot cannot overlap the next owner's 04:10
-# anchor. systemd renders a large USec value as a duration on some builds and
-# as raw microseconds on others; both shapes are normalised to seconds.
-# 2026-11-20: the service sets no TimeoutStartSec, so systemd's own default
-# (DefaultTimeoutStartSec, 90s unless an override drop-in changes it) is what
-# actually bounds a trigger. Read the effective value instead of the raw unit
-# property, otherwise a default of 90s was reported as 1200s and failed a
-# budget the reviewer had already sized to the slot. An explicit per-unit
-# TimeoutStartSec still wins here, because systemctl show resolves it.
-start_usec_raw="$(systemctl show cliproxyapi-update.service -p TimeoutStartUSec --value 2>/dev/null || true)"
+# Each work leg and Docker kill grace is an independently enforced ceiling at
+# its call site. Adding all optional retries is not an actual transaction
+# elapsed time, so only validate the individual ceiling below the projected
+# systemd hard limit. The 40min service timeout is the overall fail-stop bound;
+# it does not prove that every optional retry can run before that boundary.
+# `-Apply` projects an explicit per-unit TimeoutStartSec. Read both that value
+# and the manager default, so neither can silently cap a longer raw setting.
+pull_budget="$(budget_seconds pull_seconds || true)"
+compose_budget="$(budget_seconds compose_seconds || true)"
+start_stop_budget="$(budget_seconds start_stop_seconds || true)"
+restore_budget="$(budget_seconds restore_seconds || true)"
+kill_budget="$(budget_seconds docker_kill_after_seconds || true)"
+health_budget="$(budget_seconds health_request_seconds || true)"
+largest_budget=0
+budget_valid=1
+for budget_value in "$pull_budget" "$compose_budget" "$start_stop_budget" \
+  "$restore_budget" "$kill_budget" "$health_budget"; do
+  case "$budget_value" in
+    ''|*[!0-9]*) budget_valid=0; break ;;
+  esac
+  if [ "$budget_value" -gt "$largest_budget" ]; then
+    largest_budget="$budget_value"
+  fi
+done
+budget_declaration=incomplete
+if budgets_every >/dev/null 2>&1 && budget_declaration_exact; then
+  budget_declaration=exact
+fi
+expected_start_seconds=2400
+echo "updater-schedule-budget-declared=$budget_declaration"
+echo "updater-schedule-budget-largest=${budget_valid:+${largest_budget:-UNVERIFIED}}s"
+echo "updater-schedule-budget-expected=${expected_start_seconds}s"
+
+start_property="$(systemctl show -p TimeoutStartUSec --value cliproxyapi-update.service 2>/dev/null || true)"
+effective_start_raw="$(systemctl show cliproxyapi-update.service -p EffectiveTimeoutStartUSec --value 2>/dev/null || true)"
+effective_property="$(systemctl show -p EffectiveTimeoutStartUSec --value cliproxyapi-update.service 2>/dev/null || true)"
 systemd_default_raw="$(systemctl show -p DefaultTimeoutStartUSec --value 2>/dev/null || true)"
-start_seconds="$(normalize_seconds "$start_usec_raw")"
-# A configured 0/infinity renders as a huge USec value on older builds and as
-# "infinity" on newer ones; both mean "no start budget" and stay unreadable.
-case "$systemd_default_raw" in
-  ''|infinity) : ;;
+property_seconds="$(normalize_seconds "$start_property")"
+existing_default_seconds="$(normalize_seconds "$systemd_default_raw")"
+echo "updater-schedule-timeout-raw=${start_property:-ABSENT}/${systemd_default_raw:-ABSENT}"
+# EffectiveTimeoutStartUSec includes this service's drop-in and manager default.
+# Some systemd builds return it under the explicit-property query but leave it
+# out of `systemctl show`; the different probes must agree when both work.
+# Prefer Effective, which includes both a drop-in and the manager default. A
+# systemd build that omits it from one query is covered by the other query.
+[ -n "$effective_start_raw" ] || effective_start_raw="$effective_property"
+start_seconds=''
+case "$effective_start_raw" in
+  ''|infinity|*infinity) : ;;
+  invalid) start_property='conflict' ;;
   *)
-    existing_default_seconds="$(normalize_seconds "$systemd_default_raw")"
-    case "$existing_default_seconds" in
+    effective_start_seconds="$(normalize_seconds "$effective_start_raw")"
+    case "$effective_start_seconds" in
       ''|*[!0-9]*) : ;;
       *)
-        case "$start_seconds" in
-          ''|*[!0-9]*) start_seconds="$existing_default_seconds" ;;
-          *)
-            if [ "$start_seconds" -ge "$existing_default_seconds" ]; then
-              start_seconds="$existing_default_seconds"
-            fi
-            ;;
-        esac
+        start_seconds="$effective_start_seconds"
+        echo "updater-schedule-timeout-effective=${effective_start_seconds}s"
         ;;
     esac
     ;;
 esac
+if [ -n "$effective_property" ] &&
+  [ "$(normalize_seconds "$effective_property")" != \
+    "$(normalize_seconds "$effective_start_raw")" ]; then
+  start_property='conflict'
+fi
+# A per-unit setting wins the manager default. An absent per-unit setting is
+# explicitly reported as inherited, rather than pretending the default is the
+# exact value that -Apply projected. If this systemd cannot return either
+# property, the check remains fail-closed.
+case "$start_property" in
+  ''|infinity|*infinity) start_property='' ;;
+  *)
+    case "$property_seconds" in
+      ''|*[!0-9]*) start_property='invalid' ;;
+      *)
+        if [ -n "$effective_start_raw" ] &&
+          [ "$(normalize_seconds "$effective_start_raw")" != "$property_seconds" ]; then
+          start_property='conflict'
+        else
+          start_property="explicit:$property_seconds"
+        fi
+        ;;
+    esac
+    ;;
+esac
+case "$effective_start_raw" in
+  '')
+    case "$systemd_default_raw" in
+      ''|0) : ;;
+      infinity|*infinity) start_seconds='' ;;
+      *)
+        if [ -z "$start_seconds" ]; then
+          start_seconds="${existing_default_seconds:-}"
+        fi
+        ;;
+    esac
+    ;;
+  infinity|*infinity) start_seconds='' ;;
+  *) start_seconds="${effective_start_seconds:-}" ;;
+esac
+case "$start_property" in
+  invalid|conflict) start_seconds=''
+    echo "updater-schedule-timeout-start=UNVERIFIED reason=${start_property}_timeout_properties"
+    flag "timeout_start_${start_property}" updater-schedule-budget
+    ;;
+  explicit:*) start_seconds="${start_property#explicit:}" ;;
+esac
+# A service's explicit duration is a ceiling; the manager's default is a
+# fallback only when no service duration was provided. The Effective property
+# is cross-check evidence (and a fallback when explicit reads are unavailable),
+# not a replacement for the per-unit value that -Apply projected.
+case "$systemd_default_raw" in
+  ''|0|infinity|*infinity) ;;
+  *)
+    if [ "$existing_default_seconds" -le 0 ]; then
+      start_seconds=''
+    else
+      case "$start_seconds" in
+        ''|*[!0-9]*) : ;;
+        *)
+          if [ "$start_seconds" -gt "$existing_default_seconds" ]; then
+            start_seconds="$existing_default_seconds"
+          fi
+          ;;
+      esac
+    fi
+    ;;
+esac
 case "$start_seconds" in
   ''|*[!0-9]*)
-    echo "updater-schedule-timeout-start=UNVERIFIED raw=${start_usec_raw:-ABSENT}"
+    echo "updater-schedule-timeout-start=UNVERIFIED raw=${effective_start_raw:-ABSENT}"
     flag "timeout_start_unreadable" updater-schedule-budget
     ;;
   *)
     echo "updater-schedule-timeout-start=${start_seconds}s"
-    if [ "$start_seconds" -le 600 ]; then
+    case "$start_property" in
+      '') echo "updater-schedule-timeout-source=default" ;;
+      explicit:*) echo "updater-schedule-timeout-source=property" ;;
+    esac
+    # A shorter or longer unit is a configuration change that needs a fresh
+    # review of the independent call-site ceilings and recovery paths.
+    if [ "$budget_valid" -eq 1 ] && [ "$budget_declaration" = exact ] &&
+      [ "$largest_budget" -lt "$start_seconds" ] &&
+      [ "$start_seconds" -eq "$expected_start_seconds" ]; then
       flag OK updater-schedule-budget
+    elif [ "$budget_valid" -eq 1 ] && [ "$largest_budget" -ge "$start_seconds" ]; then
+      flag "single_budget=${largest_budget}s" updater-schedule-budget
     else
       flag "timeout_start=${start_seconds}s" updater-schedule-budget
     fi

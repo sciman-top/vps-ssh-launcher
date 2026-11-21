@@ -17,7 +17,7 @@
 | 工具 | 回答的问题 | 输入 |
 |---|---|---|
 | `scripts/cpa_failure_triage.py` | **这次请求**为什么失败（本机闸门 / admission 队列 / 上游容量 / 死路由） | Cockpit sqlite + 可选 doctor 输出 |
-| `scripts/cpa_admission_risk_audit.py` | **这份配置**安不安全、**宣告的名字**有没有失效的 | `cpa-admission.json` + `cpa_provider_routes.json` + Cockpit sqlite |
+| `scripts/cpa_admission_risk_audit.py` | **这份配置**安不安全、**宣告的名字**有没有失效的 | `cpa-admission.json` + `cpa_provider_routes.json` + Cockpit sqlite + 本机客户端模型目录 |
 | `scripts/remote/cpa-health.py`（远端） | 上游现在能不能生成（真实探针） | 远端运行时 |
 | `scripts/remote/cpa_policy.py`（远端） | 已部署配置的语义是否合规 | 远端 config + 清单 |
 | `scripts/cockpit_provider_health.py` | 本机 Cockpit 侧车/provider 接线对不对 | `~/.codex` + `~/.antigravity_cockpit` |
@@ -56,13 +56,16 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `pooled-alias-not-duplicate` | fail | `pooled_aliases` 中的名字没有实际多路由持有者 | 防止陈旧例外掩盖目录漂移 |
 | `lane-cooldown-ladder-mismatch` | fail | `cooldown_schedule_seconds[-1] == cooldown_cap_seconds` | 阶梯与声明上限不一致 ⇒ 实际退避不可预测 |
 | `lane-cooldown-ladder-missing` | fail | 阶梯存在 | 没有阶梯就没有退避 |
-| `lane-cooldown-server-cap` | warn | `retry_after_max_seconds > cooldown_cap_seconds` | **上游 `Retry-After` 能把整条 lane 钉到远超阶梯上限**（本栈 = 86400s vs 900s）。尊重上游退避是防封号的正确选择，但必须知道它意味着"整条 lane 可能数小时全灭"，而不是当作客户端 bug |
+| `lane-cooldown-server-cap` | warn | `retry_after_max_seconds > cooldown_cap_seconds` | **上游 `Retry-After` 能把一条 lane 钉到远超其阶梯上限**（本栈全局值 = 86400s vs 900s）。普通受管 lane 的显式等待受 86400s 上限；Antigravity 的 `strict_backoff` 保留完整正等待，`Retry-After: 259200` 可为 3 天。尊重上游退避是防封号的正确选择，但必须读 `/healthz` 与当次策略，不能把全局数当作所有 lane 的最长窗口 |
+| `model-cooldown-server-cap` | warn | 同上且该 lane 有 `model_capacity_markers` | 同一个上游窗口也可能经模型级冷却只停被点名的模型；此时兄弟模型仍可用，应查 `/healthz.model_cooldowns`。不能因看见别的模型正常就判定窗口不存在 |
+| `cooldown-window-unreadable` | warn | `retry_after_max_seconds` 或 `cooldown_cap_seconds` 不是正整数 | 无法计算最长上游退避，不能把未知窗口误报为零 |
 | `lane-capacity-status-missing` | fail | `capacity_statuses ⊇ {429, 503}` | 少一个就漏掉一类容量失败 |
 | `lane-capacity-marker-missing` | fail | `capacity_markers ⊇ {server_is_overloaded, usage_limit_reached}` | `stream-bootstrap-buffering=false` 后 CPA 会回 **200 + 体内容量标记**，只看状态码会把过载当成功 |
 | `lane-model-capacity-marker-scope` | fail | `model_capacity_markers ⊆ capacity_markers` | 把凭证级标记写进模型级作用域 ⇒ 真过载只停一个模型，其余兄弟模型继续打同一账号 |
 | `lane-model-capacity-scope-missing` | fail | `chatgpt-oauth.model_capacity_markers ⊇ {selected model is at capacity, model_at_capacity}` | 2026-10-10 实测：这两串上游说的是**单个模型**，被当成整条 lane 的信号时 `gpt-6-luna` 的容量窗口把 `gpt-6.1-sol` 也拒了（`retry_after=471`），桌面侧显示"Selected model is at capacity"以外的 retry-limit 429 |
 | `lane-model-not-advertised` | fail | lane 的每个 model 都被某条路由宣告 | 陈旧 lane 成员一旦失败会开**整条 lane** 的冷却（跨模型污染） |
 | `lane-model-in-multiple-lanes` | fail | 一个 model 只属一条 lane | 同上，且冷却语义互相干扰 |
+| `oauth-api-key-fallback-missing` | info | OAuth 路由在当前清单中没有任何 provider-slot 同名承载 | 只读显示官方 API 备用路径缺口；它**不是**排除表违规，也不自动添加 key、改预算或把订阅 OAuth 包装成 API 计费 |
 | `oauth-exclusion-violation` | fail | `gpt 路由 alias ⊆ oauth_exclusions` | 防 API-key 路由被订阅账号承载 |
 | `codex-key-exclusion-violation` | fail | `(gpt 路由 ∪ oauth alias) ⊆ codex_api_key_exclusions` | 防订阅模型被共享 API key 承载 |
 | `lane-route-coverage-missing` | fail | 每条声明 `admission_lane` 的路由其**全部** alias 都在该 lane 的 `models` 里；且该 lane 确实存在 | 清单声明"走共享账号"，lane 才是限流的实现。两者之间没有别的联接：在路由上新增一个没进 lane 的名字 = 这个名字**无并发上限、无容量熔断**地打共享账号，正是自伤封号的形状 |
@@ -86,6 +89,18 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |
 | `attribution-boundary` | info | 有路由命中时追加：**名字→槽位的映射只是清单投影，不是"哪条上游服务的"证明** |
 | `late-stream-failures` | info | 窗口内 `success=0` 且 HTTP 2xx 的行数 ⇒ **这是决定要不要放宽容量探测窗口的唯一证据** |
+
+本机客户端模型选择（`~/.codex/.cockpit-experimental-model-catalog-config.json`，可用
+`--client-catalog` 指向一次性 fixture）在姿态半边另做只读比较；不进入远端准入，也不证明
+桌面 picker 实际显示的选择。`--skip-posture` 只跳过这两项本机数据检查。
+
+| 发现码 | 严重度 | 判据 |
+|---|---|---|
+| `client-catalog-retired-model` | warn | 客户端把当前 provider 墓碑里的名字列为可选；从客户端撤选项，不要复活路由或轮换凭据 |
+| `client-catalog-unroutable-model` | warn | 可选名字不在当前路由清单；选中它不能由预期 admission lane 兜住 |
+| `client-catalog-default-unroutable` | fail | 默认模型不是当前可路由名字 |
+| `client-catalog-invalid-models` | fail | 模型项缺失 `model_id` 或重复 |
+| `client-catalog-schema` / `client-catalog-unreadable` | warn | 目录版本或结构无法按已复核 writer 解释；**比较不可用，不是无残留** |
 
 **失败口径 = `success=0`，不是状态码。** `success` 是 app 自己的判决且从不为空；
 实测全库 37,150 行没有 `http_status`，其中 **36,206 行是成功的** ⇒ 把"没有状态"当失败
@@ -144,16 +159,18 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
    桌面目录与所选网关的可路由集合一致。
 4. `advertised-failing-route-stale` ⇒ 先别改路由。它的最新一次请求是成功的，说明故障
    窗口已过；确认 `last failure N min` 与"最近一次成功"的先后，再决定是否需要动作。
-5. `lane-cooldown-server-cap` 是**接受项**，不是待修项：它描述的是"尊重上游退避"与
-   "可用性"之间的取舍。出现长时间 429 时先读远端
-   `curl -s http://127.0.0.1:8318/healthz` 的 `cooldown_remaining`，再决定是否等待。
+5. `lane-cooldown-server-cap` / `model-cooldown-server-cap` 是**接受项**，不是统一缩短
+   上游窗口的待修项：它们描述的是"尊重上游退避"与"可用性"之间的取舍。出现长时间
+   429 时先读远端 `curl -s http://127.0.0.1:8318/healthz` 的 `cooldown_remaining`
+   与 `model_cooldowns`，区分整条 lane 与单模型窗口，再决定是否等待。
    **WorkBuddy 6004 的体解析 reset 是例外（2026-11-06 起）**：`workbuddy_6004_retry_after()`
    从 6004 文案里取 `将于 … UTC+8 重置` 后，只按 `WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300`
    镜像，不再按上游窗口（实测一次 22254s）钉住模型名。原因：6004 是**每凭据**的模型窗口，
-   而 `deepseek-v4.1-flash` 是 `pooled_aliases`（WorkBuddy 主、OpenCode 备），admission 按
-   **模型名**判 lane ⇒ 镜像整段窗口会连备份 provider 一起删掉，客户端看到
-   `retry after 22210s` 而账号在官方客户端完全正常。封顶后模型最多停 5 分钟，
-   下一次请求可以落到别的凭据或 OpenCode。真正的每凭据 park 仍由插件持有，不需要 admission 代管。
+   admission 按**模型名**排窗口；当前 `deepseek-v4.1-flash` 只由 WorkBuddy 插件承载
+   （OpenCode 槽已于 2026-11-20 退役），`pooled_aliases` 为空。若以后重新池化，仍不能把
+   整段窗口扩展到另一个合法 provider；封顶后下一次独立请求可由插件选择其他合格凭据。
+   真正的每凭据 park 由插件持有，不需要 admission 代管。该封顶只处理能解析出 reset 的
+   6004 体，不能把它当成所有 WorkBuddy 等待都可以缩短。
 6. `capacity-probe-window` 想收紧时，改的是 `cpa-admission.json` 的 `probe_bytes`，
    属于**契约变更**：同一提交同步 `.py` + `.json` + 测试 + 本页。
 
@@ -177,3 +194,5 @@ Direct API 可能绕过本机侧车日志。`cpa_failure_triage.py` 在窗口没
 - 不要因为它报了 `lane-cooldown-server-cap` 就去把 `retry_after_max_seconds` 调小：
   那会让本地在账号配额耗尽时继续压上游，正是防封号要避免的方向。
 - 不要只退役 CPA 侧裸名就以为客户端不会再选到它。
+- 不要把 `client-catalog-schema` / 缺失或不可读的客户端目录当成干净；
+  不要把可路由名单过滤后的结果反过来决定哪些名字是 retired。

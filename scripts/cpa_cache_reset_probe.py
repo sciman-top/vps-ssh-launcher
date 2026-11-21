@@ -1,47 +1,24 @@
 #!/usr/bin/env python3
-r"""Attribute cold cache restarts inside one multi-turn conversation.
+r"""Compare cold cache turns in the CPA admission journal.
 
-The admission journal records usage_in / usage_cached per turn and a
-client_request_hash derived from the client's request-id header. Two turns
-that share that hash belong to one upstream conversation, so their input
-lengths should grow monotonically and their cached share should stay high.
+Rows are correlated by client_request_hash, derived from a client request-ID
+header. Some clients reuse that header for a session and others use a fresh ID
+per request. The grouping is a hint, with no visibility into upstream session
+identity, credential selection, exact prompt prefixes, or provider cache TTL.
 
-On 2026-11-15 a read-only review found conversations where a 240k-token prefix
-was established and the next turn reported usage_cached=0. That costs a full
-re-prefill (~240k uncached input tokens) and is exactly the shape users report
-as "generation suddenly got slow". The cause had not been isolated, and the
-obvious candidates pull in opposite directions:
+The labels describe what changed between correlated rows:
 
-* the gateway session-affinity-ttl (1h) expiring and re-picking a credential;
-  the new backend does not share the old backend cache;
-* (updated 2026-11-18 to session-affinity-ttl: 6h after isolating >1h workday
-  pause rebinds);
-* the client switching models inside the same conversation;
-* the provider evicting its own prompt cache.
-
-This tool separates those cases from the journal alone. It never sends a
-request, never prints prompt text, and never emits a credential or request id.
-
-Classification is deliberately conservative. A cold turn is labelled with the
-strongest mechanism the surrounding records can prove:
-
-rebind
-    The conversation moved to a different instance_hash. Only a client that
-    reports X-Cockpit-Instance-Id can be classified this way.
+client_instance_switch
+    The client reported a different X-Cockpit-Instance-Id hash.
 model_switch
-    The previous turn in the same conversation used a different model.
+    The previous correlated turn requested a different model.
 lane_switch
-    The previous turn in the same conversation used a different lane.
-cache_eviction
-    Same instance, same lane, same model, so nothing the gateway chose changed
-    and the loss is upstream or a client prefix rewrite.
+    The previous correlated turn used a different admission lane.
+warm_to_cold
+    The previous comparable turn reported cache reads. The cause of the drop
+    remains unknown.
 unattributed
-    The preceding turn reported no usage at all, so there is nothing to compare.
-
-A lane_switch turn is the case the gateway can actually fix: the provider
-answers the base model name while the route asks for a variant (flash-n for
-flash-high, hy4-flash-free for hy4flash-free). Without normalisation those
-count as extra model switches and inflate the eviction bucket.
+    There is no comparable prior turn, or the prior turn was already cold.
 
 Examples:
 
@@ -132,6 +109,10 @@ class Turn:
         return self.usage_in is not None or self.usage_cached is not None
 
     @property
+    def has_cache_usage(self) -> bool:
+        return self.usage_in is not None and self.usage_cached is not None
+
+    @property
     def prompt_tokens(self) -> Optional[int]:
         """Total prompt tokens across inclusive and additive provider shapes.
 
@@ -172,7 +153,7 @@ class Turn:
 
 @dataclass
 class Finding:
-    """One cold turn plus the strongest mechanism its neighbours prove."""
+    """One cold turn and the observable change from its correlated history."""
 
     turn: Turn
     previous: Optional[Turn]
@@ -200,7 +181,10 @@ def parse_journal(lines: Iterable[str]) -> list[Turn]:
             continue
         stamp = _TIMESTAMP.match(line)
         fields = dict(_FIELD.findall(line))
-        if "lane" not in fields:
+        status = _int_or_none(fields.get("status"))
+        if "lane" not in fields or status is None or not 200 <= status < 300:
+            continue
+        if fields.get("successful", "true") != "true":
             continue
         turns.append(
             Turn(
@@ -247,17 +231,17 @@ def filter_hours(turns: Sequence[Turn], hours: Optional[float]) -> list[Turn]:
 def classify(turn: Turn, previous: Optional[Turn]) -> Tuple[str, str]:
     """Return (mechanism, detail) for a cold turn."""
 
-    if previous is None or not previous.has_usage:
-        return "unattributed", "no preceding turn with usage in this conversation"
+    if previous is None:
+        return "unattributed", "no preceding correlated turn with cache usage"
     if turn.instance and previous.instance and turn.instance != previous.instance:
-        return "rebind", "instance {0} -> {1}".format(previous.instance, turn.instance)
+        return "client_instance_switch", "client instance changed"
     if previous.model != turn.model:
         return "model_switch", "{0} -> {1}".format(previous.model, turn.model)
     if previous.lane != turn.lane:
         return "lane_switch", "{0} -> {1}".format(previous.lane, turn.lane)
-    if previous.usage_cached and turn.usage_in is not None:
-        return "cache_eviction", "{0} tokens re-prefilled".format(turn.usage_in)
-    return "cache_eviction", "cached prefix dropped with no identifying change"
+    if previous.usage_cached:
+        return "warm_to_cold", "previous correlated turn reported cache reads"
+    return "unattributed", "previous correlated turn was also cold"
 
 
 def attribute(
@@ -280,7 +264,7 @@ def attribute(
             if turn.cold(min_prefix_tokens):
                 mechanism, detail = classify(turn, previous)
                 findings.append(Finding(turn, previous, mechanism, detail))
-            if turn.has_usage:
+            if turn.has_cache_usage:
                 previous = turn
     findings.sort(key=lambda item: item.turn.at)
     return findings
@@ -300,20 +284,21 @@ def summarise(
     multi_turn = {k: v for k, v in conversations.items() if len(v) > 1}
 
     mechanism_counts: dict[str, int] = defaultdict(int)
-    lost_tokens = 0
+    cold_input_tokens = 0
     for finding in findings:
         mechanism_counts[finding.mechanism] += 1
-        lost_tokens += finding.turn.usage_in or 0
+        cold_input_tokens += finding.turn.usage_in or 0
 
-    cached = sum(t.usage_cached or 0 for t in turns if t.has_usage)
-    uncached = sum(t.uncached_tokens or 0 for t in turns if t.has_usage)
+    cache_reports = [turn for turn in turns if turn.has_cache_usage]
+    cached = sum(t.usage_cached or 0 for t in cache_reports)
+    uncached = sum(t.uncached_tokens or 0 for t in cache_reports)
     total = cached + uncached
     # Probe and title requests carry usage but no reusable prefix. They are
     # legitimate traffic, yet including them in the denominator is what made a
     # review read a healthy lane as a 12% hit ratio.
     cache_turns = [
         t
-        for t in turns
+        for t in cache_reports
         if t.prompt_tokens is not None and t.prompt_tokens >= min_prefix_tokens
     ]
     eligible_cached = sum(t.usage_cached or 0 for t in cache_turns)
@@ -322,6 +307,7 @@ def summarise(
     return {
         "turns": len(turns),
         "turns_with_usage": sum(1 for t in turns if t.has_usage),
+        "turns_with_cache_usage": len(cache_reports),
         "cache_eligible_turns": len(cache_turns),
         "eligible_cache_hit_ratio": (
             round(eligible_cached / eligible_total, 4)
@@ -332,7 +318,10 @@ def summarise(
         "multi_turn_conversations": len(multi_turn),
         "cold_conversations": len({f.turn.conversation for f in findings}),
         "restarts": len(findings),
-        "restart_lost_tokens": lost_tokens,
+        "cold_input_tokens": cold_input_tokens,
+        # Legacy field for JSON consumers. It counts observed cold input,
+        # including first turns, without estimating avoidable token spend.
+        "restart_lost_tokens": cold_input_tokens,
         "cache_hit_ratio": round(cached / total, 4) if total else None,
         "mechanisms": dict(sorted(mechanism_counts.items())),
     }
@@ -345,11 +334,12 @@ def render(summary: Mapping[str, object], findings: Sequence[Finding]) -> str:
     for key in (
         "turns",
         "turns_with_usage",
+        "turns_with_cache_usage",
         "conversations",
         "multi_turn_conversations",
         "cold_conversations",
         "restarts",
-        "restart_lost_tokens",
+        "cold_input_tokens",
         "cache_hit_ratio",
         "cache_eligible_turns",
         "eligible_cache_hit_ratio",

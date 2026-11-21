@@ -49,14 +49,24 @@ DEFAULT_ROUTES = pathlib.Path(__file__).parent / "remote" / "cpa_provider_routes
 DEFAULT_DB = (
     pathlib.Path.home() / ".antigravity_cockpit" / "codex_local_access_logs.sqlite"
 )
+DEFAULT_CLIENT_CATALOG = (
+    pathlib.Path.home() / ".codex" / ".cockpit-experimental-model-catalog-config.json"
+)
 
 # A lane whose cooldown ladder ends below retry_after_max_seconds can still be
-# pinned for the full server-advertised window (see the `cooldown-server-cap`
-# finding). That is deliberate -- honouring the upstream's own Retry-After is the
-# ban-safe choice -- but it must never be a surprise, so the audit reports the
-# exposure explicitly instead of leaving it to whoever reads the code.
+# pinned for the full server-advertised window (see the `*-server-cap` findings).
+# That is deliberate -- honouring the upstream's own Retry-After is the ban-safe
+# choice -- but it must never be a surprise. A model-scoped upstream signal can
+# enter the model cooldown map through `release()` even when the lane ladder is
+# shorter, so lane-only accounting would understate the outage.
 REQUIRED_CAPACITY_STATUSES = (429, 503)
 REQUIRED_CAPACITY_MARKERS = ("server_is_overloaded", "usage_limit_reached")
+# Mirrors STRICT_OAUTH_LANES in cpa-admission.py. These lanes honour a positive
+# provider Retry-After from the first refusal without applying the global cap;
+# Antigravity may therefore remain shut beyond retry_after_max_seconds.
+STRICT_COOLDOWN_LANES = frozenset(
+    {"antigravity-oauth", "claude-oauth", "workbuddy-oauth", "workbuddy-intl-oauth"}
+)
 # The ChatGPT OAuth lane serves several models from one subscription account and
 # the upstream names the model it cannot serve (`Selected model is at capacity`)
 # while still serving its siblings -- measured 2026-10-10, when that marker kept
@@ -93,6 +103,7 @@ SEVERITY_FAIL = "fail"
 SEVERITY_WARN = "warn"
 SEVERITY_INFO = "info"
 _SEVERITY_RANK = {SEVERITY_INFO: 0, SEVERITY_WARN: 1, SEVERITY_FAIL: 2}
+CLIENT_CATALOG_SCHEMA_VERSION = 4
 
 # Bucket for rows whose requested model the client log could not resolve. It is
 # excluded from the per-model posture findings because it is not a model name.
@@ -233,26 +244,42 @@ def advertised_aliases(routes: dict[str, Any]) -> dict[str, str]:
 
     owners: dict[str, str] = {}
     for provider in routes.get("providers", []):
+        if not isinstance(provider, dict):
+            continue
         label = f"slot{provider.get('slot')}:{provider.get('name')}"
-        for model in provider.get("models", []):
+        for model in provider.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias")
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
-    for route in routes.get("codex_api_key_routes", []):
+    for route in routes.get("codex_api_key_routes") or []:
+        if not isinstance(route, dict):
+            continue
         label = f"codex-key:{route.get('name', route.get('base-url'))}"
-        for model in route.get("models", []):
+        for model in route.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias") or model.get("name")
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
-    for route in routes.get("claude_api_key_routes", []):
+    for route in routes.get("claude_api_key_routes") or []:
+        if not isinstance(route, dict):
+            continue
         label = f"claude-key:{route.get('name', route.get('base-url'))}"
-        for model in route.get("models", []):
+        for model in route.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias") or model.get("name")
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
-    for route in routes.get("oauth_routes", []):
+    for route in routes.get("oauth_routes") or []:
+        if not isinstance(route, dict):
+            continue
         label = f"oauth:{route.get('name')}"
-        for model in route.get("models", []):
+        for model in route.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias")
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
@@ -266,27 +293,43 @@ def advertised_aliases(routes: dict[str, Any]) -> dict[str, str]:
 
 def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
     seen: dict[str, list[str]] = {}
-    for provider in routes.get("providers", []):
+    for provider in routes.get("providers") or []:
+        if not isinstance(provider, dict):
+            continue
         label = f"slot{provider.get('slot')}:{provider.get('name')}"
-        for model in provider.get("models", []):
+        for model in provider.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias")
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
-    for route in routes.get("codex_api_key_routes", []):
+    for route in routes.get("codex_api_key_routes") or []:
+        if not isinstance(route, dict):
+            continue
         label = f"codex-key:{route.get('name', route.get('base-url'))}"
-        for model in route.get("models", []):
+        for model in route.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias") or model.get("name")
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
-    for route in routes.get("claude_api_key_routes", []):
+    for route in routes.get("claude_api_key_routes") or []:
+        if not isinstance(route, dict):
+            continue
         label = f"claude-key:{route.get('name', route.get('base-url'))}"
-        for model in route.get("models", []):
+        for model in route.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias") or model.get("name")
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
-    for route in routes.get("oauth_routes", []):
+    for route in routes.get("oauth_routes") or []:
+        if not isinstance(route, dict):
+            continue
         label = f"oauth:{route.get('name')}"
-        for model in route.get("models", []):
+        for model in route.get("models") or []:
+            if not isinstance(model, dict):
+                continue
             alias = model.get("alias")
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
@@ -405,52 +448,64 @@ def _declared_lane_coverage(
     """
 
     entries: list[tuple[str, str, list[str]]] = []
-    for provider in routes.get("providers", []):
+    for provider in routes.get("providers") or []:
+        if not isinstance(provider, dict):
+            continue
         lane = provider.get("admission_lane")
         if not isinstance(lane, str) or not lane:
             continue
         aliases = [
             model["alias"]
-            for model in provider.get("models", [])
-            if isinstance(model.get("alias"), str) and model["alias"]
+            for model in provider.get("models") or []
+            if isinstance(model, dict)
+            and isinstance(model.get("alias"), str)
+            and model["alias"]
         ]
         entries.append(
             (f"slot{provider.get('slot')}:{provider.get('name')}", lane, aliases)
         )
-    for route in routes.get("codex_api_key_routes", []):
+    for route in routes.get("codex_api_key_routes") or []:
+        if not isinstance(route, dict):
+            continue
         lane = route.get("admission_lane")
         if not isinstance(lane, str) or not lane:
             continue
         aliases = [
             model["alias"] or model["name"]
-            for model in route.get("models", [])
+            for model in route.get("models") or []
             if isinstance(model, dict)
             and isinstance(model.get("alias") or model.get("name"), str)
         ]
         entries.append(
             (f"codex-key:{route.get('name', route.get('base-url'))}", lane, aliases)
         )
-    for route in routes.get("claude_api_key_routes", []):
+    for route in routes.get("claude_api_key_routes") or []:
+        if not isinstance(route, dict):
+            continue
         lane = route.get("admission_lane")
         if not isinstance(lane, str) or not lane:
             continue
         aliases = [
             model["alias"] or model["name"]
-            for model in route.get("models", [])
+            for model in route.get("models") or []
             if isinstance(model, dict)
             and isinstance(model.get("alias") or model.get("name"), str)
         ]
         entries.append(
             (f"claude-key:{route.get('name', route.get('base-url'))}", lane, aliases)
         )
-    for route in routes.get("oauth_routes", []):
+    for route in routes.get("oauth_routes") or []:
+        if not isinstance(route, dict):
+            continue
         lane = route.get("admission_lane")
         if not isinstance(lane, str) or not lane:
             continue
         aliases = [
             model["alias"]
-            for model in route.get("models", [])
-            if isinstance(model.get("alias"), str) and model["alias"]
+            for model in route.get("models") or []
+            if isinstance(model, dict)
+            and isinstance(model.get("alias"), str)
+            and model["alias"]
         ]
         entries.append((f"oauth:{route.get('name')}", lane, aliases))
     for route in routes.get("plugin_routes", []):
@@ -564,6 +619,175 @@ def newest_row_age_hours(db_path: pathlib.Path) -> float | None:
         return (now_ms - float(newest)) / 3_600_000.0
     finally:
         connection.close()
+
+
+def catalog_routable_names(
+    routes: dict[str, Any], *, include_retired: bool = False
+) -> set[str]:
+    """Return client-visible aliases, with tombstones removed unless requested.
+
+    Retired names may still be served by a different route kind (for example,
+    Antigravity advertises Claude aliases). A provider's tombstone therefore
+    retires only that provider's copy of the name, not the name globally.
+    :func:`audit_client_catalog` uses a global retired set for diagnostics.
+    """
+    names = _catalog_set(routes, include_retired=include_retired, provider_only=True)
+    names.update(_catalog_set(routes, include_retired=include_retired))
+    return names
+
+
+def _retired_catalog_names(routes: dict[str, Any]) -> set[str]:
+    tombstones = {
+        name
+        for provider in routes.get("providers") or []
+        if isinstance(provider, dict)
+        for name in provider.get("retired_models") or []
+        if isinstance(name, str) and name and name != UNPARSED_MODEL
+    }
+    retired = tombstones.copy()
+    for provider in routes.get("providers") or []:
+        if not isinstance(provider, dict):
+            continue
+        provider_retired = set(provider.get("retired_models") or ())
+        for model in provider.get("models") or []:
+            if not isinstance(model, dict):
+                continue
+            alias = model.get("alias")
+            if isinstance(alias, str) and alias and alias not in provider_retired:
+                retired.discard(alias)
+    for key in ("oauth_routes", "plugin_routes"):
+        for route in routes.get(key) or []:
+            if not isinstance(route, dict):
+                continue
+            for model in route.get("models") or []:
+                if not isinstance(model, dict):
+                    continue
+                alias = model.get("alias")
+                if isinstance(alias, str) and alias in tombstones:
+                    retired.discard(alias)
+    return retired
+
+
+def _catalog_set(
+    routes: dict[str, Any], *, include_retired: bool, provider_only: bool = False
+) -> set[str]:
+    names: set[str] = set()
+    for provider in routes.get("providers") or []:
+        if not isinstance(provider, dict):
+            continue
+        retired = {
+            name
+            for name in provider.get("retired_models") or []
+            if isinstance(name, str) and name
+        }
+        if include_retired and provider_only:
+            names.update(retired)
+        for model in provider.get("models") or []:
+            if not isinstance(model, dict):
+                continue
+            alias = model.get("alias")
+            if (
+                isinstance(alias, str)
+                and alias
+                and alias != UNPARSED_MODEL
+                and (include_retired or alias not in retired)
+            ):
+                names.add(alias)
+    if provider_only:
+        return names
+    for key in ("oauth_routes", "plugin_routes"):
+        for route in routes.get(key) or []:
+            if not isinstance(route, dict):
+                continue
+            for model in route.get("models") or []:
+                if not isinstance(model, dict):
+                    continue
+                name = model.get("alias")
+                if isinstance(name, str) and name and name != UNPARSED_MODEL:
+                    names.add(name)
+    return names
+
+
+def audit_client_catalog(catalog: Any, routes: dict[str, Any]) -> list[Finding]:
+    """Fail on client catalog names that the current routes cannot serve."""
+    if not isinstance(catalog, dict):
+        return [
+            Finding(
+                "client-catalog-unreadable",
+                SEVERITY_WARN,
+                "local client catalog is malformed; no client/model routing "
+                "comparison was made",
+            )
+        ]
+    models = catalog.get("models")
+    default_model = catalog.get("default_model_id")
+    if catalog.get("version") != CLIENT_CATALOG_SCHEMA_VERSION or not isinstance(
+        models, list
+    ):
+        return [
+            Finding(
+                "client-catalog-schema",
+                SEVERITY_WARN,
+                "local client catalog schema differs from the reviewed writer; "
+                "the client-to-gateway comparison is unavailable",
+            )
+        ]
+
+    routable = catalog_routable_names(routes)
+    retired = _retired_catalog_names(routes)
+    seen: dict[str, int] = {}
+    malformed: list[str] = []
+    for position, model in enumerate(models):
+        name = model.get("model_id") if isinstance(model, dict) else None
+        if not isinstance(name, str) or not name:
+            malformed.append(f"#{position}")
+            continue
+        seen[name] = seen.get(name, 0) + 1
+    malformed.extend(
+        f"{name!r}x{count}" for name, count in sorted(seen.items()) if count > 1
+    )
+    if malformed:
+        return [
+            Finding(
+                "client-catalog-invalid-models",
+                SEVERITY_FAIL,
+                "local client catalog has malformed or duplicate model IDs: "
+                + ", ".join(malformed[:12]),
+            )
+        ]
+
+    findings = [
+        Finding(
+            "client-catalog-retired-model",
+            SEVERITY_WARN,
+            f"local client catalog advertises retired model {name!r}; remove "
+            "that selection from the client rather than reviving the route or "
+            "rotating credentials",
+        )
+        for name in sorted(seen.keys() & retired)
+    ]
+    findings.extend(
+        Finding(
+            "client-catalog-unroutable-model",
+            SEVERITY_WARN,
+            f"local client catalog advertises {name!r}, which is absent from "
+            "the current route manifest; its selection cannot be admission-gated "
+            "as the intended route",
+        )
+        for name in sorted(seen.keys() - routable - retired)
+    )
+    if default_model is not None and (
+        not isinstance(default_model, str) or default_model not in routable
+    ):
+        findings.append(
+            Finding(
+                "client-catalog-default-unroutable",
+                SEVERITY_FAIL,
+                f"local client default model {default_model!r} is not currently "
+                "routable",
+            )
+        )
+    return findings
 
 
 def observed_late_stream_failures(db_path: pathlib.Path, hours: float) -> int:
@@ -688,11 +912,129 @@ def observed_live_failure_by_model(
         connection.close()
 
 
+def api_key_fallback_projection(routes: dict[str, Any]) -> list[Finding]:
+    """Expose OAuth names without an official API-key route.
+
+    This is a read-only capability projection, not an exclusion check. The
+    manifest deliberately prevents subscription OAuth aliases from being
+    silently served by a shared API-key route, so current exclusions remain
+    correct even when they produce this list. It identifies names for which an
+    operator may choose a separately reviewed official API route; it never
+    adds credentials or changes routing.
+    """
+
+    providers = routes.get("providers")
+    oauth_routes = routes.get("oauth_routes")
+    if not isinstance(providers, list) or not isinstance(oauth_routes, list):
+        return [
+            Finding(
+                "oauth-api-key-fallback-unreadable",
+                SEVERITY_INFO,
+                "provider or OAuth route inventory is malformed; official API-key "
+                "fallback coverage was not assessed",
+            )
+        ]
+
+    def records(value: list[Any]) -> list[dict[str, Any]]:
+        return [item for item in value if isinstance(item, dict)]
+
+    def route_aliases(route: dict[str, Any]) -> set[str]:
+        models = route.get("models")
+        if not isinstance(models, list):
+            return set()
+        return {
+            model["alias"]
+            for model in records(models)
+            if isinstance(model.get("alias"), str) and model["alias"]
+        }
+
+    findings: list[Finding] = []
+    provider_owners: dict[str, str] = {}
+    oauth_names: set[str] = set()
+    for provider in providers:
+        if not isinstance(provider, dict):
+            findings.append(
+                Finding(
+                    "oauth-api-key-fallback-unreadable",
+                    SEVERITY_INFO,
+                    "a provider route is malformed; official API-key fallback "
+                    "coverage was not assessed",
+                )
+            )
+            continue
+        models = provider.get("models")
+        if not isinstance(models, list):
+            findings.append(
+                Finding(
+                    "oauth-api-key-fallback-unreadable",
+                    SEVERITY_INFO,
+                    "a provider route has a malformed model inventory; official "
+                    "API-key fallback coverage was not assessed for that route",
+                )
+            )
+            continue
+        for alias in route_aliases(provider):
+            provider_owners.setdefault(alias, "provider slot")
+    for route in oauth_routes:
+        if not isinstance(route, dict):
+            findings.append(
+                Finding(
+                    "oauth-api-key-fallback-unreadable",
+                    SEVERITY_INFO,
+                    "an OAuth route is malformed; official API-key fallback "
+                    "coverage was not assessed",
+                )
+            )
+            continue
+        owner = str(route.get("name") or "unnamed-oauth-route")
+        if not isinstance(route.get("models"), list):
+            findings.append(
+                Finding(
+                    "oauth-api-key-fallback-unreadable",
+                    SEVERITY_INFO,
+                    f"OAuth route {owner!r} has a malformed model inventory; "
+                    "official API-key fallback coverage was not assessed for it",
+                )
+            )
+            continue
+        route_names = route_aliases(route)
+        oauth_names.update(route_names)
+        missing = sorted(route_names - set(provider_owners))
+        if not missing:
+            continue
+        found = ", ".join(missing[:8])
+        if len(missing) > 8:
+            found += f", and {len(missing) - 8} more"
+        findings.append(
+            Finding(
+                "oauth-api-key-fallback-missing",
+                SEVERITY_INFO,
+                f"OAuth route {owner!r} advertises {found} without a provider-slot "
+                "route; no separately authorized official API-key fallback is "
+                "configured. This is a capability projection, not an exclusion "
+                "violation. Adding one requires an explicitly authorized official "
+                "API project and budget; do not relabel OAuth as API billing or "
+                "switch accounts automatically",
+            )
+        )
+    for alias in sorted(oauth_names & set(provider_owners)):
+        findings.append(
+            Finding(
+                "oauth-provider-name-overlap",
+                SEVERITY_INFO,
+                f"name {alias!r} is declared on both an OAuth route and a provider "
+                "slot; duplicate-route rules decide which route serves it",
+            )
+        )
+    return findings
+
+
 def audit_contract(
     admission: dict[str, Any],
     routes: dict[str, Any],
 ) -> list[Finding]:
     findings: list[Finding] = []
+    findings.extend(api_key_fallback_projection(routes))
     lanes = admission.get("lanes") or []
     if not lanes:
         findings.append(
@@ -752,9 +1094,10 @@ def audit_contract(
     }
     oauth_aliases = {
         model["alias"]
-        for route in routes.get("oauth_routes", [])
-        for model in route.get("models", [])
-        if isinstance(model.get("alias"), str)
+        for route in routes.get("oauth_routes") or []
+        if isinstance(route, dict)
+        for model in route.get("models") or []
+        if isinstance(model, dict) and isinstance(model.get("alias"), str)
     }
     oauth_exclusions = set(routes.get("oauth_exclusions") or [])
     key_exclusions = set(routes.get("codex_api_key_exclusions") or [])
@@ -797,11 +1140,15 @@ def audit_contract(
     lane_membership: dict[str, str] = {}
     lane_models_by_name: dict[str, set[str]] = {}
     server_capped_lanes: list[str] = []
+    server_capped_model_lanes: list[str] = []
+    unreadable_cooldown_lanes: list[str] = []
     for lane in lanes:
         name = str(lane.get("name"))
         lane_models_by_name[name] = {str(model) for model in lane.get("models") or []}
         schedule = list(lane.get("cooldown_schedule_seconds") or [])
         ladder_cap = lane.get("cooldown_cap_seconds")
+        if type(server_cap) is not int or server_cap < 1 or type(ladder_cap) is not int:
+            unreadable_cooldown_lanes.append(name)
         if not schedule:
             findings.append(
                 Finding(
@@ -819,13 +1166,27 @@ def audit_contract(
                     f"cooldown_cap_seconds is {ladder_cap}s",
                 )
             )
+        model_markers = lane.get("model_capacity_markers")
+        if model_markers is not None and not isinstance(model_markers, list):
+            findings.append(
+                Finding(
+                    "lane-model-capacity-marker-type",
+                    SEVERITY_FAIL,
+                    f"lane {name} model_capacity_markers must be a list; "
+                    "the runtime can otherwise reject the configuration",
+                )
+            )
         if (
             isinstance(server_cap, int)
             and isinstance(ladder_cap, int)
             and server_cap > ladder_cap
         ):
-            if name not in {"antigravity-oauth", "claude-oauth"}:
-                server_capped_lanes.append(name)
+            server_capped_lanes.append(name)
+            # Model-scoped markers and 429/403 affinity rebinding reach
+            # `_record_model_capacity()` before the lane-wide release path.
+            # The same Retry-After value is bounded by retry_after_max_seconds.
+            if isinstance(model_markers, list) and model_markers:
+                server_capped_model_lanes.append(name)
 
         statuses = set(lane.get("capacity_statuses") or [])
         for status in REQUIRED_CAPACITY_STATUSES:
@@ -848,16 +1209,16 @@ def audit_contract(
                         f"{marker!r}; a 200-with-overload body would go uncounted",
                     )
                 )
-        model_markers = {
-            str(marker).strip().lower()
-            for marker in lane.get("model_capacity_markers") or []
+        normalized_model_markers = {
+            str(marker).strip().lower() for marker in model_markers or []
         }
-        if not model_markers <= markers:
+        if not normalized_model_markers <= markers:
             findings.append(
                 Finding(
                     "lane-model-capacity-marker-scope",
                     SEVERITY_FAIL,
-                    f"lane {name} scopes {sorted(model_markers - markers)!r} to one "
+                    f"lane {name} scopes "
+                    f"{sorted(normalized_model_markers - markers)!r} to one "
                     "model, but they are not lane capacity markers; a "
                     "credential-level signal would stop protecting the siblings",
                 )
@@ -866,7 +1227,7 @@ def audit_contract(
             if reviewed_lane != name:
                 continue
             for marker in required:
-                if marker not in model_markers:
+                if marker not in normalized_model_markers:
                     findings.append(
                         Finding(
                             "lane-model-capacity-scope-missing",
@@ -924,16 +1285,52 @@ def audit_contract(
                 )
             )
 
+    strict_capped_lanes = set(server_capped_lanes) & STRICT_COOLDOWN_LANES
+    bounded_capped_lanes = set(server_capped_lanes) - strict_capped_lanes
     if server_capped_lanes:
+        scope = ""
+        if strict_capped_lanes:
+            scope += (
+                f"; strict lanes {', '.join(sorted(strict_capped_lanes))} honour "
+                "the full positive upstream window without this cap"
+            )
+        if bounded_capped_lanes:
+            scope += (
+                f"; bounded lanes {', '.join(sorted(bounded_capped_lanes))} cap "
+                f"the wait at {server_cap}s"
+            )
         findings.append(
             Finding(
                 "lane-cooldown-server-cap",
                 SEVERITY_WARN,
                 f"lanes {', '.join(sorted(server_capped_lanes))}: an upstream "
-                f"Retry-After can pin the lane for up to {server_cap}s even though the "
-                "failure ladder caps far lower; honouring it is the ban-safe choice, "
-                "but expect a multi-hour outage and read /healthz before blaming the "
-                "client. Antigravity honours the full upstream window without this cap",
+                "Retry-After can pin the whole lane beyond its failure ladder; "
+                f"honouring it is the ban-safe choice. Gate bound={server_cap}s"
+                f"{scope}. Read /healthz and the live policy before predicting the "
+                "outage length",
+            )
+        )
+    if server_capped_model_lanes:
+        findings.append(
+            Finding(
+                "model-cooldown-server-cap",
+                SEVERITY_WARN,
+                f"lanes {', '.join(sorted(server_capped_model_lanes))}: a "
+                f"model-scoped upstream Retry-After can park one model for up to "
+                f"{server_cap}s, above its lane cooldown ladder; healthy sibling "
+                "models remain eligible. Read "
+                "model_cooldowns in /healthz, honour the provider's wait, and do not "
+                "retry another account or shorten the window merely to restore it",
+            )
+        )
+    if unreadable_cooldown_lanes:
+        findings.append(
+            Finding(
+                "cooldown-window-unreadable",
+                SEVERITY_WARN,
+                f"lanes {', '.join(sorted(unreadable_cooldown_lanes))}: "
+                "retry_after_max_seconds or cooldown_cap_seconds is not a positive "
+                "integer; the audit cannot establish the maximum provider wait",
             )
         )
     if isinstance(probe_bytes, int) and probe_bytes < PROBE_BYTES_MIN:
@@ -1134,6 +1531,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--routes", type=pathlib.Path, default=DEFAULT_ROUTES)
     parser.add_argument("--db", type=pathlib.Path, default=DEFAULT_DB)
     parser.add_argument(
+        "--client-catalog",
+        type=pathlib.Path,
+        default=DEFAULT_CLIENT_CATALOG,
+        help="local Cockpit client catalog; compared with routable manifest names",
+    )
+    parser.add_argument(
         "--health-snapshot",
         type=pathlib.Path,
         help="saved localhost admission /healthz JSON for the live contract",
@@ -1192,12 +1595,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "proves nothing about live routing",
                 )
             )
+        if args.client_catalog.exists():
+            try:
+                findings += audit_client_catalog(load_json(args.client_catalog), routes)
+            except (OSError, ValueError) as exc:
+                findings.append(
+                    Finding(
+                        "client-catalog-unreadable",
+                        SEVERITY_WARN,
+                        f"local client catalog could not be read ({type(exc).__name__}); "
+                        "client/model routing was not compared",
+                    )
+                )
 
     if args.json:
         print(
             json.dumps(
                 {
                     "hours": args.hours,
+                    "client_catalog": (
+                        str(args.client_catalog)
+                        if not args.skip_posture and args.client_catalog.exists()
+                        else None
+                    ),
                     "findings": [finding.to_json() for finding in findings],
                 },
                 ensure_ascii=False,

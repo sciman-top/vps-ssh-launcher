@@ -216,6 +216,11 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   drain 纪律仍是第一道防线，勿因兜底存在而省略。
 - 目录瞬态 `408/429/5xx` 只做一次请求并立即停止；只有 HTTP 200 但模型仍在
   注册时才允许最多两次短间隔复验，避免健康检查自身放大 provider 限流。
+  单模型 `generation` 在消耗真实额度前另做目录重读，最多等待
+  `CPA_HEALTH_PREFLIGHT_WAIT_SECONDS`（默认 30 秒，仅允许 0/15/30/45/60）；
+  仍缺席时返回 `UPSTREAM_UNAVAILABLE` 且不发 generation。显式全路由矩阵
+  继续保留原有探针范围，最多 30 秒复核必需的目录成员；OAuth 仍需显式
+  `CPA_HEALTH_INCLUDE_OAUTH=1`，不会因目录复核自动打开。
   无新版本时不做 Luna generation；解除先前 `UNVERIFIED` 状态由人工显式执行
   一次低频探针。更新器不自动调用 `relay-soft`，每日无候选路径不会发送
   Luna/Sol/Terra/Astra generation。
@@ -291,14 +296,29 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   `[Timer]` 段（`OnCalendar=*-*-* 04:00:00`、`RandomizedDelaySec=300`），
   其余行原样保留；备份与回滚同交易（`$BK/cliproxyapi-update.timer`），
   `daemon-reload` 之前完成写入，rollback 标记 `updater_timer_slot_split`。
-- 抖动上限 300s、start 预算 1200s，保证 04:00 起跑最晚 04:05 进入锁、最晚
-  04:25 结束，不与 04:10 的月度维护抢锁。
+- 抖动上限 300s；systemd `TimeoutStartSec=40min` 是整个更新与恢复事务的
+  fail-stop，不是六条可选项的时间加总。updater 的 `AUTO_UPDATE_BUDGETS`
+  分别约束 pull 600s、Compose 180s、启停 45s、恢复 30s、Docker kill grace
+  15s、健康请求 120s；这些单项硬限才是卡死调用的主要止损点。40min 为可选
+  重试和恢复留出总边界，但不承诺所有重试都必然能在 2400s 内执行完；超限时
+  由 `TimeoutStartSec` 发出 `SIGTERM`，updater 延迟信号并在已验证的回滚边界
+  退出，恢复不了则以 `ROLLBACK_FAILED` / `manual_recovery_required=true` 留痕。
+  40min 也不是 04:00–04:30 重叠窗口的放宽：updater 拥有独立的 04:00 锚点，
+  其他维护任务分别在 04:10/04:20/04:30；宿主若额外运行同期任务，仍需以共享锁
+  与 doctor 的 `RUNNING/BUSY` 证据判断，不能宣称从不重叠。
 - doctor 新增 `==updater-schedule==`（`scripts/remote/cpa-updater-schedule-check.sh`，
   `--status` 只读模式始终退出 0）：打印四个锚点、抖动、start 预算与
   compose/容器前提的判定行。**它是决策读数而不是硬门**：doctor 在 `-Apply`
   之前运行，硬门会在每次投影变更时先失败、挡住安装拆分的那次事务；
   严格性留给 `==projection-drift==`（现场 timer 与提交内容不一致才算漂移）。
   它只证明调度面，不证明某天的更新真的执行过。
+  预算读取按 `EffectiveTimeoutStartUSec`（systemd 支持时）与每单元
+  `TimeoutStartUSec` 交叉核对，不把缺失的 Effective 属性当成 0，也不把
+  manager 默认替代一个明确 40min 的单元。显式值与 Effective 不一致、或两者
+  都读不到时 fail-closed；同时输出每项声明、其中最大单项和声明完整性，不以
+  六项（合计 990s 的单腿上界）代替实际事务耗时。40min 是保守整体 fail-stop，
+  实际耗时仍须从 updater 状态与日志判定；04:00 启动后到 04:10 月度维护前，
+  不得把“所有可选重试都能跑完”当作前提或承诺。
 - `==timer==` 同时输出 `timer_on_calendar`、`timer_randomized_delay` 与
   `timer_last_triggers`（最近触发），供人工判读拆分是否生效。
 
@@ -531,29 +551,35 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   `workbuddy-provider`）+ 7 × `workbuddyai-<uid>.json`（INTL，自
   `workbuddy-intl-` 改名，type 改写 `workbuddy-ai-provider`），
   凭据 token 原地平移、无一重登）：ChatGPT OAuth 1 个
-  账号、Antigravity OAuth 2 份凭据、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
+  账号、Antigravity OAuth 7 份凭据（2026-11-21 doctor 清点）、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
   允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
   不等于越安全**：每个凭据都是独立的账号级风险面，池化只把“单账号被限”的影响摊到
-  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 两份凭据共用同一 provider lane：未绑定会话按全局
+  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 的 7 个凭据共用同一 provider lane：未绑定会话按全局
   `routing.strategy`（现 `round-robin`）分配，会话亲和会继续固定该选择，只有配额、认证、
-  模型不支持或永久不可用信号才允许重绑定；轮转发生在**不同请求之间**，同一次失败
-  请求的跨号回退仍受 `max-retry-credentials=3` 约束，不保证每次请求都直接切换。WorkBuddy 自动回退
+  模型不支持或永久不可用信号才允许重绑定；轮转发生在**不同请求之间**。本次
+  目标将同请求凭据上限降为 `max-retry-credentials=1`，不把失败提示词重放到
+  其他消费级账号。WorkBuddy 自动回退
   是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
-- **`max-retry-credentials` 语义（易误读）**：现行全局值 `3` 将每个客户端请求
-  限制为最多三个上游凭据；配合 `request-retry=0`，不会开启额外请求级重试轮次，
-  也不会在同一请求中继续撞 OpenCode。2026-11-06 的自然流量审计发现一个
-  WorkBuddy 6004 请求触达两个不同 UID，因此保留有界回退而拒绝无限扇出。
-  可用性降级由调用方下一次明确请求或用户选定的
-  API-key 路由承担；不清冷却、不轮换凭据、不制造探针流量。
-- **路由与缓存**：现行 `session-affinity=true`、TTL `1h`、
-  `session-affinity-rebind-on=quota`、`session-affinity-subagents=false` 保持显式钉定。
+- **`max-retry-credentials` 语义（易误读）**：本轮目标值 `1` 将每个客户端请求
+  限制为单一上游凭据，配合 `request-retry=0`，不会开启额外请求级重试轮次。
+  这以瞬时可用性换取不把同一失败提示词和并发突发传播到多个账号；调用方下一次
+  明确请求或用户选定的 API-key 路由承担降级。该权衡确有代价：一个账号的瞬时
+  429 会更快成为该次请求的结果。生产仍是旧值 `3` 时，不得按这一行描述其运行态；
+  清冷却、轮换凭据或制造探针流量均不在修复授权内。
+- **路由与缓存**：`cpa_policy.py` 目标值为 `session-affinity=true`、TTL `6h`、
+  `session-affinity-rebind-on=quota`、`session-affinity-subagents=true`。前三个字段已在
+  bwg 加载；2026-11-21 最终只读 doctor 仍读到 `session-affinity-subagents=false`，
+  因此子任务亲和目标尚未投影，不能按已上线描述。
+  子任务继承父会话的凭据选择，优先保住共享前缀与模型的缓存局部性，也让一次分叉突发
+  不扩散到更多消费级账号；这属于缓存与身份集中控制，不是限流规避，也没有经过
+  自然子任务 A/B，不能保证缓存命中率上升。
   有会话标识的请求继续绑定已选凭据；瞬态 5xx、空流或缓冲失败不会因为缺省的
   `any` 语义而立即换号，从而保留缓存局部性并减少账号扩散。只有配额、认证、模型
   不支持或永久不可用信号才允许重绑定。未绑定会话的初始选择是 **`round-robin`**
   （2026-11-06 由 `fill-first` 改来：fill-first 把整个 WorkBuddy 池压到首个 ready 凭据上，
   与 per-account tripwire 的方向相反），由 `cpa_policy.py` 的 `EXPECTED_ROUTING` 机器钉定；
   它是跨请求的池内分散，不是同请求内的账号轮换，也不承诺降低上游限流。会话亲和
-  （TTL 1h）保证一次会话仍钉在一个凭据上。上游 v8 配置说明
+  （TTL 6h）保证一次会话仍钉在一个凭据上；子任务亲和上线后才会继承该选择。上游 v8 配置说明
   `switch-preview-model` 已无 v8 对应项；
   仓库仍将它钉为 `false`，供兼容旧配置，不把该字段当作 v8 运行时护栏。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
@@ -942,8 +968,17 @@ HG03-work `agy-probe-20261118/`）：上述"429 已解除"结论只基于
 （systemInstruction，大小写不敏感）+ `requests.payload.replace`（user 文本，
 antigravity 两 gemini 模型、responses 线、user 轮全量），映射沿用探针验证过的
 `codex→agentx / gpt→agentx / openai→vendor / chatgpt→chatservice`；验收=
-desktop 原样 165KB 请求体 200/completed。残余暴露面：model 历史轮次文本
+desktop 原样 165KB 请求体 200/completed。这是把一次上游过滤症状映射为可用路线的
+**临时兼容措施**，不是防封、协议授权或质量保证。现行规则对多个 Antigravity
+模型的 all-user 文本逐字替换，可能改坏自然讨论、代码和复合标识符，并令前缀字节
+变化；尚未隔离证明其收益或实际每次命中。是否停止 user 替换及另行审查 system
+替换，属于生产策略变更，须先备份、固定回滚和可复现对照，不能把 200 计数当作
+词表应保留或扩展的证据。残余暴露面：model 历史轮次文本
 （payload.replace 引擎只处理 role=user，2026-11-17 前从未触发，列为观察项）。
+词表不能随探测结果不断扩张；普通自然文本、代码与工具输出不应被无证据改写。
+2026-11-21 本地策略已停止 `requests.payload.replace` 的 user 文本改写；其 system
+替换仍待单独复核。旧远端规则尚未据此清除，部署前须完成备份、投影与读回，且不能
+以“规则还在运行”推定其应保留。
 `flash-high→flash-n` 替换与本修复无关，继续按 substitution warn 观察。
 同日 -Apply 期间 readiness fail-closed 拦截上游新增未声明模型
 `gemini-4-carbon-high`（池内凭据目录扩张，`ids-allowed` 非空两次拒跑
@@ -962,7 +997,7 @@ doctor 读到 `claude-opus-5-5-high`，上下文为 `1000000`，`MODEL_IDS_UNKNO
 状态复核与获准恢复，再考虑至多一次受控请求。当前 `main` 的提交 `3555bfb` 已记录
 运行中 v8.0.77 的二进制台账，但还包含未随本次投影部署的其他改动；本次验收结论仅
 对应实际投影源 `1287209`。
-2026-11-19 Google 发布 `gemini-4-neon`（上游以 `gemini-4-neon-xhigh` 注册，1M 统一窗口）；按用户指令将 `gemini-4-neon-xhigh` 纳入 `antigravity-oauth` 路由与准入车道，加入 `antigravity_fingerprint_swap` 防 WAF 身份词过滤（假 429），配置 1,048,576 上下文窗口，加入 `codex_api_key_exclusions` 防抢注，并同步 apply/doctor 与预言机契约。
+2026-11-19 Google 发布 `gemini-4-neon`（上游以 `gemini-4-neon-xhigh` 注册，1M 统一窗口）；按用户指令将 `gemini-4-neon-xhigh` 纳入 `antigravity-oauth` 路由与准入车道，历史版本的 user 文本身份词替换曾作为一次假 429 的临时兼容措施；配置 1,048,576 上下文窗口，加入 `codex_api_key_exclusions` 防抢注，并同步 apply/doctor 与预言机契约。
 同日按用户指令完成 `v8.0.77-gemini-raw → v8.0.78-gemini-raw` 换芯（binary `bf1e8fb5…`、
 image_id `7bb4b400…`、base index digest `9ee2d808…` 钉定；`AUTH_BYTES_UNCHANGED`、
 `LANE_HOLD_DELTA=none`、strict doctor `DOCTOR_CONTRACT_OK` + `runtime_binary_hash=MATCH`；
@@ -1629,11 +1664,11 @@ systemd 以 `nobody` 运行，并使用 mode 0700 的 `StateDirectory=cpa-admiss
 再至多单发一次授权验证请求。恢复失败立即停流，不轮换账号、不清冷却反复试通。
 隔离标记与风险停流相互独立；`-RestoreAntigravity` 仅恢复排除表。
 
-现有 `sensitive-words`、`sensitive-words-replace` 与 antigravity gemini 模型的
-`requests.payload.replace` 指纹替换规则均保留为兼容补丁；请求内容相关 429 的
-观察不能证明上游检测机制，也不能证明混淆降低封号风险。2026-11-17 上游 WAF
-升级后替换面为实证所需最小集（见上方 2026-11-18 状态段），再扩大须新证据；
-迁移官方 API 时整体退役。
+现有 `sensitive-words`、`sensitive-words-replace` 只作用于 System Instruction，
+保留为待单独复核的兼容补丁；它们不证明上游检测机制，也不证明混淆降低封号风险。
+自然 user 提示词与代码标识符不再做 `requests.payload.replace`，避免改坏内容及
+破坏 byte-stable prefix。旧部署残留的 user 替换规则须按备份、投影与回读流程单独
+清除，不能用“仍在运行”推定为仍应保留；迁移官方 API 时再整体退役 System 替换。
 日常质量/生成矩阵默认排除所有 OAuth lane，保持这一已有开关即可。
 
 `-QuarantineOAuthLuna` 与 `-RestoreOAuthLuna` 是 L3 风控静默期的**流量硬门**：

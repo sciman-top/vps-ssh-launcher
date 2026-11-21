@@ -163,13 +163,15 @@ fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换
 # 单独返回缓存读取量并出现 `cached > in` 时，审计自动改用
 # `cached / (cached + in)`，并在行尾标出 `accounting=cached_plus_reported_input`。
 # `reports=N` 是统计支持数，不代表每个 provider 都使用同一 usage 分母。
+# `cache_candidates` 只保留该请求总输入至少 20k token 的长前缀，避免标题、
+# 探活等微小冷请求污染长上下文结论；它不是 header、session 或凭据命中证明。
 ```
 
 尚需注意：并非所有 provider 都回传 usage（WorkBuddy/部分中转可能不回），
 此时 `reports` 会小于 `n`、`cache_hit_ratio=na`，仍是"未报告"而不是"零命中"。
 健康探针只计入 `requests`/`probes`，其时延、协议、吞吐、token/cache/cost
-指标不进入 `natural` 聚合。自然流量中，至少 10 个 usage 报告且累计输入不少于
-1,000,000 tokens 时，`cache_hit_ratio < 0.50` 会输出需要复核的 WARN；这是
+指标不进入 `natural` 聚合。自然流量中，长前缀候选至少 10 个、累计输入不少于
+1,000,000 tokens 时，`cache_candidate_hit_ratio < 0.50` 会输出需要复核的 WARN；这是
 本地调查阈值，不是 provider 配额或账号安全阈值。
 需要受控对照时仍可按 lane 采样：
 
@@ -184,7 +186,7 @@ python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash
 拒绝（exit 20 `CACHE_CANARY_MODEL_UNSUPPORTED`），保住"默认不消费 Plus 账号"纪律。
 基线：DeepSeek `hit_ratio=0.9579`（2026-10-05 v8.0.15 首测；2026-10-08 v8.0.16 复测同值，稳定）。GLM lane 首测 `hit_ratio=0.9956`（2026-10-08，v8.0.16，`glm-5.3-flash`；首样本冷 miss 属预期）。
 CPA 侧：`session-affinity: true`（`session-affinity-ttl: 6h`、
-`session-affinity-rebind-on: quota`、`session-affinity-subagents: false`）由本仓投影钉死
+`session-affinity-rebind-on: quota`、`session-affinity-subagents: true`）由本仓投影钉死
 （`scripts/remote/cpa_policy.py`、`scripts/remote/cpa-guardrail-apply.sh`）。CPA v8.0.45+
 缺省 `session-affinity-rebind-on` 为 `any`，本仓显式改为 `quota`：瞬态失败保留当前凭据，
 只有配额、认证、模型不支持或永久不可用才重绑定，减少账号扩散并保留缓存局部性。
@@ -777,3 +779,18 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
 - `protocol_result=malformed_event` 表示已检查的事件发生 JSON/编码解析失败；后续合法完成事件不能将该请求转为成功或清除容量失败状态。
 - `sse_inspection_complete`、`sse_malformed_json`、`sse_terminal_seen` 分别记录检查是否完整、是否确有解析失败、是否见到本协议的成功终止事件，不记录正文。
 - 旧版本 `malformed_event` 同时包含检查超限，历史汇总无法追溯拆分。探针只检查转发内容；检查超限不等于网关主动截断响应。
+# CPA 自动升级超时与残留状态
+
+先只读确认 `systemctl cat cliproxyapi-update.service`、`systemctl show cliproxyapi-update.service -p TimeoutStartUSec -p TimeoutStopUSec` 与
+`/var/lib/vps-ssh-launcher/maintenance-status/cpa-update.pending`，不要用延长超时掩盖真实失败。
+- 目标投影的 start 预算为 `40min`；`pull` 最长 600s、`compose` 最长 180s，另需覆盖
+  请求排空、健康探针、回滚与保留清理。旧 `20min` / 仅按 600s 槽位的口径不能作为
+  完成证据。
+- updater 收到 INT/TERM 时先记录信号；尚未改写镜像时不得调用回滚。镜像/compose 已改写、
+  Docker 尚未启动时须走 `ROLLBACK_VERIFIED`；容器启动阶段中断且恢复命令、旧镜像 readback
+  任一未证明时，必须报 `ROLLBACK_FAILED ... manual_recovery_required=true`，不能继续
+  当作成功。
+- 升级后上游不可用会保留新镜像并写 pending；pending 写失败也按 `unverified` 退出 10，
+  不能因本地 readiness 通过而清除这类证据。
+- 若只读确认发生在 BWG，先记录 `ROLLBACK_VERIFIED interrupted=start_container`（若有）
+  和备份路径，不自动删除失败的备份或镜像；恢复通过后仍需逐次只读检查容器状态与 smoke。

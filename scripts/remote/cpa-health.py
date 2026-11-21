@@ -354,6 +354,31 @@ def _local_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+class ProductionRequest:
+    """Loopback caller tagged so only real updater probes do CPU-only preflight."""
+
+    is_production_probe = True
+
+    def __init__(self, config):
+        self._config = config
+
+    def __call__(self, path, body=None, headers=None, timeout=None):
+        request = _loopback_request(self._config)
+        return request(path, body, headers, timeout)
+
+    def catalog(self, remaining):
+        """Read the catalog without making a slow attempt run past preflight."""
+        return self(
+            "models",
+            timeout=max(0.25, min(5.0, remaining)),
+        )
+
+
+def production_request(config):
+    """Return a tagged loopback caller without mutating an arbitrary mock."""
+    return ProductionRequest(config)
+
+
 def _client_api_key(config):
     """Client key from the v8 file layout (access.api-keys)."""
     access = config.get("access") if isinstance(config, dict) else None
@@ -364,7 +389,7 @@ def _client_api_key(config):
 
 
 def _loopback_request(config):
-    def request(path, body=None, headers=None):
+    def request(path, body=None, headers=None, timeout=None):
         request_headers = {
             "Authorization": "Bearer " + _client_api_key(config),
             "Content-Type": "application/json",
@@ -377,7 +402,9 @@ def _loopback_request(config):
             data=json.dumps(body).encode() if body else None,
             headers=request_headers,
         )
-        with _local_opener().open(req, timeout=120 if body else 5) as response:
+        with _local_opener().open(
+            req, timeout=timeout or (120 if body else 5)
+        ) as response:
             try:
                 return json.load(response)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -924,6 +951,13 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # required, or readiness would fail-closed on a healthy non-plugin gateway.
     optional.update(_PLUGIN_MODEL_NAMES)
     required = allowed - optional
+    catalog_only = getattr(request, "is_production_probe", False) is True
+    if catalog_only and mode == "generation":
+        # The legacy GPT slot is catalog-only by current ownership. It has an
+        # explicit relay-soft probe and must not make the non-OAuth baseline
+        # unavailable or spend a generation after a catalog-only absence.
+        optional.update(_CHANNEL_MODELS)
+        required -= set(_CHANNEL_MODELS)
     # The legacy relay-soft mode is retained as a compatibility entry point;
     # it now observes ai.input.im only. It is never an update decision.
     # When the provider is disabled, return 13 without a network request.
@@ -937,7 +971,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             model for model in _CHANNEL_MODELS if model not in _OPTIONAL_CHANNEL_MODELS
         )
         try:
-            catalog = request("models")
+            catalog = request.catalog(5.0) if catalog_only else request("models")
             ids = (
                 {m["id"] for m in catalog["data"]}
                 if isinstance(catalog.get("data"), list)
@@ -968,11 +1002,12 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             return 0
         except Exception:
             return 11
+    baseline_targets = ("glm-5.3-flash",)
     catalog_complete = False
     # A 200 catalog can lag while credentials finish registering, so allow a
     # short bounded convergence window. Provider-side transient responses are
-    # deliberately single-shot: retrying them here turns a rate-limit signal
-    # into a health-check amplification loop.
+    # deliberately single-shot: a later successful catalog must not hide an
+    # earlier rate-limit signal and turn this into an amplification loop.
     for attempt in range(3):
         try:
             catalog = request("models")
@@ -1020,23 +1055,115 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         return 0 if mode == "readiness" else 10
     if mode == "readiness":
         return 0
-    # Keep scheduled maintenance low-frequency and fully off the OAuth
-    # pipeline (user decision 2026-09-22, replacing the 2026-09-18 luna
-    # default): the owner's ChatGPT Plus slot showed a suspected risk-control
-    # signal (cockpit turn-state length 312) plus capacity errors, so
-    # scheduled luna generation is paused and the default gate target is
-    # glm-5.3-flash, the non-OAuth route selected for the periodic gate. The
-    # gate couples to the GLM coding-plan state by design: plan exhaustion
-    # surfacing here is a real client-visible signal, not a false alarm. Luna generation
-    # remains opt-in through the explicit matrix below (generation-all /
-    # quality modes / CPA_HEALTH_ALL_ROUTES). The catalog gate still
-    # degrades gracefully: before re-enrollment Luna is absent, so the
-    # catalog never completes and generation defers with 10 instead of
-    # misreading a provider absence as a local failure. Transient
-    # 408/429/5xx are never retried (runbook contract). ai.input.im stays
-    # out of the scheduled gate and its Sol/Terra/Astra probes remain
-    # opt-in through the explicit matrix below.
-    generation_targets = ("glm-5.3-flash",)
+    # A ready catalog proves that the required models are allowed and
+    # registered. Preflight waits share one bounded budget for extra catalog
+    # reads.
+    delay_text = os.environ.get("CPA_HEALTH_PREFLIGHT_WAIT_SECONDS", "30")
+    if delay_text not in ("0", "15", "30", "45", "60"):
+        return 20
+    delay = int(delay_text)
+    generation_matrix = mode in ("generation-all", "quality-canary", "quality-eval")
+    # The production main catalog already tried three times. Freeze its set
+    # for this second phase; only a 200 catalog that still awaits the baseline
+    # gets one bounded refresh, so the CPU-only wait cannot also spend three
+    # full catalog attempts after it. baseline_targets is deliberately not a
+    # required catalog member: the bounded wait exists to check one baseline
+    # route, while catalog readiness permits configured optional models to be
+    # absent.
+    ids = set(ids)
+    preflight_started = time.monotonic()
+
+    def remaining_delay(started):
+        return started + delay - time.monotonic()
+
+    def refresh_catalog(requested):
+        nonlocal ids
+        if (
+            not isinstance(requested, dict)
+            or not isinstance(requested.get("data"), list)
+            or not all(
+                isinstance(model, dict) and isinstance(model.get("id"), str)
+                for model in requested["data"]
+            )
+        ):
+            return 20
+        refreshed_ids = {model["id"] for model in requested["data"]}
+        if refreshed_ids - allowed:
+            return 20
+        ids = refreshed_ids
+        return None
+
+    if generation_matrix:
+        while True:
+            if not required <= ids:
+                if report:
+                    report(
+                        "PROBE_PREFLIGHT status=waiting missing=%s"
+                        % ",".join(sorted(required - ids))
+                    )
+                if preflight_started + delay <= time.monotonic():
+                    return 10
+                sleep(2)
+                try:
+                    remaining = remaining_delay(preflight_started)
+                    if remaining <= 0:
+                        return 10
+                    requested = (
+                        request.catalog(remaining)
+                        if catalog_only
+                        else request("models", timeout=max(0.25, min(5.0, remaining)))
+                    )
+                except Exception:
+                    if report:
+                        report("PROBE_PREFLIGHT status=unknown reason=catalog_error")
+                    return 10
+                catalog_error = refresh_catalog(requested)
+                if catalog_error is not None:
+                    return catalog_error
+                continue
+            break
+    if catalog_only and not generation_matrix:
+        # Production loops through admission. The catalog is an advisory
+        # zero-generation recheck: its failure keeps CPA's existing classification,
+        # and a model that is still absent gets one bounded CPU-only wait rather
+        # than a pointless generation that admission would reject. Mock request
+        # functions are not bound closures here and retain their test semantics.
+        probe_model = baseline_targets[0]
+        refreshed = ids
+        try:
+            # Zero is an explicit preflight budget, not an instruction to make
+            # a request: use the catalog the readiness check already obtained.
+            if probe_model not in refreshed and delay > 0:
+                while True:
+                    remaining = remaining_delay(preflight_started)
+                    if remaining <= 0:
+                        break
+                    requested = request.catalog(remaining)
+                    catalog_error = refresh_catalog(requested)
+                    if catalog_error is not None:
+                        return catalog_error
+                    refreshed = ids
+                    if probe_model in refreshed:
+                        break
+                    sleep(2)
+        except Exception:
+            # The main catalog check already classified this stop. Do not send a
+            # generation after a failed preflight; leave upstream availability
+            # unverified rather than treating it as a local contract failure.
+            if report:
+                report(
+                    "PROBE_PREFLIGHT model=%s status=unknown reason=catalog_error"
+                    % probe_model
+                )
+            return 10
+        if probe_model not in refreshed:
+            if report:
+                report(
+                    "PROBE_PREFLIGHT model=%s status=skipped reason=catalog_absent"
+                    % probe_model
+                )
+            return 10
+    generation_targets = baseline_targets
     if (
         mode in ("generation-all", "quality-canary", "quality-eval")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
@@ -1140,7 +1267,16 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         "status=not_listed upstream=unverified"
                     )
         generation_targets = tuple(matrix_targets)
-    # Bound what one invocation can spend, and make the OAuth admission decision
+    # Keep scheduled maintenance low-frequency and fully off the OAuth
+    # pipeline (user decision 2026-09-22, replacing the 2026-09-18 luna
+    # default): the owner's ChatGPT Plus slot showed a suspected risk-control
+    # signal (cockpit turn-state length 312) plus capacity errors, so a
+    # scheduled generation stays on the non-OAuth GLM baseline. The initial
+    # readiness gate may legitimately allow an optional model to be absent;
+    # production generation must not spend a request that admission would reject.
+    # Luna remains opt-in through the explicit matrix below (generation-all /
+    # quality modes / CPA_HEALTH_ALL_ROUTES). Transient catalog failures are
+    # never retried as generation (runbook contract).
     # explicit in the output: an operator reading a matrix run should be able to
     # see the planned request budget and whether the subscription lane was
     # touched without inferring it from the absence of a per-route line.
@@ -1544,7 +1680,7 @@ def cache_canary(
     if protocol not in _CACHE_CANARY_PROTOCOLS:
         raise ValueError("unsupported cache canary protocol")
     if request is None:
-        request = _loopback_request(config)
+        request = production_request(config)
     readiness = check(config, "readiness", request, sleep)
     if readiness != 0:
         return readiness, []

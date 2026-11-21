@@ -1,6 +1,47 @@
 set -u
 DIAGNOSTIC_DIR=$(mktemp -d /tmp/cpa-doctor.XXXXXXXXXX) || exit 1
 trap 'rm -rf -- "$DIAGNOSTIC_DIR"' EXIT
+chmod 700 -- "$DIAGNOSTIC_DIR" || {
+  echo "doctor_diagnostic_dir=PRIVATE_MODE_FAILED"
+  exit 1
+}
+VERIFY_TLS="$DIAGNOSTIC_DIR/verify_tls.py"
+cat >"$VERIFY_TLS" <<'PY'
+__VERIFIED_TLS_HELPER__
+PY
+chmod 600 -- "$VERIFY_TLS" || {
+  echo "doctor_tls_helper=PRIVATE_MODE_FAILED"
+  exit 1
+}
+tls_curl_args() {
+  python3 - "$VERIFY_TLS" "$DIAGNOSTIC_DIR/tls" "$1" "$2" <<'PY'
+import importlib.util
+import os
+import sys
+
+helper_path, verify_root, host, port = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("cpa_doctor_verify_tls", helper_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("cannot load local TLS verification helper")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+os.makedirs(verify_root, mode=0o700, exist_ok=True)
+os.chmod(verify_root, 0o700)
+os.environ["VPS_LOCAL_TLS_VERIFY_DIR"] = verify_root
+curl_args = module.verified_live_tls_curl_args(host, port)
+if (
+    len(curl_args) != 2
+    or curl_args[0] != "--cacert"
+    or not isinstance(curl_args[1], str)
+    or not os.path.isabs(curl_args[1])
+    or any(char in curl_args[1] for char in "\r\n")
+):
+    raise RuntimeError("unexpected local TLS curl arguments")
+# Bash command substitution removes NUL bytes. Emit one inspected argument
+# per line and read it into an array without shell evaluation.
+print("\n".join(curl_args))
+PY
+}
 STRICT=1
 DOCTOR_FAILED=0
 DIR=/opt/cliproxyapi
@@ -25,6 +66,62 @@ mark_fail() {
 echo "==cpa-doctor=="
 date -u +%FT%TZ
 hostname
+oauth_egress_override=0
+oauth_egress_proxy=0
+while IFS= read -r proxy_line; do
+  proxy_key=${proxy_line%%=*}
+  proxy_value=${proxy_line#*=}
+  case "$proxy_key" in
+    HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy|ALL_PROXY|all_proxy)
+      proxy_host=${proxy_value##*@}
+      proxy_host=${proxy_host#*://}
+      proxy_host=${proxy_host%%[/:]*}
+      proxy_host=${proxy_host%%:*}
+      proxy_host=${proxy_host,,}
+      case ",${NO_PROXY:-${no_proxy:-}}," in
+        *",$proxy_host,"*) continue ;;
+      esac
+      # A generic proxy pointed at an OAuth host is an override of that
+      # host. It must not match a generic proxy pointed elsewhere.
+      case "$proxy_host" in
+        *googleapis.com|accounts.google.com|*openai.com|*chatgpt.com|*anthropic.com)
+          oauth_egress_proxy=1
+          echo "oauth_egress_proxy_var=$proxy_key"
+          ;;
+      esac
+      ;;
+    NO_PROXY|no_proxy) continue ;;
+    *)
+      oauth_egress_override_var=0
+      case "$proxy_key" in
+        OAI_OAUTH_BASE_URL|OAI_OAUTH_API_BASE|OAI_OAUTH_ENDPOINT|OAI_OAUTH_PROXY|OAI_AUTH_BASE_URL|OAI_AUTH_API_BASE|OAI_AUTH_ENDPOINT|OAI_AUTH_PROXY|OPENAI_OAUTH_BASE_URL|OPENAI_OAUTH_API_BASE|OPENAI_OAUTH_ENDPOINT|OPENAI_OAUTH_PROXY|OPENAI_AUTH_BASE_URL|OPENAI_AUTH_API_BASE|OPENAI_AUTH_ENDPOINT|OPENAI_AUTH_PROXY|CHATGPT_OAUTH_BASE_URL|CHATGPT_OAUTH_API_BASE|CHATGPT_OAUTH_ENDPOINT|CHATGPT_OAUTH_PROXY|CHATGPT_AUTH_BASE_URL|CHATGPT_AUTH_API_BASE|CHATGPT_AUTH_ENDPOINT|CHATGPT_AUTH_PROXY|CODEX_OAUTH_BASE_URL|CODEX_OAUTH_API_BASE|CODEX_OAUTH_ENDPOINT|CODEX_OAUTH_PROXY|CODEX_AUTH_BASE_URL|CODEX_AUTH_API_BASE|CODEX_AUTH_ENDPOINT|CODEX_AUTH_PROXY|OAI_BASE_URL|OAI_API_BASE|OAI_ENDPOINT|OAI_PROXY|OPENAI_BASE_URL|OPENAI_API_BASE|OPENAI_ENDPOINT|OPENAI_PROXY|CHATGPT_BASE_URL|CHATGPT_API_BASE|CHATGPT_ENDPOINT|CHATGPT_PROXY|CODEX_BASE_URL|CODEX_API_BASE|CODEX_ENDPOINT|CODEX_PROXY)
+          oauth_egress_override_var=1
+          ;;
+      esac
+      if [ "$oauth_egress_override_var" = 1 ]; then
+        oauth_egress_override=1
+        case "$proxy_key" in
+          OAI_OAUTH_*|OAI_AUTH_*|OPENAI_OAUTH_*|OPENAI_AUTH_*|CHATGPT_OAUTH_*|CHATGPT_AUTH_*|CODEX_OAUTH_*|CODEX_AUTH_*)
+            oauth_egress_override_kind=OAUTH_AUTHENTICATION
+            ;;
+          OAI_BASE_*|OPENAI_BASE_*|CHATGPT_BASE_*|CODEX_BASE_*)
+            oauth_egress_override_kind=HOSTED_BASE
+            ;;
+          *)
+            oauth_egress_override_kind=PROVIDER_ROUTE
+            ;;
+        esac
+        echo "oauth_egress_override_kind=$oauth_egress_override_kind"
+      fi
+      ;;
+  esac
+done < <(env)
+if [ "$oauth_egress_override" = 1 ] || [ "$oauth_egress_proxy" = 1 ]; then
+  echo "oauth_upstream_egress_override=PRESENT"
+  mark_fail oauth-upstream-egress
+else
+  echo "oauth_upstream_egress=no_explicit_upstream_override"
+fi
 echo "==container=="
 if summary="$(docker inspect --format "status={{.State.Status}} restart={{.RestartCount}} started={{.State.StartedAt}} image={{.Config.Image}}" cli-proxy-api 2>/dev/null)"; then
   # Truncate the image reference to its final path segment, matching the
@@ -322,9 +419,24 @@ if [ -f "$LANE443_CONF" ] && grep -Fq 'log_format cpa_safe443' "$LANE443_CONF"; 
   lane443_server=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$LANE443_SERVER")
   if [ -n "$lane443_prefix" ] && [ -n "$lane443_server" ]; then
     lane443_base="https://$lane443_server:33387"
-    lane443_valid=$(curl --noproxy '*' -k -sS --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/$lane443_prefix/v1/models" 2>/dev/null || echo 000)
-    lane443_bare=$(curl --noproxy '*' -k -sS --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/v1/models" 2>/dev/null || echo 000)
-    lane443_wrong=$(curl --noproxy '*' -k -sS --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/0000000000000000/v1/models" 2>/dev/null || echo 000)
+    if ! tls_verify_output="$(tls_curl_args "$lane443_server" 33387 2>"$DIAGNOSTIC_DIR/tls-443.err")"; then
+      mark_fail gateway-443-lane-route-tls
+      tail -n 1 "$DIAGNOSTIC_DIR/tls-443.err" 2>/dev/null || true
+      tls_verify_failed=1
+    else
+      tls_verify_failed=0
+      mapfile -t lane443_curl_args <<<"$tls_verify_output"
+      if [ "${#lane443_curl_args[@]}" -ne 2 ] || [ "${lane443_curl_args[0]}" != "--cacert" ]; then
+        mark_fail gateway-443-lane-route-tls
+        echo gateway-443-lane-route-tls=INVALID_ARGUMENTS
+        tls_verify_failed=1
+      fi
+    fi
+    if [ "$tls_verify_failed" = 0 ]; then
+      lane443_valid=$(curl --noproxy '*' -sS "${lane443_curl_args[@]}" --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/$lane443_prefix/v1/models" 2>/dev/null || echo 000)
+      lane443_bare=$(curl --noproxy '*' -sS "${lane443_curl_args[@]}" --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/v1/models" 2>/dev/null || echo 000)
+      lane443_wrong=$(curl --noproxy '*' -sS "${lane443_curl_args[@]}" --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/0000000000000000/v1/models" 2>/dev/null || echo 000)
+    fi
     if [ "$lane443_valid" = "401" ] && [ "$lane443_bare" = "404" ] && [ "$lane443_wrong" = "404" ]; then
       echo gateway-443-lane-route=OK
     else
@@ -1345,11 +1457,28 @@ SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); prin
 PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' /etc/nginx/conf.d/cpa-gateway.conf | head -n 1 | cut -d/ -f2)
 if [ -n "$SERVER_NAME" ] && [ -n "$PREFIX" ]; then
   PUBLIC_BASE="https://$SERVER_NAME:8443"
-  valid_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$PREFIX/v1/models" 2>/dev/null || echo 000)
-  bare_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/v1/models" 2>/dev/null || echo 000)
-  WRONG_PREFIX=0000000000000000
-  if [ "$WRONG_PREFIX" = "$PREFIX" ]; then WRONG_PREFIX=ffffffffffffffff; fi
-  wrong_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$WRONG_PREFIX/v1/models" 2>/dev/null || echo 000)
+  if ! tls_verify_output="$(tls_curl_args "$SERVER_NAME" 8443 2>"$DIAGNOSTIC_DIR/tls-8443.err")"; then
+    mark_fail public-route-tls
+    tail -n 1 "$DIAGNOSTIC_DIR/tls-8443.err" 2>/dev/null || true
+    valid_status=000
+    bare_status=000
+    wrong_status=000
+  else
+    mapfile -t public_curl_args <<<"$tls_verify_output"
+    if [ "${#public_curl_args[@]}" -ne 2 ] || [ "${public_curl_args[0]}" != "--cacert" ]; then
+      mark_fail public-route-tls
+      echo public-route-tls=INVALID_ARGUMENTS
+      valid_status=000
+      bare_status=000
+      wrong_status=000
+    else
+    valid_status=$(curl --noproxy '*' -sS "${public_curl_args[@]}" --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$PREFIX/v1/models" 2>/dev/null || echo 000)
+    bare_status=$(curl --noproxy '*' -sS "${public_curl_args[@]}" --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/v1/models" 2>/dev/null || echo 000)
+    WRONG_PREFIX=0000000000000000
+    if [ "$WRONG_PREFIX" = "$PREFIX" ]; then WRONG_PREFIX=ffffffffffffffff; fi
+    wrong_status=$(curl --noproxy '*' -sS "${public_curl_args[@]}" --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$WRONG_PREFIX/v1/models" 2>/dev/null || echo 000)
+    fi
+  fi
   echo "valid_path_unauth=$valid_status"
   echo "bare_path=$bare_status"
   echo "wrong_path=$wrong_status"
@@ -2033,20 +2162,35 @@ updater_stop_timeout=$(systemctl show cliproxyapi-update.service -p TimeoutStopU
 echo "updater_timeout=${updater_timeout:-UNKNOWN}"
 echo "updater_stop_timeout=${updater_stop_timeout:-UNKNOWN}"
 # Threshold, not merely bounded: the updater budgets a bounded 600s pull and
-# 180s compose step, and its rollback needs a real stop window. The unit's 90s
-# default (a lost drop-in) passes a bounded-only check while guaranteeing every
-# real update is killed mid-pull.
+# 180s compose step, plus drain, probes and retention. Its rollback also needs a
+# real stop window. The unit's 90s default (a lost drop-in) would kill a real
+# update mid-pull, and the former 20-minute budget could split an otherwise
+# valid update at the boundary. The projected 30-minute value leaves room for
+# those bounded legs without hardening the timer into a hidden ten-minute cap.
 systemd_timeout_seconds() {
   case "$1" in
     ''|infinity|0) echo 0 ;;
+    *'min '*) printf '%s\n' "$1" | awk '
+      { total = 0; for (i = 1; i <= NF; i += 2) {
+          value = $i; unit = $(i + 1);
+          if (unit ~ /^h/) total += value * 3600;
+          else if (unit ~ /^min/) total += value * 60;
+          else if (unit ~ /^ms/) total += value / 1000;
+          else if (unit ~ /^s/) total += value;
+          else exit 1;
+        } printf "%.0f\n", total }'
+      ;;
     *min) echo $(( ${1%min} * 60 )) ;;
     *ms) echo $(( ${1%ms} / 1000 )) ;;
     *us) echo $(( ${1%us} / 1000000 )) ;;
-    *s) echo ${1%s} ;;
-    *) echo 0 ;;
+    *s) echo $(( ${1%s} )) ;;
+    *) case "$1" in
+         *[!0-9]*) echo 0 ;;
+         *) echo $(( $1 / 1000000 )) ;;
+       esac ;;
   esac
 }
-if [ "$(systemd_timeout_seconds "$updater_timeout")" -lt 1200 ] ||
+if [ "$(systemd_timeout_seconds "$updater_timeout")" -lt 1800 ] ||
   [ "$(systemd_timeout_seconds "$updater_stop_timeout")" -lt 240 ]; then
   mark_fail updater-timeout
 fi

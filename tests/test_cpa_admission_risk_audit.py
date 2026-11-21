@@ -440,7 +440,10 @@ class ContractTests(unittest.TestCase):
 
     def test_clean_configuration_has_no_findings(self) -> None:
         findings = audit_contract(admission_config(), routes_manifest())
-        self.assertEqual(findings, [])
+        self.assertEqual(
+            [(finding.code, finding.severity) for finding in findings],
+            [("oauth-api-key-fallback-missing", SEVERITY_INFO)],
+        )
 
     def test_ladder_must_end_at_the_declared_cap(self) -> None:
         config = admission_config(schedule=[60, 120, 240, 480], ladder_cap=900)
@@ -472,6 +475,122 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(warns[0].severity, SEVERITY_WARN)
         self.assertIn("lane-a", warns[0].message)
         self.assertIn("lane-b", warns[0].message)
+        self.assertIn("bounded lanes lane-a, lane-b", warns[0].message)
+        self.assertNotIn("without this cap", warns[0].message)
+
+    def test_strict_lane_wait_is_not_described_as_globally_bounded(self) -> None:
+        """Antigravity keeps a positive Retry-After beyond the global cap."""
+
+        lanes = [
+            {
+                "name": "antigravity-oauth",
+                "models": ["gemini-4-neon-xhigh"],
+                "cooldown_schedule_seconds": [60, 900],
+                "cooldown_cap_seconds": 900,
+                "capacity_statuses": [429, 503],
+                "capacity_markers": [
+                    "server_is_overloaded",
+                    "usage_limit_reached",
+                ],
+            }
+        ]
+        findings = audit_contract(
+            admission_config(lanes=lanes, server_cap=86400), routes_manifest()
+        )
+        warn = next(f for f in findings if f.code == "lane-cooldown-server-cap")
+        self.assertIn("strict lanes antigravity-oauth", warn.message)
+        self.assertIn("without this cap", warn.message)
+        self.assertNotIn("up to 86400s even", warn.message)
+
+    def test_server_cap_reports_model_scope_when_markers_are_configured(self) -> None:
+        """Configured model markers can retain the full server window."""
+
+        lanes = [
+            {
+                "name": "chatgpt-oauth",
+                "models": ["gemini-4-neon-xhigh"],
+                "cooldown_schedule_seconds": [60, 900],
+                "cooldown_cap_seconds": 900,
+                "capacity_statuses": [429, 503],
+                "capacity_markers": [
+                    "selected model is at capacity",
+                    "model_at_capacity",
+                    "server_is_overloaded",
+                    "usage_limit_reached",
+                ],
+                "model_capacity_markers": [
+                    "selected model is at capacity",
+                    "model_at_capacity",
+                ],
+            }
+        ]
+        routes = routes_manifest()
+        routes["oauth_routes"][0]["admission_lane"] = "chatgpt-oauth"
+        routes["oauth_routes"][0]["models"] = [
+            {"name": "gpt-6-luna", "alias": "gpt-6-luna"}
+        ]
+        routes["codex_api_key_exclusions"] = ["gpt-6-luna"]
+        routes["oauth_routes"].append(
+            {
+                "name": "chatgpt-plus-oauth",
+                "admission_lane": "chatgpt-oauth",
+                "models": [
+                    {
+                        "name": "gemini-4-neon-xhigh",
+                        "alias": "gemini-4-neon-xhigh",
+                    }
+                ],
+            }
+        )
+        names = {model["alias"] for model in routes["oauth_routes"][0]["models"]} | {
+            "gemini-4-neon-xhigh"
+        }
+        routes["oauth_exclusions"] = sorted(names)
+        findings = audit_contract(
+            admission_config(lanes=lanes, server_cap=86400), routes
+        )
+        lane_warn = [f for f in findings if f.code == "lane-cooldown-server-cap"]
+        model_warn = [f for f in findings if f.code == "model-cooldown-server-cap"]
+        self.assertEqual(len(lane_warn), 1)
+        self.assertEqual(len(model_warn), 1)
+        self.assertIn("chatgpt-oauth", lane_warn[0].message)
+        self.assertIn("chatgpt-oauth", model_warn[0].message)
+        self.assertIn("model_cooldowns", model_warn[0].message)
+        self.assertNotIn("without this cap", lane_warn[0].message)
+
+    def test_unknown_retry_after_cap_does_not_claim_a_finite_window(self) -> None:
+        lanes = [
+            {
+                "name": "gap-lane",
+                "models": ["plugin-model"],
+                "cooldown_schedule_seconds": [60, 900],
+                "cooldown_cap_seconds": 900,
+                "capacity_statuses": [429, 503],
+                "capacity_markers": [
+                    "server_is_overloaded",
+                    "usage_limit_reached",
+                ],
+                "model_capacity_markers": ["per-model-limit"],
+            }
+        ]
+        config = admission_config(lanes=lanes)
+        del config["retry_after_max_seconds"]
+        findings = audit_contract(config, routes_manifest())
+        gap = [
+            finding
+            for finding in findings
+            if finding.code == "cooldown-window-unreadable"
+        ]
+        self.assertEqual(len(gap), 1)
+        self.assertEqual(gap[0].severity, SEVERITY_WARN)
+        self.assertIn("gap-lane", gap[0].message)
+        self.assertFalse(
+            any(
+                finding.code
+                in {"lane-cooldown-server-cap", "model-cooldown-server-cap"}
+                for finding in findings
+            )
+        )
 
     def test_server_cap_equal_to_ladder_cap_is_not_reported(self) -> None:
         config = admission_config(server_cap=900)
@@ -572,6 +691,104 @@ class ContractTests(unittest.TestCase):
         routes = routes_manifest(oauth_exclusions=["gpt-6.1-sol-input", "gpt-6-luna"])
         findings = audit_contract(admission_config(), routes)
         self.assertIn("oauth-route-alias-excluded", codes(findings, SEVERITY_FAIL))
+
+    def test_missing_official_api_fallback_is_visible_without_failing(self) -> None:
+        routes = routes_manifest(
+            providers=[],
+            oauth_routes=[
+                {
+                    "name": "chatgpt-plus-oauth",
+                    "models": [
+                        {"name": "gpt-6-luna", "alias": "gpt-6-luna"},
+                        {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
+                    ],
+                }
+            ],
+            oauth_exclusions=[],
+            key_exclusions=["gpt-6-luna", "gpt-6-astra"],
+        )
+        findings = audit_contract(admission_config(), routes)
+        fallback = [
+            finding
+            for finding in findings
+            if finding.code == "oauth-api-key-fallback-missing"
+        ]
+        self.assertEqual(len(fallback), 1)
+        self.assertEqual(fallback[0].severity, SEVERITY_INFO)
+        self.assertIn("gpt-6-astra", fallback[0].message)
+        self.assertIn("gpt-6-luna", fallback[0].message)
+        self.assertIn("explicitly authorized official API", fallback[0].message)
+
+    def test_provider_route_removes_fallback_projection(self) -> None:
+        findings = audit_contract(
+            admission_config(),
+            routes_manifest(
+                providers=[
+                    {
+                        "slot": 2,
+                        "name": "official-api",
+                        "models": [{"name": "gpt-6-luna", "alias": "gpt-6-luna"}],
+                    }
+                ]
+            ),
+        )
+        self.assertEqual(
+            {
+                finding.code: finding.severity
+                for finding in findings
+                if finding.code.startswith("oauth-") and "fallback" in finding.code
+            },
+            {},
+        )
+
+    def test_provider_name_alias_overlap_is_not_claimed_as_fallback(self) -> None:
+        findings = audit_contract(
+            admission_config(),
+            routes_manifest(
+                providers=[
+                    {
+                        "slot": 2,
+                        "name": "shared-name-only",
+                        "models": [{"name": "gpt-6-luna", "alias": "different-route"}],
+                    }
+                ]
+            ),
+        )
+        fallback = [
+            finding.message
+            for finding in findings
+            if finding.code == "oauth-api-key-fallback-missing"
+        ]
+        self.assertEqual(len(fallback), 1)
+        self.assertIn("gpt-6-luna", fallback[0])
+
+    def test_malformed_model_inventory_yields_unreadable_fallback(self) -> None:
+        routes = routes_manifest(oauth_routes=[{"name": "bad", "models": None}])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn(
+            "oauth-api-key-fallback-unreadable", codes(findings, SEVERITY_INFO)
+        )
+
+    def test_malformed_fallback_inventory_is_not_silently_clean(self) -> None:
+        routes = routes_manifest(providers=[{"slot": 1, "models": []}])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("oauth-api-key-fallback-missing", codes(findings, SEVERITY_INFO))
+        malformed = routes_manifest()
+        malformed["providers"][0]["models"] = "not-a-list"
+        names = [
+            model["alias"] for model in routes_manifest()["oauth_routes"][0]["models"]
+        ]
+        malformed["oauth_routes"] = [
+            {
+                "name": "chatgpt-plus-oauth",
+                "models": [{"name": name, "alias": name} for name in names],
+            }
+        ]
+        raw = cast(Any, MODULE["api_key_fallback_projection"])(malformed)
+        self.assertIn(
+            "oauth-api-key-fallback-unreadable",
+            [finding.code for finding in raw],
+        )
 
     def test_no_lanes_fails(self) -> None:
         findings = audit_contract(admission_config(lanes=[]), routes_manifest())
@@ -691,6 +908,94 @@ class PostureTests(unittest.TestCase):
         write_db(self.db, [(base + i, 200, "gpt-6.1-sol-input") for i in range(9)])
         findings = audit_posture(routes_manifest(), self.db, 24)
         self.assertNotIn("attribution-boundary", codes(findings))
+
+
+class ClientCatalogTests(unittest.TestCase):
+    def test_catalog_exposes_retired_and_unroutable_selectable_names(self) -> None:
+        routes = routes_manifest()
+        routes["providers"][0]["retired_models"] = ["gpt-5.6-luna"]
+        catalog = {
+            "version": 4,
+            "models": [
+                {"model_id": "gpt-6.1-sol-input"},
+                {"model_id": "gpt-reserve"},
+                {"model_id": "gpt-5.6-luna"},
+            ],
+            "default_model_id": "gpt-6.1-sol-input",
+        }
+        findings = MODULE["audit_client_catalog"](catalog, routes)
+        self.assertEqual(
+            [finding.code for finding in findings],
+            [
+                "client-catalog-retired-model",
+                "client-catalog-unroutable-model",
+            ],
+        )
+        self.assertEqual(
+            codes(findings, SEVERITY_WARN),
+            [
+                "client-catalog-retired-model",
+                "client-catalog-unroutable-model",
+            ],
+        )
+
+    def test_retired_only_catalog_is_not_clean(self) -> None:
+        routes = routes_manifest()
+        routes["providers"][0]["retired_models"] = ["gpt-6.1-sol"]
+        catalog = {
+            "version": 4,
+            "models": [{"model_id": "gpt-6.1-sol"}],
+            "default_model_id": "gpt-6.1-sol",
+        }
+        findings = MODULE["audit_client_catalog"](catalog, routes)
+        self.assertIn(
+            "client-catalog-default-unroutable", codes(findings, SEVERITY_FAIL)
+        )
+
+    def test_standalone_tombstone_is_classified_as_retired(self) -> None:
+        routes = routes_manifest()
+        routes["providers"][0]["retired_models"] = ["gpt-6.1-sol-input"]
+        routes["providers"][0]["models"].append(
+            {"name": "old-standalone", "alias": "old-standalone"}
+        )
+        routes["providers"][0]["retired_models"].append("old-standalone")
+        findings = MODULE["audit_client_catalog"](
+            {
+                "version": 4,
+                "models": [
+                    {"model_id": "gpt-6.1-sol-input"},
+                    {"model_id": "old-standalone"},
+                ],
+                "default_model_id": "gpt-6.1-sol-input",
+            },
+            routes,
+        )
+        self.assertEqual(
+            [finding.code for finding in findings],
+            [
+                "client-catalog-retired-model",
+                "client-catalog-retired-model",
+                "client-catalog-default-unroutable",
+            ],
+        )
+
+    def test_duplicate_and_malformed_entries_fail(self) -> None:
+        catalog = {
+            "version": 4,
+            "models": [
+                {"model_id": "gpt-6.1-sol-input"},
+                {"model_id": "gpt-6.1-sol-input"},
+                {"model_id": ""},
+            ],
+        }
+        findings = MODULE["audit_client_catalog"](catalog, routes_manifest())
+        self.assertIn("client-catalog-invalid-models", codes(findings, SEVERITY_FAIL))
+
+    def test_future_catalog_schema_is_an_explicit_unknown(self) -> None:
+        findings = MODULE["audit_client_catalog"](
+            {"version": 5, "models": []}, routes_manifest()
+        )
+        self.assertIn("client-catalog-schema", codes(findings, SEVERITY_WARN))
 
 
 class DataStalenessTests(unittest.TestCase):
@@ -1124,8 +1429,12 @@ class RenderAndMainTests(unittest.TestCase):
                 ]
             )
         payload = json.loads(buffer.getvalue())
-        self.assertEqual(payload["findings"], [])
+        self.assertEqual(
+            [finding["code"] for finding in payload["findings"]],
+            ["oauth-api-key-fallback-missing"],
+        )
         self.assertEqual(payload["hours"], 24.0)
+        self.assertIsNone(payload["client_catalog"])
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 # projectors cannot drift apart.
 . (Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1")
 $tlsCiphers = Get-ProxyTlsCipherSuite
+$verifiedTlsHelper = Get-VerifiedLocalTlsCaPython
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
@@ -91,6 +92,13 @@ STATUS_DIR="${VPS_CDN_LANE_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-sta
 BACKUP_PARENT="${VPS_CDN_LANE_BACKUP_DIR:-/var/backups}"
 STATUS_FILE="$STATUS_DIR/cdn-lane.status"
 TAG="vps-launcher-cdn-ws"
+VERIFY_DIR="$(mktemp -d)" || exit 4
+cleanup_verify() { rm -rf -- "$VERIFY_DIR"; }
+trap cleanup_verify 0
+chmod 700 "$VERIFY_DIR"
+cat > "$VERIFY_DIR/verify_tls.py" <<'PY_VERIFY_TLS'
+__VERIFIED_TLS_HELPER__
+PY_VERIFY_TLS
 
 # vasma stores the wildcard certificate under the first hostname it was issued
 # for (fq.sciman.top), so an exact-name lookup would miss it. Every candidate is
@@ -200,16 +208,24 @@ server {
 EOF
 }
 
-cdn_conf_current() {
+render_if_current() {
     # A few surviving header lines are not a current template. Compare the
     # complete generated document so a lost default_server/ssl_reject,
     # timeout, or proxy directive becomes visible drift.
-    local expected result
-    expected="$(mktemp)"
+    local expected="$1" result
     if render_conf > "$expected" && cmp -s "$expected" "$TARGET_FILE"; then
         result=0
     else
         result=1
+    fi
+    return "$result"
+}
+
+cdn_conf_current() {
+    local expected="$VERIFY_DIR/cdn-conf.$$"
+    local result=1
+    if render_if_current "$expected"; then
+        result=0
     fi
     rm -f -- "$expected"
     return "$result"
@@ -318,10 +334,16 @@ cleanup() { rm -f -- "$TMP_BODY"; }
 trap cleanup EXIT INT TERM
 
 decoys_ok() {
-    local code sha decoy
+    local code sha decoy verify_args
+    local -a curl_args
     decoy="$(sha256sum "$NGINX_ROOT/index.html" 2>/dev/null | awk '{print $1}')"
     [ -n "$decoy" ] || return 1
-    code="$(curl -sk -m 8 -o "$TMP_BODY" -w '%{http_code}' \
+    mkdir -p "$VERIFY_DIR/ca" "$VERIFY_DIR/leaf"
+    chmod 700 "$VERIFY_DIR/ca" "$VERIFY_DIR/leaf"
+    verify_args="$(cd "$VERIFY_DIR" && PUBLIC_HOST="$PUBLIC_HOST" CDN_CERT_FILE="$CERT_FILE" VPS_LOCAL_TLS_VERIFY_DIR="$VERIFY_DIR/leaf" python3 -c \
+        'import os; from verify_tls import verified_pinned_tls_curl_args as verify; print("\n".join(verify(os.environ["PUBLIC_HOST"], (os.environ.get("CDN_CERT_FILE", ""),))))')" || return 1
+    mapfile -t curl_args <<<"$verify_args"
+    code="$(curl -sS "${curl_args[@]}" -m 8 -o "$TMP_BODY" -w '%{http_code}' \
         --resolve "$PUBLIC_HOST:$ORIGIN_PORT:127.0.0.1" "https://$PUBLIC_HOST:$ORIGIN_PORT/" 2>/dev/null || true)"
     sha="$(sha256sum "$TMP_BODY" 2>/dev/null | awk '{print $1}')"
     [ "$code" = '200' ] && [ "$sha" = "$decoy" ]
@@ -337,6 +359,15 @@ cf_token() {
     # pipeline must not fail under pipefail + set -e.
     { grep -h -m1 -E '^SAVED_CF_Token=' "$ACME_HOME/account.conf" "$conf" 2>/dev/null || true; } |
         sed -E "s/^[^=]+='?([^']*)'?$/\1/"
+}
+
+cf_ranges() {
+    local family="$1"
+    if [ "$family" = '4' ]; then
+        curl -fsS --max-time 12 https://www.cloudflare.com/ips-v4 2>/dev/null || true
+    else
+        curl -fsS --max-time 12 https://www.cloudflare.com/ips-v6 2>/dev/null || true
+    fi
 }
 
 origin_ip() {
@@ -365,6 +396,7 @@ export CF_TOKEN="$TOKEN"
 export CF_ZONE="$ZONE_NAME"
 export CF_HOST="$PUBLIC_HOST"
 export CF_IPV4_RANGES="$(cloudflare_ipv4_ranges)"
+export CF_IPV6_RANGES="$(cf_ranges 6)"
 
 dns_state() {
     python3 <<'PY'
@@ -380,6 +412,7 @@ token = os.environ['CF_TOKEN']
 zone = os.environ['CF_ZONE']
 host = os.environ['CF_HOST']
 raw_ranges = os.environ.get('CF_IPV4_RANGES', '')
+raw_ranges6 = os.environ.get('CF_IPV6_RANGES', '')
 
 
 def call(path):
@@ -404,31 +437,49 @@ def call(path):
 zones = call('/zones?name=' + urllib.parse.quote(zone))
 if zones.get('skipped'):
     # No token on this host: the record must already exist, so read it over
-    # plain DNS instead of the API. A non-origin answer alone is insufficient:
-    # only official Cloudflare IPv4 ranges prove the orange-cloud proxy is on.
+    # plain DNS instead of the API. A proxied A must not hide a direct-source
+    # AAAA; dual-stack clients otherwise bypass the CDN lane. Every answer
+    # must belong to Cloudflare's official ranges for its own address family.
     try:
         answers = sorted({
             item[4][0]
-            for item in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+            for item in socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         })
+        ipv4 = {address for address in answers if ipaddress.ip_address(address).version == 4}
+        ipv6 = set(answers) - ipv4
     except socket.gaierror:
-        answers = []
+        answers, ipv4, ipv6 = [], set(), set()
+    except ValueError:
+        print('dns_state=unverified')
+        print('dns_state_reason=invalid_resolver_answer')
+        raise SystemExit
     try:
-        networks = [
+        networks4 = [
             ipaddress.ip_network(line.strip(), strict=False)
             for line in raw_ranges.splitlines()
             if line.strip()
         ]
+        networks6 = [
+            ipaddress.ip_network(line.strip(), strict=False)
+            for line in raw_ranges6.splitlines()
+            if line.strip()
+        ]
     except ValueError:
-        networks = []
+        networks4, networks6 = [], []
     if not answers:
         print('dns_state=missing')
-    elif not networks:
+    elif not networks4 or not networks6:
         print('dns_state=unverified')
         print('dns_state_reason=cloudflare_ranges_unavailable')
     else:
         proxied = all(
-            any(ipaddress.ip_address(address) in network for network in networks)
+            any(
+                ipaddress.ip_address(address) in network
+                for network in (
+                    networks4 if ipaddress.ip_address(address).version == 4 else networks6
+                )
+                if network.version == ipaddress.ip_address(address).version
+            )
             for address in answers
         )
         print('dns_state=%s' % ('proxied' if proxied else 'not-proxied'))
@@ -437,15 +488,26 @@ elif not zones.get('success') or not zones.get('result'):
     print('dns_state=api_error')
 else:
     zone_id = zones['result'][0]['id']
-    records = call('/zones/%s/dns_records?type=A&name=%s' % (zone_id, urllib.parse.quote(host)))
+    records = call('/zones/%s/dns_records?name=%s' % (zone_id, urllib.parse.quote(host)))
     if not records.get('success'):
         print('dns_state=api_error')
     else:
         items = records.get('result') or []
-        if not items:
+        # Do not let culling a stale proxied A hide a direct-source AAAA.
+        conflicting = [
+            item for item in items
+            if item.get('type') != 'A' or not item.get('proxied')
+        ]
+        a_records = [item for item in items if item.get('type') == 'A']
+        if conflicting:
+            print('dns_state=direct-source')
+            print('dns_conflicting_record_types=%s' % ','.join(sorted({
+                str(item.get('type') or 'unknown') for item in conflicting
+            })))
+        elif not a_records:
             print('dns_state=missing')
         else:
-            record = items[0]
+            record = a_records[0]
             print('dns_state=%s' % ('proxied' if record.get('proxied') else 'dns_only'))
             print('dns_record_id=%s' % record['id'])
             # Captured so a failed apply can restore the pre-lane record
@@ -894,7 +956,7 @@ echo 'BACKUP_PRUNE scope=cdn-lane policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'CDN_LANE_APPLIED'
 write_status success 0
-'@.Replace("__APPLY__", $applyLiteral).Replace("__PUBLIC_HOST__", $PublicHost).Replace("__ORIGIN_PORT__", "$OriginPort").Replace("__LOCAL_PORT__", "$LocalPort").Replace("__WS_PATH__", $WsPath).Replace("__TLS_CIPHERS__", $tlsCiphers)
+'@.Replace("__APPLY__", $applyLiteral).Replace("__PUBLIC_HOST__", $PublicHost).Replace("__ORIGIN_PORT__", "$OriginPort").Replace("__LOCAL_PORT__", "$LocalPort").Replace("__WS_PATH__", $WsPath).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__VERIFIED_TLS_HELPER__", $verifiedTlsHelper)
 
 # Tracing is on inside the payload; capture stderr so a failing apply shows the
 # exact command that tripped `set -e` instead of only the exit code.

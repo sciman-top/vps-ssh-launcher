@@ -99,6 +99,73 @@ function Protect-MergedSubscriptionFile {
   }
 }
 
+function New-MergedSubscriptionTempFile {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Destination
+  )
+
+  # The destination may be new or replaced later. Only the sibling temp file
+  # is protected here; a crash can therefore never leave a broadly readable
+  # token or URL before the final Move-Item.
+  $directory = Split-Path -Parent $Destination
+  $name = Split-Path -Leaf $Destination
+  $temporary = Join-Path $directory (
+    ".${name}.tmp-$([Guid]::NewGuid().ToString('N'))"
+  )
+  $stream = [IO.File]::Open(
+    $temporary,
+    [IO.FileMode]::CreateNew,
+    [IO.FileAccess]::Write,
+    [IO.FileShare]::None
+  )
+  $stream.Dispose()
+  Protect-MergedSubscriptionFile -Path $temporary
+  return $temporary
+}
+
+function Set-MergedSubscriptionSecret {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+    [Parameter(Mandatory = $true)]
+    [string]$Content
+  )
+
+  $temporary = New-MergedSubscriptionTempFile -Destination $Path
+  try {
+    [IO.File]::WriteAllText(
+      $temporary,
+      $Content,
+      [Text.UTF8Encoding]::new($false)
+    )
+    Protect-MergedSubscriptionFile -Path $temporary
+    if ($IsWindows) {
+      # A read-only profile cannot delete an existing secret file. On Windows,
+      # ReplaceFile moves the protected temp inode into place and keeps the
+      # replaced file only for this cleanup interval.
+      $backup = Join-Path (
+        Split-Path -Parent $Path
+      ) ".$((Split-Path -Leaf $Path)).old-$([Guid]::NewGuid().ToString('N'))"
+      try {
+        [IO.File]::Replace($temporary, $Path, $backup, $true)
+      } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] {
+        [IO.File]::Move($temporary, $Path, $false)
+      }
+      if (Test-Path -LiteralPath $backup) {
+        Remove-Item -LiteralPath $backup -Force
+      }
+    } else {
+      Move-Item -LiteralPath $temporary -Destination $Path -Force
+    }
+  } finally {
+    if (Test-Path -LiteralPath $temporary) {
+      Remove-Item -LiteralPath $temporary -Force
+    }
+  }
+  Protect-MergedSubscriptionFile -Path $Path
+}
+
 if (-not $Token) {
   if (Test-Path -LiteralPath $tokenStore -PathType Leaf) {
     # Tighten the existing token before reading it. A stale file may still
@@ -114,8 +181,7 @@ if (-not $Token) {
     $tokenBytes = [byte[]]::new(16)
     [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
     $Token = [Convert]::ToHexString($tokenBytes).ToLowerInvariant()
-    Set-Content -LiteralPath $tokenStore -Value $Token -Encoding utf8NoBOM
-    Protect-MergedSubscriptionFile -Path $tokenStore
+    Set-MergedSubscriptionSecret -Path $tokenStore -Content $Token
   }
 }
 if ($Token -notmatch '^[0-9a-f]{16,64}$') {
@@ -471,7 +537,7 @@ echo "merged_sub_published=${published:-0} token_len=${#TOKEN}"
 match=0
 want="$(printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0)"
 preview_served="$(base64 -d < "$TARGET" 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
-preview_http="$(curl -sk -m 8 --resolve "__DIRECT_HOST__:__DIRECT_PORT__:127.0.0.1" -o /dev/null -w '%{http_code}' \
+preview_http="$(curl -sS -m 8 --cacert "$CA_BUNDLE" --resolve "__DIRECT_HOST__:__DIRECT_PORT__:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "https://__DIRECT_HOST__:__DIRECT_PORT__/s/merged/$TOKEN" 2>/dev/null || true)"
 echo "merged_sub_http=${preview_http:-000} served=${preview_served:-0}"
 if [ -f "$TARGET" ] && [ "$preview_served" = "$count" ] && [ "$preview_http" = '200' ]; then
@@ -510,6 +576,7 @@ fi
 backup_dir="$(mktemp -d "$BACKUP_PARENT/merged-sub.XXXXXX")"
 chmod 700 "$backup_dir"
 if [ -f "$TARGET" ]; then cp -a "$TARGET" "$backup_dir/previous"; else : > "$backup_dir/absent"; fi
+if [ -f "$TOKEN_FILE" ]; then cp -a "$TOKEN_FILE" "$backup_dir/previous-token"; else : > "$backup_dir/absent-token"; fi
 
 rollback() {
     local rc="${1:-1}"
@@ -522,6 +589,10 @@ rollback() {
     rm -f -- "$TARGET" || failed=1
     if [ -f "$backup_dir/previous" ]; then
         cp -a "$backup_dir/previous" "$TARGET" || failed=1
+    fi
+    rm -f -- "$TOKEN_FILE" || failed=1
+    if [ -f "$backup_dir/previous-token" ]; then
+        cp -a "$backup_dir/previous-token" "$TOKEN_FILE" || failed=1
     fi
     if [ "$failed" -eq 0 ]; then
         echo "ROLLBACK_VERIFIED backup=$backup_dir"
@@ -544,17 +615,24 @@ chmod 755 "$MERGED_DIR"
 tmp_target="$(mktemp "$MERGED_DIR/.merged.XXXXXX")"
 if printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' \
     | sed "s/#[a-z]*-/#${NAME_PREFIX}-/g" | base64 -w0 > "$tmp_target"; then
+    chmod 644 "$tmp_target"
     mv -f -- "$tmp_target" "$TARGET"
 else
     echo 'MERGED_SUB_RENDER_FAILED' >&2
     rollback 1
 fi
-chmod 644 "$TARGET"
 mkdir -p "$STATUS_DIR" "$(dirname "$TOKEN_FILE")"
-printf '%s' "$TOKEN" > "$TOKEN_FILE"
-chmod 600 "$TOKEN_FILE"
+token_tmp="$(mktemp "$(dirname "$TOKEN_FILE")/.$(basename "$TOKEN_FILE").XXXXXX")"
+chmod 600 "$token_tmp"
+if printf '%s' "$TOKEN" > "$token_tmp"; then
+    mv -f -- "$token_tmp" "$TOKEN_FILE"
+else
+    rm -f -- "$token_tmp"
+    echo 'MERGED_SUB_TOKEN_WRITE_FAILED' >&2
+    rollback 1
+fi
 
-http="$(curl -sk -m 8 --resolve "__DIRECT_HOST__:__DIRECT_PORT__:127.0.0.1" -o /dev/null -w '%{http_code}' \
+http="$(curl -sS -m 8 --cacert "$CA_BUNDLE" --resolve "__DIRECT_HOST__:__DIRECT_PORT__:127.0.0.1" -o /dev/null -w '%{http_code}' \
     "https://__DIRECT_HOST__:__DIRECT_PORT__/s/merged/$TOKEN" 2>/dev/null || true)"
 served="$(base64 -d < "$TARGET" 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
 echo "merged_sub_http=${http:-000} served=$served"
@@ -580,6 +658,5 @@ $urls = @(
   "$($lane.Cdn)/s/merged/$Token"
   "$($lane.Standby)/s/merged/$Token"
 ) -join "`n"
-Set-Content -LiteralPath $urlFile -Value $urls -Encoding utf8NoBOM
-Protect-MergedSubscriptionFile -Path $urlFile
+Set-MergedSubscriptionSecret -Path $urlFile -Content $urls
 Write-Output "merged_sub_url_file=$urlFile"

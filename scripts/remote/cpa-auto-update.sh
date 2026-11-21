@@ -13,10 +13,20 @@
 #       same convention as the other wrappers; previously 1, which made a
 #       busy skip indistinguishable from a real failure in ExecMainStatus)
 #   30  pre-update provider probe failed before any backup or image change
+#   31  Docker start was interrupted; pre-update container was restored
+#   32  Docker start was interrupted and recovery needs manual attention
+#    9  pending receipt could not be persisted; candidate rollback failed
 #   76  error-dump hygiene refused before any remote write
 #   77  enabled native plugins require a reviewed joint host/plugin canary
 set -Eeuo pipefail
 umask 077
+UPDATER_SIGNAL=0
+# Machine-checkable durations for the systemd drop-in and schedule doctor.
+# Each leg mirrors the matching call site below; it bounds one attempt, rather
+# than asserting that all optional attempts run in sequence.
+AUTO_UPDATE_BUDGETS='pull_seconds=600 compose_seconds=180 start_stop_seconds=45 restore_seconds=30 docker_kill_after_seconds=15 health_request_seconds=120'
+[[ "${AUTO_UPDATE_BUDGETS_PRINT:-0}" != 1 ]] ||
+  { printf '%s\n' "$AUTO_UPDATE_BUDGETS"; exit 0; }
 DIR=/opt/cliproxyapi
 LOG="$DIR/auto-update.log"
 STATUS_DIR=/var/lib/vps-ssh-launcher/maintenance-status
@@ -44,10 +54,18 @@ write_status() {
   mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
-status_on_exit() {
-  local code="$?" result=failed
+on_exit() {
+  local code="${1:-$?}" result=failed
+  DOCKER_START_PENDING=${DOCKER_START_PENDING:-0}
+  if (( DOCKER_START_PENDING == 1 && code == 0 )); then
+    code=32
+  fi
+  if (( DOCKER_START_PENDING == 1 )); then
+    write_status unverified 32 container_start_pending_recovery
+    exit 32
+  fi
   if (( code == 0 )); then result=success; fi
-  if (( code == 10 )); then result=unverified; fi
+  if (( code == 9 || code == 10 )); then result=unverified; fi
   if (( code == 75 )); then result=busy; fi
   if (( code == 76 )); then result=deferred; fi
   if (( code == 77 )); then result=deferred; fi
@@ -55,15 +73,100 @@ status_on_exit() {
     write_status deferred "$code" preflight_or_drain_failed
     exit "$code"
   fi
+  if (( code == 31 )); then
+    write_status deferred "$code" interrupted_container_start_restored
+    exit "$code"
+  fi
+  if (( code == 32 )); then
+    write_status unverified "$code" interrupted_container_start_recovery_failed
+    exit "$code"
+  fi
+  if (( code == 9 )); then
+    write_status unverified "$code" pending_receipt_write_failed
+    exit "$code"
+  fi
   write_status "$result" "$code"
   exit "$code"
 }
-trap status_on_exit EXIT
+trap 'status_code=$?; on_exit "$status_code"' EXIT
 write_status running 0
 
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
+defer_updater_signal() {
+  local code="$1"
+  if [[ "${UPDATER_SIGNAL:-0}" == 0 ]]; then
+    UPDATER_SIGNAL="$code"
+  fi
+}
+is_within_tree() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import sys
+
+root, candidate = (os.path.abspath(value) for value in sys.argv[1:])
+try:
+    if os.path.commonpath((root, candidate)) != root:
+        raise SystemExit(1)
+except ValueError:
+    raise SystemExit(1)
+PY
+}
+pid_alive() {
+  # A stopped or zombie command is no longer executing. This also avoids a
+  # bare `wait` edge under a launcher's SIGCHLD/errexit handling: the helper
+  # checks process state; `wait` runs separately where the child exists.
+  local state
+  if ! state=$(ps -o stat= -p "$1" 2>/dev/null); then
+    return 1
+  fi
+  state=${state//[[:space:]]/}
+  [[ -n "$state" && "$state" != Z* && "$state" != T* ]]
+}
+stop_compose_start() {
+  local start_pid="${compose_start_pid:-${start_pid:-}}" start_cwd start_group
+  local attempt=0
+  [[ "$start_pid" =~ ^[0-9]+$ ]] || return 1
+  if ! is_within_tree "$DIR" "$BK"; then
+    echo "REFUSE backup is outside the CPA directory: $BK"
+    return 1
+  fi
+  [[ -d "$BK" && ! -L "$BK" ]] || return 1
+  start_cwd=$(readlink -f -- "/proc/$start_pid/cwd" 2>/dev/null || true)
+  [[ -n "$start_cwd" ]] || return 1
+  is_within_tree "$DIR" "$start_cwd" || return 1
+  # Reap our background compose client once it exits. `wait` is already
+  # complete under some Windows launchers, so a nonzero status is not evidence
+  # that the process is still running; pid_alive decides that below.
+  wait "$start_pid" 2>/dev/null || true
+  # The positive group ID is the parent shell's, not a child we own. A child's
+  # group is safe only when it equals its own PID (it leads the group).
+  start_group=${start_pgid:-}
+  if [[ -z "$start_group" ]]; then
+    start_group=$(ps -o pgid= -p "$start_pid" 2>/dev/null | tr -d ' ') || return 1
+  fi
+  if [[ "$start_group" =~ ^[0-9]+$ && "$start_group" == "$start_pid" ]]; then
+    kill -TERM -- "-$start_pid" 2>/dev/null || true
+  else
+    # A recovery helper deliberately has no TERM trap. Blocking TERM until it
+    # exits ensures the old Compose process cannot outlive the restored image.
+    trap '' TERM
+    kill -TERM "$start_pid" 2>/dev/null || true
+  fi
+  while (( attempt < 30 )); do
+    attempt=$((attempt + 1))
+    pid_alive "$start_pid" || return 0
+    sleep 1
+  done
+  return 1
+}
+# Run only the signal-handling subshell with job control so its PID is the
+# process-group ID. Without this, ASLR can assign the child a PID that already
+# leads an unrelated process group; the recovery path would kill that group.
+set -m
+trap 'defer_updater_signal 130' INT
+trap 'defer_updater_signal 143' TERM
 # Bound every Docker client call, including rollback. A stalled pull must not
 # monopolise the shared maintenance lock or block certificate renewal forever.
 docker() {
@@ -75,22 +178,66 @@ docker() {
 
 require_plugin_canary() {
   python3 - "$DIR/config.yaml" <<'PY'
+import os
 import sys
 from pathlib import Path
 import yaml
 
+source_error = None
 try:
-    config = yaml.safe_load(Path(sys.argv[1]).read_text())
-    plugins = config.get('plugins', {})
-    if not isinstance(plugins, dict):
-        raise ValueError('invalid plugins section')
-    if plugins.get('enabled', False) is not False:
-        # A host patch release does not establish Go plugin ABI compatibility.
-        # Do not download/replace custom .so builds or exercise their accounts.
-        print('PLUGIN_CANARY_REQUIRED enabled_native_plugins=true')
-        raise SystemExit(77)
-except (OSError, ValueError, AttributeError, yaml.YAMLError):
-    print('PLUGIN_CANARY_REQUIRED plugin_configuration_unverified=true')
+    # Python on Windows inherits a legacy code page unless this starts with
+    # the documented UTF-8 mode flag. BWG runs Linux, but the same projection
+    # is exercised by the Windows acceptance harness.
+    text = Path(sys.argv[1]).read_text(encoding='utf-8')
+    config = yaml.safe_load(text)
+except (
+    OSError,
+    ValueError,
+    AttributeError,
+    yaml.YAMLError,
+) as exc:
+    source_error = type(exc).__name__
+
+if source_error is None:
+    try:
+        if not isinstance(config, dict):
+            raise ValueError('invalid config root')
+        plugins = config.get('plugins', {})
+        if not isinstance(plugins, dict):
+            raise ValueError('invalid plugins section')
+        configs = plugins.get('configs', {})
+        if not isinstance(configs, dict):
+            raise ValueError('invalid plugin configs')
+        if plugins.get('enabled', False) is not False:
+            # A host patch release does not establish Go plugin ABI compatibility.
+            # Do not download/replace custom .so builds or exercise their accounts.
+            print('PLUGIN_CANARY_REQUIRED enabled_native_plugins=true')
+            raise SystemExit(77)
+        enabled_plugins = [
+            str(name)
+            for name, plugin in configs.items()
+            # An entry is opt-in only when it explicitly says enabled: false.
+            # Unexpected shapes and truthy strings must route to the joint
+            # plugin/host canary instead of being silently treated as disabled.
+            if not isinstance(plugin, dict) or plugin.get('enabled') is not False
+        ]
+        if enabled_plugins:
+            print(
+                'PLUGIN_CANARY_REQUIRED enabled_plugin_configs='
+                + ','.join(enabled_plugins)
+            )
+            raise SystemExit(77)
+    except (
+        OSError,
+        ValueError,
+        AttributeError,
+        TypeError,
+        yaml.YAMLError,
+    ) as exc:
+        source_error = type(exc).__name__
+
+if source_error is not None:
+    print(f'PLUGIN_CANARY_REQUIRED plugin_configuration_unverified={source_error}')
     raise SystemExit(77)
 PY
 }
@@ -275,6 +422,26 @@ print(matches[0])
 PY
 }
 
+compose_official_image_digest() {
+  python3 - "$DIR/compose.yml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+matches = re.findall(r'(?m)^\s*image:\s*(\S+)\s*(?:#.*)?$', text)
+if len(matches) != 1:
+    raise SystemExit('REFUSE unexpected image declaration')
+match = re.fullmatch(
+    r'eceasy/cli-proxy-api:v\d+\.\d+\.\d+@(sha256:[0-9a-f]{64})',
+    matches[0],
+)
+if match is None:
+    raise SystemExit('REFUSE compose image is not a digest-pinned official release')
+print(match.group(1))
+PY
+}
+
 # Select the highest patch release present in both official releases and Docker
 # Hub, aged at least 72h in both. Minor and major releases are visible but
 # require an explicit canary because their behavior can change materially.
@@ -394,6 +561,11 @@ if [[ "$MODE" == --confirm-pending ]]; then
   fi
   if [[ "$PENDING_VERSION" != "$CUR" ]]; then
     log "UNVERIFIED: pending version=$PENDING_VERSION does not match compose version=$CUR"
+    exit 10
+  fi
+  COMPOSE_DIGEST=$(compose_official_image_digest 2>/dev/null || true)
+  if [[ "$COMPOSE_DIGEST" != "$PENDING_DIGEST" ]]; then
+    log "UNVERIFIED: compose image digest does not match pending digest version=$CUR"
     exit 10
   fi
   if ! grep -q '^hold_lanes=' "$PENDING_FILE"; then
@@ -1107,14 +1279,14 @@ write_pending_verification() {
   local tmp hold_lanes="${1:?pending lane hold receipt is required}"
   mkdir -m 700 -p "$STATUS_DIR"
   tmp=$(mktemp "$PENDING_FILE.XXXXXX")
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   {
     printf 'version=%s\n' "$TARGET"
     printf 'digest=%s\n' "$DIGEST"
     printf 'backup=%s\n' "$BK"
     printf 'hold_lanes=%s\n' "$hold_lanes"
-  } > "$tmp"
-  chmod 600 "$tmp"
-  mv -f -- "$tmp" "$PENDING_FILE"
+  } > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$PENDING_FILE" || { rm -f -- "$tmp"; return 1; }
 }
 
 backup_image_id() {
@@ -1472,11 +1644,23 @@ rollback() {
   [[ "$code" != 0 ]] || code=1
   exit "$code"
 }
+persist_pending_or_rollback() {
+  local verified_lanes="$1"
+  if write_pending_verification "$verified_lanes"; then
+    return 0
+  fi
+  set +e
+  log "ROLLBACK: pending receipt write failed; reverting unverified candidate=$TARGET backup=$BK"
+  [[ "$MUTATED" == 1 ]] && rollback 1
+  ROLLBACK_STAGE=pending_receipt
+  log "ROLLBACK_FAILED reason=pending_receipt_write_failed backup=$BK manual_recovery_required=true"
+  exit 9
+}
 trap - ERR
 trap rollback ERR
 trap 'ROLLBACK_HUP=1' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'defer_updater_signal 130' INT
+trap 'defer_updater_signal 143' TERM
 IMAGE="eceasy/cli-proxy-api:$TARGET@$DIGEST"
 docker pull "$IMAGE" >>"$LOG" 2>&1
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
@@ -1485,6 +1669,7 @@ if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   # image and compose rollback.
   rollback 129
 fi
+[[ "$UPDATER_SIGNAL" == 0 ]] || defer_updater_signal "$UPDATER_SIGNAL"
 docker image inspect "$IMAGE" >/dev/null
 # Once acquired, existing requests have finished and new admission requests
 # receive maintenance_in_progress until this process (including rollback)
@@ -1510,6 +1695,7 @@ fi
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   rollback 129
 fi
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
 MUTATED=1
 python3 - "$DIR/compose.yml" "$IMAGE" <<'PY'
 import os, re, stat, sys, uuid
@@ -1566,11 +1752,84 @@ PY
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   rollback 129
 fi
-(cd "$DIR" && docker compose config --quiet && docker compose up -d --pull never >>"$LOG" 2>&1)
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
+MUTATION_STARTED=1
+DOCKER_START_PENDING=1
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
+(
+  cd "$DIR"
+  docker compose config --quiet
+  exec docker compose up -d --pull never
+) >>"$LOG" 2>&1 9>&- &
+compose_start_pid=$!
+start_pid=''
+start_pgid=''
+start_state=''
+while [[ "$UPDATER_SIGNAL" == 0 && "$start_state" == '' ]]; do
+  if proc_state=$(cat "/proc/$compose_start_pid/stat" 2>/dev/null); then
+    read -r _ start_pid start_state start_pgid _ <<< "${proc_state##*) }"
+  fi
+  if [[ -z "$start_state" ]]; then
+    start_status=0
+    wait "$compose_start_pid" || start_status=$?
+    DOCKER_START_PENDING=0
+    break
+  fi
+  [[ "$start_state" != Z* ]] || break
+  sleep 1
+done
+if [[ "$UPDATER_SIGNAL" != 0 ]]; then
+  set +e
+  MUTATED=0
+  MUTATION_STARTED=0
+  ROLLBACK_STAGE=container_start
+  trap '' ERR HUP
+  trap 'defer_updater_signal 143' TERM
+  if ! stop_compose_start; then
+    log "ROLLBACK_FAILED interrupted=start_container backup=$BK manual_recovery_required=true"
+    exit 32
+  fi
+  restore_failed=0
+  cp -a "$BK/compose.yml" "$DIR/compose.yml" || restore_failed=1
+  restore_status=1
+  if [[ "$restore_failed" == 0 ]]; then
+    (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) &
+    restore_pid=$!
+    restore_wait=0
+    while kill -0 "$restore_pid" 2>/dev/null && (( restore_wait < 30 )); do
+      sleep 1
+      restore_wait=$((restore_wait + 1))
+    done
+    if kill -0 "$restore_pid" 2>/dev/null; then
+      kill -TERM -- "-$restore_pid" 2>/dev/null ||
+        kill -TERM "$restore_pid" 2>/dev/null || true
+    elif wait "$restore_pid"; then
+      restore_status=0
+    else
+      restore_status=$?
+    fi
+  fi
+  running_image=''
+  if [[ "$restore_failed" == 0 ]]; then
+    running_image=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
+  fi
+  if [[ "$restore_failed" == 0 && "$restore_status" == 0 &&
+        -n "$running_image" && "$running_image" == "$ROLLBACK_IMAGE_ID" ]]; then
+    log "ROLLBACK_VERIFIED interrupted=start_container restored=$CUR backup=$BK"
+    exit 31
+  else
+    log "ROLLBACK_FAILED interrupted=start_container backup=$BK manual_recovery_required=true"
+    exit 32
+  fi
+fi
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
+[[ "$start_status" == 0 ]] || rollback "$start_status"
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   rollback 129
 fi
 RESULT=0
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
 health generation || RESULT=$?
 if [[ "$RESULT" == 10 ]]; then
   # A provider-side stop signal (including 403/408/429/5xx) confirms that the
@@ -1578,30 +1837,39 @@ if [[ "$RESULT" == 10 ]]; then
   # do not send another generation request from the updater.
   READY_RESULT=0
   health readiness || READY_RESULT=$?
-  trap '' ERR INT TERM HUP
   if [[ "$READY_RESULT" == 10 ]]; then
+    pending_code=0
+    if ! UPSTREAM_HOLDS=$(lane_hold_state); then
+      pending_code=3
+    else
+      persist_pending_or_rollback unknown
+    fi
     log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=UPSTREAM_UNAVAILABLE"
-    write_pending_verification unknown
+    [[ "$pending_code" == 0 ]] || rollback 1
     exit 10
   fi
   if [[ "$READY_RESULT" != 0 ]]; then
     log "DEFER: post-update readiness failed result=$READY_RESULT; rolling back retained=$TARGET backup=$BK"
     rollback "$READY_RESULT"
   fi
+  pending_code=0
+  if ! UPSTREAM_HOLDS=$(lane_hold_state); then
+    pending_code=3
+  else
+    persist_pending_or_rollback unknown
+  fi
   log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=HEALTH_OK"
-  write_pending_verification unknown
+  [[ "$pending_code" == 0 ]] || rollback 1
   exit 10
 fi
 [[ "$RESULT" == 0 ]]
-trap - ERR INT TERM HUP
 # A hold that appeared across OUR restart means a request straddled the
 # container recreation despite the drain (or admission latched something
 # else); the image itself is verified, so keep it but leave the resolution to
 # the operator instead of reporting a clean success (2026-10-21 canary case).
 if ! POST_HOLDS=$(lane_hold_state); then
   log "UNVERIFIED: admission durable state unreadable after update; retained=$TARGET backup=$BK"
-  write_pending_verification unknown
-  exit 10
+  persist_pending_or_rollback unknown
 fi
 NEW_HOLDS=""
 if [[ -n "$POST_HOLDS" ]]; then
@@ -1622,9 +1890,12 @@ if [[ -n "$NEW_HOLDS" ]]; then
   if [[ -z "$NEW_HOLD_LANES" || "$NEW_HOLD_LANES" == *unknown* ]]; then
     NEW_HOLD_LANES=unknown
   fi
-  write_pending_verification "$NEW_HOLD_LANES"
+  [[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
+  persist_pending_or_rollback "$NEW_HOLD_LANES"
   exit 10
 fi
+trap - ERR INT TERM HUP
+[[ "$UPDATER_SIGNAL" == 0 ]] || rollback "$UPDATER_SIGNAL"
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # UNVERIFIED and rollback paths never reach these; any failure here happens
 # after the completed update and is therefore explicitly non-fatal.

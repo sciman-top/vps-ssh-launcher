@@ -645,12 +645,11 @@ BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability pa
 
 ### 会话内缓存冷重启归因 (`cpa_cache_reset_probe.py`)
 
-同一 `client_request_hash` 的相邻轮次共享一个上游会话。本工具按会话回溯，把"前缀
-已建立、下一轮却 `usage_cached=0`"的冷重启归因到 `rebind`（换了实例）、
-`model_switch`（客户端换了模型）、`lane_switch`（换了车道）、`cache_eviction`
-（同实例同模型，前缀仍被丢弃）或 `unattributed`（上一轮无 usage 可比）。只读日志，
-不发请求，不输出提示词或凭据。命中率同时给两个口径：全体，以及剔除探活/标题类
-小请求后的 `eligible_cache_hit_ratio`。
+本工具按 `client_request_hash` 对照日志中的冷请求。该哈希来自客户端请求头，
+会话关联精度取决于客户端是否跨轮复用该头。分类记录客户端实例、请求模型、准入车道的变化，
+以及此前有缓存读数的 `warm_to_cold`。日志无法确定上游凭据重绑、缓存驱逐或前缀改写。
+命中率只统计同时报告输入 token 和缓存读取 token 的成功请求。
+`eligible_cache_hit_ratio` 进一步应用最小前缀长度，`cold_input_tokens` 统计观察到的冷请求输入量。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/cpa_cache_reset_probe.py --file adm48.log

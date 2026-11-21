@@ -102,3 +102,268 @@ table inet vps_launcher_guard {
     Replace("__TCP_PORTS__", $tcpPorts).
     Replace("__UDP_PORTS__", $udpPorts)
 }
+
+function Get-ProxyFirewallLiveStatePython {
+  # Shared by the baseline's own post-apply check and the read-only drift gate.
+  # All three chains are compared by nft's machine-readable semantics, so a
+  # deleted or altered NAT redirect cannot stay hidden behind a correct rules
+  # file and an active oneshot service.
+  return @'
+import json
+import os
+import sys
+
+try:
+    doc = json.loads(os.environ["FIREWALL_NFT_JSON"])
+except (KeyError, TypeError, ValueError):
+    print("live-unreadable")
+    raise SystemExit(0)
+objects = doc.get("nftables") if isinstance(doc, dict) else None
+if not isinstance(objects, list):
+    print("live-unreadable")
+    raise SystemExit(0)
+
+def valid_json(expression):
+    # nft's JSON mode can omit a malformed expression object. Empty or opaque
+    # targets in any rule are therefore unreadable, regardless of chain.
+    if not isinstance(expression, dict) or not expression:
+        return False
+    if "counter" in expression:
+        counter = expression["counter"]
+        if (
+            not isinstance(counter, dict)
+            or set(counter) != {"packets", "bytes"}
+            or any(
+                not isinstance(counter[key], int)
+                or isinstance(counter[key], bool)
+                or counter[key] < 0
+                for key in ("packets", "bytes")
+            )
+        ):
+            return False
+    return True
+
+for item in objects:
+    if not isinstance(item, dict):
+        print("live-unreadable")
+        raise SystemExit(0)
+    if "rule" not in item:
+        continue
+    rule = item["rule"]
+    if not (
+        isinstance(rule, dict)
+        and rule.get("table") == "vps_launcher_guard"
+        and isinstance(rule.get("expr"), list)
+        and rule["expr"]
+        and all(valid_json(expression) for expression in rule["expr"])
+    ):
+        print("live-rules-unreadable")
+        raise SystemExit(0)
+
+
+def chains(table, name):
+    found = [
+        item["chain"] for item in objects
+        if isinstance(item, dict)
+        and isinstance(item.get("chain"), dict)
+        and item["chain"].get("table") == table
+        and item["chain"].get("name") == name
+    ]
+    return found if len(found) == 1 else None
+
+
+def rules(table, name):
+    found = [
+        item["rule"] for item in objects
+        if isinstance(item, dict)
+        and isinstance(item.get("rule"), dict)
+        and item["rule"].get("table") == table
+        and item["rule"].get("chain") == name
+    ]
+    if not found:
+        return []
+    if any(not isinstance(item.get("expr"), list) for item in found):
+        return None
+    return [item["expr"] for item in found]
+
+
+table = "vps_launcher_guard"
+# An exact rule list is insufficient if another chain in this table also owns
+# an input hook and accepts before the managed chain sees the packet.
+hooks = {}
+for item in objects:
+    chain = item.get("chain") if isinstance(item, dict) else None
+    if not isinstance(chain, dict) or chain.get("table") != table:
+        continue
+    hook = chain.get("hook")
+    if not isinstance(hook, str):
+        continue
+    hooks[hook] = hooks.get(hook, 0) + 1
+shadowed = [hook for hook in hooks if hooks[hook] > 1]
+if shadowed:
+    print("live-hooks:" + ",".join(shadowed))
+    raise SystemExit(0)
+prerouting = chains(table, "prerouting")
+output = chains(table, "output")
+input_chain = chains(table, "input")
+if prerouting is None or output is None or input_chain is None:
+    print("live-chain")
+    raise SystemExit(0)
+for chain, kind, hook, priority, policy in (
+    (prerouting[0], "nat", "prerouting", -100, "accept"),
+    (output[0], "nat", "output", -100, "accept"),
+    (input_chain[0], "filter", "input", -10, "drop"),
+):
+    if (
+        chain.get("family") != "inet"
+        or chain.get("type") != kind
+        or chain.get("hook") != hook
+        or chain.get("prio") != priority
+        or chain.get("policy") != policy
+    ):
+        print("live-chain")
+        raise SystemExit(0)
+
+try:
+    hop_start = int(sys.argv[1])
+    hop_end = int(sys.argv[2])
+    hop_target = int(sys.argv[3])
+    tcp_text = sys.argv[4]
+    udp_text = sys.argv[5]
+    tcp = [int(value) for value in tcp_text.split()]
+    udp = [int(value) for value in udp_text.split()]
+except (IndexError, TypeError, ValueError):
+    print("live-unreadable")
+    raise SystemExit(0)
+
+expected_prerouting = [[
+    {"match": {
+        "op": "!=",
+        "left": {"meta": {"key": "iifname"}},
+        "right": "lo",
+    }},
+    {"match": {
+        "op": "==",
+        "left": {"payload": {"protocol": "udp", "field": "dport"}},
+        "right": {"range": [hop_start, hop_end]},
+    }},
+    {"counter": {"packets": 0, "bytes": 0}},
+    {"redir": {"port": hop_target}},
+]]
+expected_output = [[
+    {"match": {
+        "op": "==",
+        "left": {"fib": {"result": "type", "flags": ["local"],
+                         "daddr": {"payload": {"protocol": "ip", "field": "daddr"}}}},
+        "right": "local",
+    }},
+    {"match": {
+        "op": "==",
+        "left": {"payload": {"protocol": "udp", "field": "dport"}},
+        "right": {"range": [hop_start, hop_end]},
+    }},
+    {"counter": {"packets": 0, "bytes": 0}},
+    {"redir": {"port": hop_target}},
+]]
+expected_input = [
+    [
+        {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "tcp"}},
+        {"match": {"op": ">", "left": {"payload": {"protocol": "ip", "field": "hdrlength"}}, "right": 5}},
+        {"drop": None},
+    ],
+    [
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "invalid"}},
+        {"drop": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "lo"}},
+        {"accept": None},
+    ],
+    [
+        {"match": {
+            "op": "==",
+            "left": {"meta": {"key": "l4proto"}},
+            "right": {"set": ["icmp", "ipv6-icmp"]},
+        }},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 67}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 68}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 547}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 546}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"set": tcp}}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": {"set": udp}}},
+        {"accept": None},
+    ],
+]
+
+
+def normalize(exprs):
+    # nft -j includes volatile packet/byte counters. Their values are not part
+    # of the configuration contract, but their presence and ordinal position
+    # are, so normalize only those two fields.
+    normalized = []
+    for expression in exprs:
+        if not isinstance(expression, dict):
+            return None
+        expression = dict(expression)
+        if "counter" in expression:
+            counter = expression["counter"]
+            if not isinstance(counter, dict) or set(counter) != {"packets", "bytes"}:
+                return None
+            expression["counter"] = {"packets": 0, "bytes": 0}
+        normalized.append(expression)
+    return normalized
+
+
+def normalize_rules(all_rules):
+    # nft -j returns a list of rules; tests/rendered contracts use a list of
+    # expression lists. Normalize both into the same rule-by-rule shape.
+    if not isinstance(all_rules, list):
+        return None
+    normalized = []
+    for rule in all_rules:
+        exprs = rule.get("expr") if isinstance(rule, dict) else rule
+        if not isinstance(exprs, list):
+            return None
+        current = normalize(exprs)
+        if current is None:
+            return None
+        normalized.append(current)
+    return normalized
+
+
+actual = {
+    "prerouting": normalize_rules(rules(table, "prerouting")),
+    "output": normalize_rules(rules(table, "output")),
+    "input": normalize_rules(rules(table, "input")),
+}
+if any(value is None for value in actual.values()):
+    print("live-rules-unreadable")
+    raise SystemExit(0)
+expected = {
+    "prerouting": normalize_rules(expected_prerouting),
+    "output": normalize_rules(expected_output),
+    "input": normalize_rules(expected_input),
+}
+if actual == expected:
+    print("exact")
+else:
+    mismatched = [name for name in expected if actual[name] != expected[name]]
+    print("live-rules:" + ",".join(mismatched))
+'@
+}

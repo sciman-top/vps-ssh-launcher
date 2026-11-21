@@ -8,6 +8,7 @@ import json
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Callable, cast
+from unittest import mock
 from cpa_catalog_expectations import (
     ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
@@ -40,14 +42,29 @@ def _guardrail_preparation_fixture(
 ) -> str:
     """Keep a syntactically whole preparation prefix for focused execution."""
 
+    source = source.replace("\r\n", "\n")
     header_end = source.index('$ErrorActionPreference = "Stop"')
     body = source[header_end:]
     if not include_updater_timeout:
-        body = body.split("if ($AuditProjection) {", 1)[0]
+        body = body.replace(
+            "$updaterTimeoutConfPath = Join-Path $scriptDir "
+            '"remote\\cpa-update-timeout.conf"',
+            "$updaterTimeoutConfPath = $env:VPS_TEST_UPDATER_TIMEOUT",
+            1,
+        )
         body += "\nfunction Assert-ProjectionSourcesUnchanged { }"
         body += "\n$projectionHashPairs = ''"
-        body += "\nfunction Invoke-BwgRemoteScript { }"
-    guard_end = body.index("$guardrailScriptPath = $PSCommandPath")
+    body = body.replace(
+        "if ($QuarantineClaudeOAuth -and [string]::IsNullOrWhiteSpace($QuarantineUserDirective)) {",
+        "if ($false) {",
+        1,
+    )
+    body = body.replace(
+        '$updaterTimeoutConfText = Read-ProjLeafText -Path $updaterTimeoutConfPath -Description "CPA updater timeout drop-in"',
+        '$updaterTimeoutConfText = "# fixture only"',
+        1,
+    )
+    body = body.replace('if ($Profile -ne "bwg") {', "if ($false) {", 1)
     command_start = body.find("function Invoke-BwgRemoteScript {")
     if command_start < 0:
         raise AssertionError("guardrail fixture could not find the command boundary")
@@ -58,14 +75,12 @@ def _guardrail_preparation_fixture(
         "$guardrailTemplateTexts = @{}",
         "function Assert-ProjectionSourcesUnchanged",
     ):
-        if body.find(marker, guard_end) < 0:
+        if body.find(marker) < 0:
             raise AssertionError(f"guardrail fixture stopped before {marker}")
-    body = "\n" + body[guard_end:]
     lines = [
         line
         for line in body.splitlines()
         if "scriptDir = Split-Path -Parent" not in line
-        and "guardrailScriptPath = $PSCommandPath" not in line
         and "repoRoot = Split-Path -Parent" not in line
         and "ensure_repo_imports()" not in line
         and not line.startswith('"{')
@@ -83,14 +98,159 @@ def _guardrail_preparation_fixture(
     )
     guarded.append(". $project_environment_path")
     for line in lines:
-        if line.startswith("if (@($Apply, $Observe, $AuditProjection"):
-            guarded.append("if ($false) {")
-            continue
         guarded.append(line)
     return "\n".join(guarded)
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_doctor_oauth_egress_scan_is_precise_and_redacted(self) -> None:
+        repo = Path(__file__).parents[1]
+        doctor = (repo / "scripts/remote/cpa-guardrail-doctor.sh").read_text(
+            encoding="utf-8"
+        )
+        block = (
+            'echo "==cpa-doctor=="'
+            + doctor.split('echo "==cpa-doctor=="', 1)[1].split(
+                'echo "==container=="', 1
+            )[0]
+        )
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for OAuth egress scan")
+        baseline_cases = {
+            "OAI_FIXTURE_BASE_URL": "http://127.0.0.1:8317",
+            "OPENAI_FIXTURE_BASE_URL": "http://127.0.0.1:8317",
+        }
+        harness_prefix = (
+            "set -u\n"
+            "DOCTOR_FAILED=0\n"
+            'mark_fail() { echo "$1=FAIL"; DOCTOR_FAILED=1; }\n'
+            "env() {\n"
+            "  printf '%s\\n' OAI_SENSITIVE_VALUE\n"
+            "}\n"
+        )
+        harness_suffix = block + '\necho "DOCTOR_FAILED=$DOCTOR_FAILED"\n'
+
+        def probe(
+            extra_environment: dict[str, str],
+        ) -> subprocess.CompletedProcess[str]:
+            visible_environment = {
+                **baseline_cases,
+                "https_proxy": "http://ordinary-proxy.invalid:8443",
+                **extra_environment,
+            }
+            case_environment = {
+                "PATH": os.environ.get("PATH", ""),
+                "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+                "WINDIR": os.environ.get("WINDIR", ""),
+                "COMSPEC": os.environ.get("COMSPEC", ""),
+                "TMP": os.environ.get("TMP", ""),
+                "TEMP": os.environ.get("TEMP", ""),
+                "HOME": os.environ.get("HOME", ""),
+                "LANG": os.environ.get("LANG", ""),
+                "MSYSTEM": os.environ.get("MSYSTEM", ""),
+                "NO_PROXY": "oauth.proxy.invalid",
+            }
+            case_prefix = harness_prefix.replace(
+                "  printf '%s\\n' OAI_SENSITIVE_VALUE",
+                "  printf '%s\\n' "
+                + " ".join(
+                    shlex.quote(f"{key}={value}")
+                    for key, value in visible_environment.items()
+                ),
+                1,
+            )
+            self.assertNotEqual(case_prefix, harness_prefix)
+            case_environment = {
+                **case_environment,
+                **{
+                    key: value
+                    for key, value in extra_environment.items()
+                    if key in {"NO_PROXY", "no_proxy"}
+                },
+            }
+            result = subprocess.run(
+                self._bash_command(
+                    bash,
+                    "-c",
+                    case_prefix + harness_suffix,
+                ),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                env=case_environment,
+            )
+            if result.returncode != 0 or "DOCTOR_FAILED" not in result.stdout:
+                raise AssertionError(
+                    f"harness output={result.stdout!r} stderr={result.stderr!r} "
+                    f"environment={sorted(extra_environment)!r}"
+                )
+            return result
+
+        generic = probe({})
+        self.assertEqual(generic.returncode, 0, generic.stderr)
+        self.assertIn("DOCTOR_FAILED=0", generic.stdout)
+        self.assertNotIn("accounts.google.com", generic.stdout)
+        lookalike = probe({"CODEX_FOO_BASE_URL": "https://fixture.invalid/v1"})
+        self.assertIn("DOCTOR_FAILED=0", lookalike.stdout)
+
+        cases = (
+            (
+                "OPENAI_OAUTH_BASE_URL",
+                "https://user:secret@proxy.invalid/v1",
+                "secret",
+                "oauth_egress_override_kind=OAUTH_AUTHENTICATION",
+            ),
+            (
+                "CHATGPT_AUTH_BASE_URL",
+                "https://user:secret@proxy.invalid/v1",
+                "CHATGPT_AUTH_BASE_URL",
+                "oauth_egress_override_kind=OAUTH_AUTHENTICATION",
+            ),
+            (
+                "CODEX_AUTH_ENDPOINT",
+                "https://oauth.proxy.invalid/v1",
+                "CODEX_AUTH_ENDPOINT",
+                "oauth_egress_override_kind=OAUTH_AUTHENTICATION",
+            ),
+            (
+                "https_proxy",
+                "http://user:secret@accounts.google.com:8443",
+                "accounts.google.com:8443",
+                "oauth_egress_proxy_var=https_proxy",
+            ),
+        )
+        for name, value, redacted_key, expected_marker in cases:
+            with self.subTest(variable=name):
+                result = probe({name: value})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(generic.returncode, 0, generic.stderr)
+                self.assertIn("DOCTOR_FAILED=0", generic.stdout)
+                lines = result.stdout.replace("\r\n", "\n").splitlines()
+                self.assertIn(expected_marker, lines)
+                self.assertIn("oauth_upstream_egress_override=PRESENT", lines)
+                self.assertIn("oauth-upstream-egress=FAIL", lines)
+                self.assertIn("DOCTOR_FAILED=1", lines)
+                self.assertNotIn(redacted_key, result.stdout)
+        for name, value in (
+            ("CODEX_LUNA_BASE_URL", "https://fixture.example.invalid/v1"),
+            ("CODEX_FOO_BASE_URL", "https://fixture.example.invalid/v1"),
+            ("CODEX_BASE_URL_URL", "https://fixture.example.invalid/v1"),
+        ):
+            with self.subTest(lookalike=name):
+                result = probe({name: value})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("DOCTOR_FAILED=0", result.stdout)
+        bypassed = probe(
+            {
+                "https_proxy": "http://oauth.proxy.invalid:8443",
+                "NO_PROXY": "oauth.proxy.invalid",
+            }
+        )
+        self.assertEqual(bypassed.returncode, 0, bypassed.stderr)
+        self.assertIn("DOCTOR_FAILED=0", bypassed.stdout)
+
     def test_diagnostics_do_not_share_predictable_tmp_files(self) -> None:
         root = Path(__file__).parents[1] / "scripts/remote"
         bash = self._resolve_bash()
@@ -1418,12 +1578,20 @@ docker() {{
         self.assertIn(
             "updater-schedule-compose=UNVERIFIED reason=no_docker_or_compose", schedule
         )
-        # 2026-11-20: the service sets no TimeoutStartSec, and systemd reports
-        # its 90s default as 20min through the unit property. The budget gate
-        # must fall back to DefaultTimeoutStartUSec or it fails a schedule the
-        # reviewer already sized to the slot.
+        # Read the loaded per-unit property before the global default. systemd
+        # can render infinity or a duration differently between versions, so
+        # both coordinate orders are queried and their results normalised.
+        self.assertIn(
+            "systemctl show -p TimeoutStartUSec --value cliproxyapi-update.service",
+            schedule,
+        )
         self.assertIn("systemctl show -p DefaultTimeoutStartUSec --value", schedule)
         self.assertIn("existing_default_seconds", schedule)
+        self.assertIn("property_seconds", schedule)
+        self.assertIn(
+            "systemctl show -p TimeoutStartUSec --value cliproxyapi-update.service",
+            schedule,
+        )
 
         # Apply projects the timer between the timeout drop-in and the
         # daemon-reload that activates it, and backs up the original unit.
@@ -1456,6 +1624,19 @@ docker() {{
         apply_projection_at = apply_source.index("ROLLBACK updater_timer_slot_split")
         daemon_reload_at = apply_source.index("ROLLBACK admission_daemon_reload")
         self.assertLess(apply_projection_at, daemon_reload_at)
+        effective_readback_at = apply_source.index(
+            "ROLLBACK updater_timer_effective_readback delay="
+        )
+        self.assertLess(daemon_reload_at, effective_readback_at)
+        self.assertIn(
+            'systemctl show "$UPDATER_TIMER_UNIT" -p TimersCalendar --value',
+            apply_source,
+        )
+        self.assertIn(
+            'systemctl show "$UPDATER_TIMER_UNIT" -p RandomizedDelayUSec --value',
+            apply_source,
+        )
+        self.assertIn("300000000|5min)", apply_source)
 
         # The rewrite is key-order preserving and idempotent: run the embedded
         # block against a stock unit and against an already-projected one.
@@ -1790,15 +1971,24 @@ $result | ConvertTo-Json -Depth 6 -Compress
             loaded = json.loads(result.stdout)
             projection = loaded.pop("projection")
             self.assertEqual(len(loaded), 5)
+            helper = (
+                (root / "scripts/lib/proxy_tls_contract.ps1")
+                .read_text(encoding="utf-8")
+                .split("return @'\n", 1)[1]
+                .split("\n'@", 1)[0]
+            )
             for name, record in loaded.items():
                 payload = (scripts / "remote" / f"cpa-guardrail-{name}.sh").read_bytes()
+                expected = payload.replace(b"\r\n", b"\n").replace(
+                    b"__VERIFIED_TLS_HELPER__", helper.encode()
+                )
                 self.assertEqual(
                     base64.b64decode(record["payload"]),
-                    payload.replace(b"\r\n", b"\n").removesuffix(b"\n"),
+                    expected.removesuffix(b"\n"),
                 )
                 self.assertEqual(
                     record["hash"],
-                    hashlib.sha256(payload.replace(b"\r\n", b"\n")).hexdigest(),
+                    hashlib.sha256(expected).hexdigest(),
                 )
                 self.assertTrue(record["tracked"])
 
@@ -1888,6 +2078,39 @@ $result | ConvertTo-Json -Depth 6 -Compress
         self.assertIn("$BK/cpa-update-timeout.conf.missing", apply_script)
         self.assertIn(
             'cp -a "$BK/cpa-update-timeout.conf" "$UPDATER_TIMEOUT_DROPIN"',
+            apply_script,
+        )
+        self.assertIn('PROJECTION_COMMIT="__CPA_PROJECTION_COMMIT__"', apply_script)
+        self.assertIn(
+            '"__CPA_PROJECTION_COMMIT__",\n  $projectionCommit',
+            source,
+        )
+        self.assertIn("$BK/projected-sources/SHA256SUMS", apply_script)
+        self.assertIn("$BK/projection-sources.txt", apply_script)
+        self.assertIn("projection_source_scan_dir=", apply_script)
+        self.assertIn("projection_source_scan=", apply_script)
+        self.assertIn('if [ ! -f "$projection_source_scan" ]; then', apply_script)
+        self.assertIn('rm -rf -- "$projection_source_scan_dir"', apply_script)
+        source_scan = apply_script[
+            apply_script.index("projection_source_scan_dir=") : apply_script.index(
+                "ROLLBACK_DONE=0"
+            )
+        ]
+        self.assertIn('if [ -L "$projection_source_scan_dir" ]', source_scan)
+        self.assertIn(
+            "PATH= && export PATH &&\n"
+            '  /usr/bin/grep -Eqi "api[-_]?key" SHA256SUMS\n'
+            ") || scan_status=$?\n",
+            source_scan,
+        )
+        self.assertIn('if [ "$scan_status" = 0 ]; then', source_scan)
+        self.assertIn("API-key material", source_scan)
+        self.assertIn('if [ "$scan_status" != 1 ]; then', source_scan)
+        self.assertEqual(source_scan.count("exit 4"), 4)
+        self.assertNotIn('rm -rf -- "$BK"', source_scan)
+        self.assertNotIn('rm -rf -- "$BK"', apply_script)
+        self.assertIn(
+            "printf '%s' '__CPA_PROVIDER_ROUTES_B64__' | base64 -d",
             apply_script,
         )
         # Every action that embeds repo-derived bytes (route manifest, policy,
@@ -3823,10 +4046,90 @@ except Exception as exc:
         # surfacing as a user-visible error on the desktop.
         self.assertIn("gateway-443-lane-route=OK", doctor)
         self.assertIn("mark_fail gateway-443-lane-route", doctor)
-        self.assertIn("lane443_valid=$(curl", doctor)
+        self.assertIn('tls_curl_args "$lane443_server" 33387', doctor)
+        self.assertIn("$lane443_valid", doctor)
         self.assertIn('--resolve "$lane443_server:33387:127.0.0.1"', doctor)
         self.assertIn(
             '[ "$lane443_valid" = "401" ] && [ "$lane443_bare" = "404" ]', doctor
+        )
+        self.assertNotIn("curl --noproxy '*' -k", doctor)
+
+    def test_guardrail_tls_checks_consume_the_shared_verified_helper(self) -> None:
+        repo = Path(__file__).parents[1]
+        wrapper = (repo / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        self.assertIn("Get-VerifiedLocalTlsCaPython", wrapper)
+        self.assertIn('.Replace(\n    "__VERIFIED_TLS_HELPER__"', wrapper)
+        for name in ("doctor", "apply", "rotate-path"):
+            with self.subTest(name=name):
+                text = (repo / "scripts/remote" / f"cpa-guardrail-{name}.sh").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("__VERIFIED_TLS_HELPER__", text)
+                self.assertIn("verified_live_tls_curl_args(host, port)", text)
+
+        contract = repo / "scripts/lib/proxy_tls_contract.ps1"
+        source = contract.read_text(encoding="utf-8")
+        helper = source.split("return @'\n", 1)[1].split("\n'@", 1)[0]
+        namespace: dict[str, Any] = {}
+        exec(compile(helper, str(contract), "exec"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relative_bundle = root / "relative.pem"
+            relative_bundle.write_text(
+                "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n",
+                encoding="ascii",
+            )
+            previous = os.getcwd()
+            try:
+                os.chdir(root)
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_LOCAL_TLS_VERIFY_DIR": root.as_posix(),
+                        "VPS_SSH_LAUNCHER_TLS_CA_BUNDLE": relative_bundle.name,
+                    },
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "not shell-safe"):
+                        namespace["verified_live_tls_curl_args"]("localhost", 8443)
+            finally:
+                os.chdir(previous)
+
+    def test_path_rotation_reverts_after_signal_during_post_write_probe(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-rotate-path.sh"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "trap cleanup_path_rotation EXIT",
+            "trap 'exit 129' HUP",
+            "trap 'exit 130' INT",
+            "trap 'exit 143' TERM",
+            "MUTATED=1",
+            "ROLLBACK_DONE=1",
+            "restore_path() {",
+        ):
+            self.assertIn(required, source)
+        self.assertGreater(
+            source.index("MUTATED=1"), source.index("os.replace(temp, path)")
+        )
+        self.assertLess(
+            source.index("MUTATED=1"),
+            source.index("assert_path_route_contract_settled"),
+        )
+
+    def test_guardrail_apply_forwards_natural_prompts_without_replacement(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("antigravity_fingerprint_swap", source)
+        replace = next(
+            line.strip() for line in source.splitlines() if '"replace":' in line
+        )
+        self.assertEqual(replace, '"replace": [],')
+        self.assertIn(
+            'antigravity_provider_after["sensitive-words-replace"]',
+            source,
         )
 
     def test_cpa_guardrails_requires_the_model_scoped_breaker_generation(
@@ -3857,6 +4160,11 @@ except Exception as exc:
         self.assertIn('Resolve-LauncherUserDataPath -Leaf "providers.env"', source)
         self.assertNotIn('$env:APPDATA "vps-ssh-launcher', source)
         self.assertNotIn("副本", source)
+        read = source.index("Get-Content -LiteralPath $ProviderEnvPath")
+        privacy = source.index(
+            "Assert-LauncherPrivateSecretFile `\n  -Path $ProviderEnvPath", 0, read
+        )
+        self.assertLess(privacy, read, "providers.env must be private before read")
 
     def test_cpa_guardrails_uses_the_shared_user_data_root(self) -> None:
         # Behaviour, not text: drive the real helper the guardrail resolves
@@ -4154,13 +4462,13 @@ foreach ($case in @(
                 )
                 script_text = (
                     "set -u\n"
-                    f'PROBE_CALLS="{calls_file.as_posix()}"\n'
+                    f'PROBE_CALLS="{self._bash_path(bash, calls_file)}"\n'
                     ': > "$PROBE_CALLS"\n'
-                    f'NGINX_CONF="{conf.as_posix()}"\n'
-                    + stub
-                    + raw_fn
-                    + settled_fn
-                    + "\n"
+                    f'NGINX_CONF="{self._bash_path(bash, conf)}"\n'
+                    f'DIAGNOSTIC_DIR="{self._bash_path(bash, Path(directory))}"\n'
+                    "tls_curl_args() {\n"
+                    "  printf '%s\\n%s' '--cacert' '/tmp/private-stub.pem'\n"
+                    "}\n" + stub + raw_fn + settled_fn + "\n"
                     f'if assert_path_route_contract_settled "{active_path}" '
                     f'"{old_path}"; then\n'
                     '  echo "SETTLED_RC=0"\n'
@@ -4518,6 +4826,21 @@ foreach ($case in @(
         # rollback decision must key off the transaction phase.
         source = read_guardrail_source()
         self.assertIn("trap 'exit 129' HUP", source)
+        self.assertLess(
+            source.index("MUTATED=0"),
+            source.index("trap cleanup_guardrail_preflight EXIT"),
+        )
+        self.assertLess(
+            source.index("trap cleanup_guardrail_preflight EXIT"),
+            source.index("INTL_COUNTER_DIR=$(mktemp"),
+        )
+        # The later EXIT handler is defined after its diagnostic directory
+        # exists, but is installed after set -u has already been active.
+        self.assertLess(
+            source.index("MUTATED=0"),
+            source.index("cleanup_preflight_and_mutated()"),
+        )
+        self.assertIn('if [ "${MUTATED:-0}" = 1 ] && [ "$status" -ne 0 ]; then', source)
         self.assertIn('if [ "$rc" -ne 0 ] || [ "$MUTATED" -eq 1 ]; then', source)
         self.assertIn("MUTATED=1", source)
         self.assertGreaterEqual(source.count("trap - EXIT HUP INT TERM"), 2)
