@@ -125,6 +125,7 @@
       "max_pending": 4,
       "queue_timeout_seconds": 120,
       "requests_per_minute": 18,
+      "mirror_probe_interval_seconds": 600,
       "cooldown_schedule_seconds": [
         60,
         120,

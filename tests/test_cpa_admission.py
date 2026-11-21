@@ -919,10 +919,13 @@ def test_antigravity_proxy_stops_after_risk_response_without_replaying(
             assert response.getheader("X-CPA-Admission-Reason") == expected
             if expected == "operator_review_required":
                 assert response.getheader("Retry-After") is None
+            elif b"100000" in payload:
+                # The mirrored window is honored internally, but the envelope
+                # points at the lane's next recheck slot: a client retrying on
+                # the advertised value rides the mirror probe (2026-11-21).
+                assert int(response.getheader("Retry-After") or "0") == 600
             else:
-                assert int(response.getheader("Retry-After") or "0") >= (
-                    59 if b"100000" not in payload else 99999
-                )
+                assert int(response.getheader("Retry-After") or "0") >= 59
             response.read()
             assert received == [body]
         finally:
@@ -2145,6 +2148,179 @@ def test_explicit_retry_after_is_capped_and_not_bypassed_by_early_probe(
     assert not waiter.is_alive()
     assert len(held) == 1
     assert held[0].admitted and held[0].probe
+
+
+def test_mirror_probe_verifies_recovery_inside_server_window(monkeypatch: Any) -> None:
+    """2026-11-21: one Antigravity 429 carrying Retry-After 17504 latched the
+    shared lane for the whole advertised window while sibling traffic was
+    still being served seconds later. A mirror-probe lane re-tests recovery
+    one request at a time on its configured cadence, and the cooldown
+    rejection advertises the next recheck slot so a client retry rides the
+    probe instead of sleeping out the window."""
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=17504)
+    assert state.snapshot()["cooldown_remaining"] == 17504
+
+    # Inside the window the client is pointed at the next recheck slot, not
+    # at the end of the mirrored window.
+    blocked = state.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "cooldown"
+    assert blocked.retry_after == 600
+
+    # The slot re-tests recovery with a single reset probe.
+    clock[0] += 600
+    probe = state.acquire()
+    assert probe.admitted and probe.probe and probe.reset_probe
+    assert probe.reason == "mirror_probe"
+
+    # A surviving probe clears the mirrored window immediately.
+    state.release(probe, capacity_error=False, retry_after=None)
+    snapshot = state.snapshot()
+    assert snapshot["cooldown_active"] is False
+    assert snapshot["server_retry_after_remaining"] == 0
+    normal = state.acquire()
+    assert normal.admitted and not normal.probe
+    state.release(normal, capacity_error=False, retry_after=None)
+
+
+def test_mirror_probe_failure_remirrors_and_rearms_cadence(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=17504)
+
+    clock[0] += 600
+    probe = state.acquire()
+    assert probe.admitted and probe.reason == "mirror_probe"
+    state.release(probe, capacity_error=True, retry_after=900)
+
+    # A failed probe re-mirrors the upstream window (never shortens it) and
+    # re-arms the cadence, so the probe rate stays bounded no matter how long
+    # the upstream claims to be busy.
+    assert state.snapshot()["cooldown_remaining"] == 16904
+    blocked = state.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "cooldown"
+    assert blocked.retry_after == 600
+
+
+def test_mirror_probe_disabled_keeps_the_blind_window(monkeypatch: Any) -> None:
+    """Lanes that omit the key keep the strict historical contract: the
+    rejection advertises the mirrored window end and nothing probes early."""
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    disabled = {
+        key: value
+        for key, value in lane(config(), "antigravity-oauth").items()
+        if key != "mirror_probe_interval_seconds"
+    }
+    state = LaneState(disabled)
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=17504)
+
+    blocked = state.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "cooldown"
+    assert blocked.retry_after == 17504
+
+    clock[0] += 600
+    still_blocked = state.acquire()
+    assert not still_blocked.admitted
+    assert still_blocked.reason == "cooldown"
+
+
+def test_mirror_probe_lane_queues_a_fitting_arrival_for_the_recheck_slot(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    state.release(state.acquire(), capacity_error=True, retry_after=17504)
+
+    # An arrival whose queue budget reaches the recheck slot waits for it
+    # instead of being bounced for the whole window; the FIFO head rides the
+    # probe (same contract as the non-strict early probe, 074815a).
+    clock[0] = 660.0
+    held: list[Any] = []
+    waiter = threading.Thread(target=lambda: held.append(state.acquire()))
+    waiter.start()
+    deadline = time.monotonic() + 2
+    while state.pending != 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert state.pending == 1
+    clock[0] = 700.0
+    waiter.join(timeout=3)
+    assert not waiter.is_alive()
+    assert len(held) == 1
+    assert held[0].admitted and held[0].probe
+    assert held[0].reason == "mirror_probe"
+    state.release(held[0], capacity_error=False, retry_after=None)
+
+
+def test_mirror_probe_never_runs_under_an_operator_hold(monkeypatch: Any) -> None:
+    """A hold describes the account itself (enforcement or review), so the
+    mirror-probe cadence must not turn client demand into upstream traffic."""
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    lease = state.acquire()
+    state.release(
+        lease,
+        capacity_error=False,
+        retry_after=None,
+        successful=False,
+        hold_reason="account_restricted",
+    )
+    clock[0] += 600
+    assert state.acquire().reason == "operator_review_required"
+
+
+def test_mirror_probe_cadence_survives_a_restart_inside_the_window(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    clock = [100.0]
+    wall = [2000000000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+    loaded_lane = dict(lane(config(), "antigravity-oauth"))
+    path = risk_state_path(tmp_path)
+    state = LaneState(loaded_lane, path)
+    state.release(state.acquire(), capacity_error=True, retry_after=17504)
+    clock[0] += 5
+    wall[0] += 5
+
+    # A restart inside an unverified window must not turn the first client
+    # request into an immediate probe; the next recheck waits one interval.
+    restarted = LaneState(loaded_lane, path)
+    blocked = restarted.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "cooldown"
+    assert blocked.retry_after == 600
+
+
+def test_config_rejects_unsafe_mirror_probe_intervals(tmp_path: Path) -> None:
+    raw_config = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    antigravity = next(
+        item for item in raw_config["lanes"] if item["name"] == "antigravity-oauth"
+    )
+    for bad, message in (("600", "positive number"), (10, "at least 30")):
+        antigravity["mirror_probe_interval_seconds"] = bad
+        drifted = json.loads(json.dumps(raw_config))
+        config_path = tmp_path / "cpa-admission.json"
+        manifest_path = tmp_path / "cpa_provider_routes.json"
+        config_path.write_text(json.dumps(drifted), encoding="utf-8")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(ValueError, match=message):
+            load_config(config_path, route_manifest_path=manifest_path)
 
 
 def test_quota_reset_probe_can_heal_before_old_server_deadline(
@@ -3915,7 +4091,17 @@ def test_antigravity_provider_quota_window_survives_restart(
         lane_state = server.proxy.lanes["antigravity-oauth"].snapshot()
         assert lane_state["cooldown_scope"] == expected_scope
         status, retry_after = call(sonnet)
-        assert status == 429 and delay - 3 <= int(retry_after or 0) <= delay
+        if expected_scope == "lane":
+            # The mirrored window survives the restart (cooldown_scope and the
+            # remaining check below), but the envelope points at the lane's
+            # next mirror-probe recheck slot: a client retrying on the
+            # advertised value rides the probe instead of sleeping out the
+            # window (mirror-probe contract, 2026-11-22).
+            assert status == 429
+            assert int(retry_after or 0) == 600
+            assert lane_state["cooldown_remaining"] >= delay - 3
+        else:
+            assert status == 429 and delay - 3 <= int(retry_after or 0) <= delay
         if expected_scope == "model":
             assert disk["not_before"] == 0
             assert set(disk["quota_group_not_before"]) == {"claude-gpt"}
