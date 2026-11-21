@@ -559,11 +559,12 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   `auth/` 只读清点：10 × `workbuddy-<uid>.json`（CN，type 改写
   `workbuddy-provider`）+ 7 × `workbuddyai-<uid>.json`（INTL，自
   `workbuddy-intl-` 改名，type 改写 `workbuddy-ai-provider`），
-  凭据 token 原地平移、无一重登）：ChatGPT OAuth 1 个
-  账号、Antigravity OAuth 7 份凭据（2026-11-21 doctor 清点）、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
-  允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
+  凭据 token 原地平移、无一重登；2026-11-21 doctor/status 只读清点为
+  ChatGPT OAuth 1 个账号、Antigravity OAuth 8 份、WorkBuddy CN 9 份
+  （1 份 disabled）、INTL 7 份（全部 disabled/closed_dark），因此
+  WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
   不等于越安全**：每个凭据都是独立的账号级风险面，池化只把“单账号被限”的影响摊到
-  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 的 7 个凭据共用同一 provider lane：未绑定会话按全局
+  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 的 8 个凭据共用同一 provider lane：未绑定会话按全局
   `routing.strategy`（现 `round-robin`）分配，会话亲和会继续固定该选择，只有配额、认证、
   模型不支持或永久不可用信号才允许重绑定；轮转发生在**不同请求之间**。本次
   目标将同请求凭据上限降为 `max-retry-credentials=1`，不把失败提示词重放到
@@ -573,12 +574,12 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   限制为单一上游凭据，配合 `request-retry=0`，不会开启额外请求级重试轮次。
   这以瞬时可用性换取不把同一失败提示词和并发突发传播到多个账号；调用方下一次
   明确请求或用户选定的 API-key 路由承担降级。该权衡确有代价：一个账号的瞬时
-  429 会更快成为该次请求的结果。生产仍是旧值 `3` 时，不得按这一行描述其运行态；
-  清冷却、轮换凭据或制造探针流量均不在修复授权内。
-- **路由与缓存**：`cpa_policy.py` 目标值为 `session-affinity=true`、TTL `6h`、
-  `session-affinity-rebind-on=quota`、`session-affinity-subagents=true`。前三个字段已在
-  bwg 加载；2026-11-21 最终只读 doctor 仍读到 `session-affinity-subagents=false`，
-  因此子任务亲和目标尚未投影，不能按已上线描述。
+  429 会更快成为该次请求的结果。2026-11-21 strict doctor 已回读 `1`；清冷却、
+  轮换凭据或制造探针流量仍不在修复授权内。
+- **路由与缓存**：`session-affinity=true`、TTL `6h`、
+  `session-affinity-rebind-on=quota`、`session-affinity-subagents=true` 均已在
+  2026-11-21 strict doctor 回读。子任务亲和已加载但尚无独立自然子任务 A/B，
+  不能据此保证命中率上升或并发突发被限流。
   子任务继承父会话的凭据选择，优先保住共享前缀与模型的缓存局部性，也让一次分叉突发
   不扩散到更多消费级账号；这属于缓存与身份集中控制，不是限流规避，也没有经过
   自然子任务 A/B，不能保证缓存命中率上升。
@@ -588,7 +589,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   （2026-11-06 由 `fill-first` 改来：fill-first 把整个 WorkBuddy 池压到首个 ready 凭据上，
   与 per-account tripwire 的方向相反），由 `cpa_policy.py` 的 `EXPECTED_ROUTING` 机器钉定；
   它是跨请求的池内分散，不是同请求内的账号轮换，也不承诺降低上游限流。会话亲和
-  （TTL 6h）保证一次会话仍钉在一个凭据上；子任务亲和上线后才会继承该选择。上游 v8 配置说明
+  （TTL 6h）保证一次会话仍钉在一个凭据上；子任务亲和已继承该选择。上游 v8 配置说明
   `switch-preview-model` 已无 v8 对应项；
   仓库仍将它钉为 `false`，供兼容旧配置，不把该字段当作 v8 运行时护栏。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
@@ -600,17 +601,18 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   `requests_per_minute` 请求速率护栏**（见下文 shared-account admission 段）：
   它只对每条共享官方账号 lane 的普通准入做滚动 60s 计数背压，是"防突发失控"
   的扩散控制，不是账号配额保护、不识别 token、也不规避上游限流。
-- **明文 HTTP**：slot 3 `http://35.213.82.91:8003` 是用户保留的已接受传输风险；
-  不传敏感数据、不把 key 写入日志/证据；迁移 HTTPS 需独立评审。只读审计会以
-  `plaintext-http-provider` 警告持续暴露它。
+- **明文 HTTP**：slot 6 `http://172.17.0.1:18082` 是 Start Plan sidecar 的已接受
+  Docker-bridge 传输风险；防火墙限制来源网桥且不对公网暴露，但不改变同宿主
+  观察面可读明文的事实。不传敏感数据、不把 key 写入日志/证据；迁移 TLS/unix
+  socket 需独立评审。只读审计会以 `plaintext-http-provider` 警告持续暴露它。
 - **残余风险登记（技术不可消除，按证据层记录）**：
 
 | 残余风险 | 现状 / 证据层 | 触发与处置 | 关闭条件 |
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
 | 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified`；admission 侧 2026-10-31 增加 per-lane `requests_per_minute` 请求速率护栏（`host_loaded`，仅计数非 token、非账号配额） | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 + per-lane 请求速率背压 | CPA 上游提供账号级 token 预算，或独立实例隔离 |
-| 多凭据请求回退 | 全局值=3；`host_loaded` | 单请求最多触达三个上游凭据；后续独立请求仍可能由 WorkBuddy `credits` 选择其他账号 | 保持 `request-retry=0` 与有界凭据上限；跨请求账号选择仍受 WorkBuddy 调度和上游条款约束 |
-| 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
+| 多凭据请求回退 | 全局值=1；`host_loaded` | 同一请求不重放到兄弟消费级凭据；后续独立请求仍可能由 WorkBuddy `credits` 选择其他账号 | 保持 `request-retry=0` 与单凭据上限；跨请求账号选择仍受 WorkBuddy 调度和上游条款约束 |
+| 明文 HTTP slot 6 | `insecure_http_providers=slot=6 host=172.17.0.1 port=18082`；`host_loaded` | 不传敏感数据；防火墙仅放行容器网桥，审计持续 `plaintext-http-provider` 警告 | 迁 TLS/unix socket（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
 | ChatGPT OAuth 容量压力（单账号集中） | 24h 14 次容量事件，全部落在唯一 ChatGPT Plus 账号（gpt-6-luna 7 / sol 3 / terra 2 / 5.6-luna 2）；`controlled_live` 观测（2026-11-01 复核，见 [审查收口](../change-evidence/20261101-bwg-cpa-multiprovider-risk-review-closeout.md)） | model-level-cooling + per-model 冷却 + `Retry-After` 吸收，勿清冷却/换号/提并发；inflight=2、RPM24 | 上游容量恢复（无法本地消除）；降低集中度需**加账号容量**（用户决策，agent 不擅自新增/迁移账号） |
 
@@ -911,17 +913,18 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 ### 各通道账号暴露特征对比
 
-> **当前覆盖（2026-11-06）**：全局 `max-retry-credentials=3` 已替代历史
-> `0`。同名 DeepSeek 仍可在目录中双宿，但单个客户端请求最多触达三个
-> 上游凭据；旧段落中关于同一请求耗尽 WorkBuddy 后落到 OpenCode 的描述属于
-> 历史行为，不是当前安全策略。
+> **当前覆盖（2026-11-21）**：全局 `max-retry-credentials=1` 已替代历史
+> `3`/`0`。OpenCode slot 已退役，`deepseek-v4.1-flash` 仅由 WorkBuddy 承载；
+> 单个客户端请求不重放到兄弟消费级凭据。旧段落中关于同一请求耗尽
+> WorkBuddy 后落到 OpenCode 的描述属于历史行为，不是当前安全策略。
 
 | 通道 | 账号类型 | 聚合保护 | 风险特征 |
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Astra） | 第三方中转账号 | 无（中转方自行管理） | Sol 别名于 2026-11-11 退役；中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
 | opencode.ai zen（**2026-11-20 整槽退役**：用户退订 OpenCode Go；`deepseek-v4.1-flash-oc` + `glm-5.3-oc` / `glm-5.3-flash-oc` 三别名随之摘除、留 `oauth_exclusions` 墓碑） | 第三方中转账号 | 无 | 历史：2026-10-11 替换退役的 CIII 渠道；2026-10-18/2026-11-11 两度整槽退役、2026-10-24/2026-11-14 两度重收；2026-11-20 上午按用户指令增补 GLM 族单宿别名（`glm-5.3-oc`/`glm-5.3-flash-oc`，小写、1M 上下文），**同日用户退订，slot 2 连同三个 oc 别名最终退役**——manifest 删 slot 2、`opencode.ai` 入 `retired_hosts`（不入册则 apply 以孤儿 provider 回滚）、`x-opencode-session`/UA 钉头与 403/1010 request-scoped-errors 随槽消失；deepseek 车道回 wb 单腿。槽号不复用，`providers.env` 的 `BASE_URL_2`/`API_KEY_2` 映射保留未动作续订回加重放入口 |
-| Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
+| Slot 3 明文 HTTP（terra，2026-11-18 退役） | 历史第三方中转账号 | 无；明文传输 API key | 历史风险记录；当前 manifest 仅保留 retired host/tombstone |
+| zcode Start Plan sidecar | 官方账号本地 sidecar | 本机 lane `max_inflight=1` + 20 RPM + 有界队列 | Docker-bridge HTTP 明文仅限容器到宿主 sidecar；不对公网暴露，但同宿主观察面可读 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
 
@@ -1058,7 +1061,7 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   `beam-free` 于 2026-10-27 从 provider 与目录移除；
   `longcat-2.5-preview-free` 已于 2026-10-25 按用户决定移除。
   以下 2026-10-25～10-30 段落记录的是历史 `max-retry-credentials=0` 混合回退
-  行为；当前值为 `3`，单请求只在 WorkBuddy 内做有界凭据回退，不跨到 OpenCode。
+  行为；当前值为 `1`，单请求不重放到兄弟凭据，也不跨到已退役的 OpenCode。
   **2026-10-25 终态：裸名双宿（同日第二修订，用户决定）**：短命的桌面别名
   `deepseek-v4.1-flash-open` 当日退役（先经 CPA 面板添加并短暂契约化数小时，
   同日按用户指令移除，无墓碑——longcat 先例，doctor 未知 ID fail-closed
@@ -1066,8 +1069,8 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   `/models` 实测原生供此名，上下文钉 1000000，与 workbuddy settings 孪生
   钉值一致）。裸名自此双注册：workbuddy 插件 lane + opencode 槽位，registry
   池化两路凭据、执行层按可用性自动切换。`pickNextMixed` 只有在全局
-  `max-retry-credentials=0` 时才会跨 provider 遍历完整 `tried` 集；当前值为 `3`
-  只允许有限的 WorkBuddy 凭据回退，不能宣称 OpenCode 自动兜底。**边界（2026-10-30
+  `max-retry-credentials=0` 时才会跨 provider 遍历完整 `tried` 集；当前值为 `1`
+  且 OpenCode 已退役，不能宣称任何自动兜底。**边界（2026-10-30
   修复后沿用 2026-10-25 的实测形态）**：裸名仍按 workbuddy-oauth lane 过 admission 预算
   （max_inflight=1），但池化后 6004 不再上浮 admission——失败被 opencode
   成功腿吸收、终态 200，lane 不熔断，裸名在 8318 持续可用（实测：三凭据
@@ -1223,9 +1226,10 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   文件级编辑需 `docker restart`（在静默窗口执行，先快照）。
   旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
   排除清单中作为退役墓碑，`codex.ciii.club` 已入 `retired_hosts`。
-- 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
-  发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
-  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。2026-10-11 起只
+- 槽位 3（历史，2026-11-18 已随 http-bridge 退役）：曾固定到
+  `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文发送给中转。
+  该段保留为历史传输风险与路由演变记录；当前 manifest 只保留 retired host
+  与模型墓碑，不能据此宣称仍在服务。2026-10-11 起只
   保留上游 `gpt-5.6-terra` 裸名（`gpt-6.1-sol-91` 退役，别名留在排除清单；
   旧别名 `gpt-6-sol-91` 同样留清单防抢注）。2026-10-27 上游 codex 目录新增
   `gpt-6.1-terra` 并经 OAuth 发现自动注册进客户端目录，doctor

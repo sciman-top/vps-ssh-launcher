@@ -923,6 +923,57 @@ class PostureTests(unittest.TestCase):
 
 
 class ClientCatalogTests(unittest.TestCase):
+    def test_plugin_string_and_fork_aliases_are_client_routable(self) -> None:
+        routes = routes_manifest()
+        routes["oauth_model_aliases"] = {
+            "workbuddy-ai-provider": [
+                {
+                    "name": "deepseek-v4.1-flash-sg",
+                    "alias": "deepseek-v4.1-flash-intl",
+                    "fork": True,
+                }
+            ]
+        }
+        routes["plugin_routes"] = [
+            {
+                "provider": "workbuddy-provider",
+                "realm": "cn",
+                "models": ["deepseek-v4.1-flash"],
+                "admission_lane": "workbuddy-oauth",
+            },
+            {
+                "provider": "workbuddy-ai-provider",
+                "realm": "intl",
+                "models": ["deepseek-v4.1-flash-sg"],
+                "admission_lane": "workbuddy-intl-oauth",
+            },
+        ]
+        routable = MODULE["catalog_routable_names"](routes)
+        self.assertIn("deepseek-v4.1-flash", routable)
+        self.assertIn("deepseek-v4.1-flash-sg", routable)
+        self.assertIn("deepseek-v4.1-flash-intl", routable)
+
+    def test_global_exclusion_is_retired_only_when_no_active_route_serves_it(
+        self,
+    ) -> None:
+        routes = routes_manifest(oauth_exclusions=["gpt-5.6-luna", "gpt-6.1-sol-input"])
+        catalog = {
+            "version": 4,
+            "models": [
+                {"model_id": "gpt-5.6-luna"},
+                {"model_id": "gpt-6.1-sol-input"},
+            ],
+            "default_model_id": "gpt-6-luna",
+        }
+        findings = MODULE["audit_client_catalog"](catalog, routes)
+        self.assertEqual(
+            [finding.code for finding in findings],
+            ["client-catalog-retired-model"],
+        )
+        retired_message = findings[0].message
+        self.assertIn("gpt-5.6-luna", retired_message)
+        self.assertNotIn("gpt-6.1-sol-input", retired_message)
+
     def test_catalog_exposes_retired_and_unroutable_selectable_names(self) -> None:
         routes = routes_manifest()
         routes["providers"][0]["retired_models"] = ["gpt-5.6-luna"]

@@ -646,6 +646,11 @@ def _retired_catalog_names(routes: dict[str, Any]) -> set[str]:
         for name in provider.get("retired_models") or []
         if isinstance(name, str) and name and name != UNPARSED_MODEL
     }
+    tombstones.update(
+        name
+        for name in routes.get("oauth_exclusions") or []
+        if isinstance(name, str) and name and name != UNPARSED_MODEL
+    )
     retired = tombstones.copy()
     for provider in routes.get("providers") or []:
         if not isinstance(provider, dict):
@@ -661,10 +666,16 @@ def _retired_catalog_names(routes: dict[str, Any]) -> set[str]:
         for route in routes.get(key) or []:
             if not isinstance(route, dict):
                 continue
-            for model in route.get("models") or []:
-                if not isinstance(model, dict):
-                    continue
-                alias = model.get("alias")
+            aliases = (
+                _plugin_route_aliases(routes, route)
+                if key == "plugin_routes"
+                else [
+                    model.get("alias")
+                    for model in route.get("models") or []
+                    if isinstance(model, dict)
+                ]
+            )
+            for alias in aliases:
                 if isinstance(alias, str) and alias in tombstones:
                     retired.discard(alias)
     return retired
@@ -701,12 +712,20 @@ def _catalog_set(
         for route in routes.get(key) or []:
             if not isinstance(route, dict):
                 continue
-            for model in route.get("models") or []:
-                if not isinstance(model, dict):
-                    continue
-                name = model.get("alias")
-                if isinstance(name, str) and name and name != UNPARSED_MODEL:
-                    names.add(name)
+            aliases = (
+                _plugin_route_aliases(routes, route)
+                if key == "plugin_routes"
+                else [
+                    model.get("alias")
+                    for model in route.get("models") or []
+                    if isinstance(model, dict)
+                ]
+            )
+            names.update(
+                name
+                for name in aliases
+                if isinstance(name, str) and name and name != UNPARSED_MODEL
+            )
     return names
 
 

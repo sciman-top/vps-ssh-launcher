@@ -181,11 +181,13 @@ def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
         "gpt-6.1-sol-input",
         "gpt-6-astra",
         "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "deepseek-v4.1-flash-oc",
         "gemini-4-carbon-high",
         "hy4free",
         "hy4flash-free",
     } <= retired
-    assert "deepseek-v4.1-flash-oc" not in retired
+    assert "glm-5.3-flash" not in retired
 
 
 def test_retired_model_planner_removes_entries_not_provider_keys() -> None:

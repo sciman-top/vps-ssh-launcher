@@ -93,9 +93,10 @@ API key 渠道同时挂在一台 CPA 上，怎样不把账号打死、不把自�
 - `routing.session-affinity-rebind-on` 三个取值语义：`any`（上游默认）在任何失败含瞬态 5xx
   时都重绑凭据；`quota`（本栈钉定）仅在 429/403 等配额/鉴权/永久不可用信号时重绑、瞬态 5xx
   留在原凭据保缓存；`never` 永不换号。
-- 当前生产若仍是 `max-retry-credentials: 3` + `session-affinity-rebind-on: quota`，一旦 Antigravity 收到
+- 当前生产为 `max-retry-credentials: 1` + `session-affinity-rebind-on: quota`。
+  如果上游版本或配置回退到多凭据回退，一旦 Antigravity 收到
   Google WAF/内容过滤返回的**裸 `429 RESOURCE_EXHAUSTED`（无 `details`）**，CPA 默认会当成配额
-  冷却首号并把同一标红 payload 重放到最多 3 个账号。本栈通过 `oauth.request-scoped-errors.antigravity`
+  冷却首号并把同一标红 payload 重放到兄弟账号。本栈通过 `oauth.request-scoped-errors.antigravity`
   （正则 `(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$`，`action: "stop"`）在首号立即止损、
   不冷却不换号，同时保留 `cpa-admission` 的 60 s 车道退避；带 `details`（`ErrorInfo`/`RetryInfo`）
   的真实配额 429 不受影响，仍正常换号。
@@ -127,7 +128,7 @@ API key 渠道同时挂在一台 CPA 上，怎样不把账号打死、不把自�
 | 排队时延 | `waited_ms` p90 > 50 ms 且 `pending` 常年非零 | 调整 inflight/queue 预算（属契约变更，需与测试同提交） |
 | 首字前失败重放 | 首字节前失败被当成"死轮" | `requests.streaming.bootstrap-retries = 1`（本栈已钉住） |
 | 连接复用与压缩 | 大请求体（1 MB+）上传占满首字预算、或每轮新建跨海 TLS 握手 | Codex `upstream-request-compression`；`api-keys.openai-compatibility` 的 `connection-pool: {}`；Antigravity 每凭据隔离 `oauth.providers.antigravity.connection-pool`（`enabled: true`、`idle-conn-timeout: "30s"`、`max-idle-conns-per-host: 2`，按 `auth.ID` 严格隔离、不跨号共享连接）；`requests.tls-handshake-timeout-seconds: 15` |
-| 子任务缓存与账号扩散 | 多子任务共享父会话前缀、却分落到不同凭据 | 目标为 `session-affinity=true`、TTL `6h`、`session-affinity-subagents=true`；前两项已在 bwg 加载，子任务项仍待独立投影与自然流量 A/B。保持模型不变，新工作流另开父会话 |
+| 子任务缓存与账号扩散 | 多子任务共享父会话前缀、却分落到不同凭据 | `session-affinity=true`、TTL `6h`、`session-affinity-subagents=true` 均已在 bwg 加载；仍缺独立自然子任务 A/B。保持模型不变，新工作流另开父会话 |
 
 **禁区**：任何在网关层改写 prompt 前缀的动作（截断旧消息、重排 system/tools、注入摘要）。
 命中率已在 90–99%，改写把 90% 打到 0，同时把单账号每分钟 token 消耗抬一个数量级——

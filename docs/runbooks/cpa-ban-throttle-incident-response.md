@@ -14,7 +14,7 @@
 并发预算不等于 RPM/TPM/日额度预算，多个 key 也可能共享组织或项目额度。
 没有供应商可核验额度时，不凭社区画像增加并发或设定“安全频率”。新增账号前
 复核初始选取、失败回退和共享额度；现行 `request-retry=0` 与
-`max-retry-credentials=3` 将单个请求限制为最多三个合格凭据，不开启额外请求级重试轮次。
+`max-retry-credentials=1` 将单个请求限制为一份合格凭据，不开启额外请求级重试轮次。
 WorkBuddy 在后续独立请求中仍由 `credits` 选择候选账号。WorkBuddy 的 selected 模式另行
 限制自动回退，但无既有选择时仍允许初始选取，不能据此宣称固定到指定账号。
 
@@ -547,9 +547,11 @@ HTTP 200。探针显式设置 User-Agent 并投影后，非 OAuth 质量矩阵�
   即没有一次"HTTP 通了、流里才报容量"的样本。⇒ 维持 256 KiB，
   等出现真实样本再动（动它就是 admission 契约变更，须同一提交改
   `.py` + `.json` + 测试 + runbook）。
-- **`plaintext-http-provider`：slot 3 HTTP 明文传输已由用户明确接受。**
-  这是传输层的已知风险，不是可直接改写的配置项；不得向该通道发送敏感数据，
-  也不得把改 HTTPS、轮换凭据或更改出口当作消除此警告的自动修复。
+- **`plaintext-http-provider`：slot 6 Start Plan sidecar 的 Docker-bridge HTTP
+  明文传输已由用户明确接受。** 防火墙只允许容器网桥访问 `172.17.0.1:18082`，
+  不对公网暴露；但同宿主具备抓包/转发能力的观察面仍可读取 key、提示词和回答。
+  不得向该通道发送敏感数据，也不得把改 TLS/unix socket、轮换凭据或更改出口
+  当作消除此警告的自动修复。
 - **`posture-data-stale` 与 `advertised-failing-route-stale-data`：**
   本机 Cockpit 日志已停更，这两条只是明确声明 live/历史分类不可证；必须改用
   BWG 的 admission journal 判读当前请求，不能把本机旧失败说成当前活故障。
@@ -780,9 +782,10 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 11128 请求拒绝会临时冷却失败凭据 5 分钟，由 credits 调度选择其他可用账号。
 这是本地熔断窗口，不是上游承诺的恢复时间。明确封禁、认证失败、额度耗尽
 仍按对应事件处理，不以账号切换绕过人工 hold 或上游配额。
-CPA 的 max-retry-credentials=3 将每个请求限制为最多三个凭据，
+CPA 的 max-retry-credentials=1 将每个请求限制为一份凭据，
 request-retry=0 禁止额外请求级重试轮次。WorkBuddy 插件自身的 credits 调度仍可影响
-之后的独立请求，但同一失败请求只在有界凭据集合内回退，不进入 OpenCode 扇出。流已输出后不重放。
+之后的独立请求，但同一失败请求不重放到兄弟消费级凭据，也不进入已退役的
+OpenCode 扇出。流已输出后不重放。
 所有候选冷却或耗尽时插件明确拒绝，不能回落到已冷却凭据。
 
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号
