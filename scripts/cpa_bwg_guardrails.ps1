@@ -161,8 +161,8 @@ $admissionIntegrityPinText = Read-ProjLeafText -Path $admissionIntegrityPinPath 
 $fail2banFilterText = Read-ProjLeafText -Path $fail2banFilterPath -Description "CPA fail2ban filter source"
 $fail2banJailText = Read-ProjLeafText -Path $fail2banJailPath -Description "CPA fail2ban jail source"
 $workBuddyVersionCheckText = Read-ProjLeafText -Path $workBuddyVersionCheckPath -Description "CPA WorkBuddy version check source"
-$updaterScheduleCheckText = Read-ProjLeafText -Path $updaterScheduleCheckPath -Description "CPA updater schedule check source"
-$updaterScheduleCheckText = $updaterScheduleCheckText.Replace(
+$updaterScheduleCheckSourceText = Read-ProjLeafText -Path $updaterScheduleCheckPath -Description "CPA updater schedule check source"
+$updaterScheduleCheckText = $updaterScheduleCheckSourceText.Replace(
   "__CPA_UPDATER_BUDGETS__",
   $updaterBudgetDeclaration
 )
@@ -608,7 +608,9 @@ $projectionSources = [ordered]@{
   "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterText
   "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailText
   "scripts/remote/cpa-guardrail-workbuddy-version-check.sh" = $workBuddyVersionCheckText
-  "scripts/remote/cpa-updater-schedule-check.sh" = $updaterScheduleCheckText
+  # The hash and the assertion both describe the on-disk source. The checker
+  # payload below receives the declaration substitution separately.
+  "scripts/remote/cpa-updater-schedule-check.sh" = $updaterScheduleCheckSourceText
 }
 # The schedule check ships inside the doctor payload (base64), so it has no
 # destination file of its own and stays out of doctor_targets.

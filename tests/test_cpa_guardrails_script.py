@@ -1563,7 +1563,15 @@ docker() {{
         )
         self.assertIn('"scripts/remote/cpa-updater-schedule-check.sh"', wrapper)
         self.assertIn(
-            '"scripts/remote/cpa-updater-schedule-check.sh" = $updaterScheduleCheckText',
+            '"scripts/remote/cpa-updater-schedule-check.sh" = '
+            "$updaterScheduleCheckSourceText",
+            wrapper,
+        )
+        # The declared budget is injected into the embedded checker. The
+        # source registry must retain the pre-substitution bytes so its hash
+        # assertion still describes the file on disk.
+        self.assertIn(
+            "$updaterScheduleCheckText = $updaterScheduleCheckSourceText.Replace(",
             wrapper,
         )
         # Four anchors, one per background transaction, each owned by exactly
