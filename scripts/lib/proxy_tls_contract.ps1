@@ -312,5 +312,9 @@ def verified_system_tls_curl_args(host):
     return ()
 
 
-'@
+# Older PowerShell releases normalize here-string line endings to CRLF, and
+# the helper reaches remote Linux shells where CRLF is rejected (2026-09-15
+# guardrails CRLF incident). Pin LF at the source so every consumer projects
+# identical bytes on every PowerShell build.
+'@.Replace("`r`n", "`n").Replace("`r", "`n")
 }

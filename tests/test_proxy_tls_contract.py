@@ -140,44 +140,39 @@ class LaneConsumesTlsContractTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("return @'\n", text)
         git_root = Path(os.environ.get("ProgramFiles", ""), "Git")
         candidates: list[tuple[Path, Path]] = []
-        if os.name != "nt":
-            bash = Path(shutil.which("bash") or "")
-            openssl = Path(shutil.which("openssl") or "")
-            candidates.append((bash, openssl))
-        else:
-            windows_bash_candidates = [git_root / "bin" / "bash.exe"]
-            system_bash = (
-                Path(os.environ.get("SystemRoot", r"C:\Windows"))
-                / "System32"
-                / "bash.exe"
+        # The fixture mounts below a real Windows drive root (see the test
+        # body), so the Git Bash bridge is the only supported harness.
+        windows_bash_candidates = [git_root / "bin" / "bash.exe"]
+        system_bash = (
+            Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "bash.exe"
+        )
+        if system_bash.is_file():
+            windows_bash_candidates.append(system_bash)
+        launcher = shutil.which("bash")
+        if launcher is not None:
+            windows_bash_candidates.append(Path(launcher))
+        for bash in windows_bash_candidates:
+            if not bash.is_file():
+                continue
+            located = subprocess.run(
+                [
+                    str(bash),
+                    "-c",
+                    "command -v openssl >/dev/null 2>&1 || exit 1; "
+                    "command -v cygpath >/dev/null 2>&1 || exit 1; "
+                    'cygpath -w -- "$(command -v openssl)"',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
             )
-            if system_bash.is_file():
-                windows_bash_candidates.append(system_bash)
-            launcher = shutil.which("bash")
-            if launcher is not None:
-                windows_bash_candidates.append(Path(launcher))
-            for bash in windows_bash_candidates:
-                if not bash.is_file():
-                    continue
-                located = subprocess.run(
-                    [
-                        str(bash),
-                        "-c",
-                        "command -v openssl >/dev/null 2>&1 || exit 1; "
-                        "command -v cygpath >/dev/null 2>&1 || exit 1; "
-                        'cygpath -w -- "$(command -v openssl)"',
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                )
-                if (
-                    located.returncode == 0
-                    and located.stdout.strip()
-                    and Path(located.stdout.strip()).is_file()
-                ):
-                    candidates.append((bash, Path(located.stdout.strip())))
+            if (
+                located.returncode == 0
+                and located.stdout.strip()
+                and Path(located.stdout.strip()).is_file()
+            ):
+                candidates.append((bash, Path(located.stdout.strip())))
         bash_tool = next(
             (
                 (bash, openssl)
@@ -191,6 +186,10 @@ class LaneConsumesTlsContractTests(ScriptValidationMixin, unittest.TestCase):
         return bash_tool
 
     def test_private_tls_helper_rejects_missing_or_relative_trust(self) -> None:
+        # The fixture mounts below a real Windows drive root so Git Bash and
+        # Python see the same tree; that bridge does not exist on POSIX hosts.
+        if os.name != "nt":
+            self.skipTest("Git Bash drive-root fixture is Windows-only")
         text = CONTRACT.read_text(encoding="utf-8")
         helper = text.split("return @'\n", 1)[1].split("\n'@", 1)[0]
         bash_tool = self._resolve_bash_openssl()

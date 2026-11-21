@@ -643,8 +643,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             fake_bin = root / "bin"
             fake_bin.mkdir()
             fake_docker = fake_bin / "docker"
+            # The exec'd start must still be alive when the 0.2s interrupt
+            # lands: an instant exit lets the success path win the race on a
+            # fast runner and the recovery never runs (ubuntu CI 0 != 31).
             fake_docker.write_text(
-                "#!/bin/sh\nexit 0\n", encoding="ascii", newline="\n"
+                "#!/bin/sh\nsleep 5\nexit 0\n", encoding="ascii", newline="\n"
             )
             fake_docker.chmod(0o755)
             harness = "\n".join(
