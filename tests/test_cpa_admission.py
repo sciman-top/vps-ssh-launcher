@@ -3915,7 +3915,7 @@ def test_untrusted_sse_event_before_terminal_cannot_heal_half_open_lane(
     if event_kind == "malformed":
         preceding_event = b"data: {not-json}\n\n"
     else:
-        limit = loaded["probe_bytes"]
+        limit = loaded["stream_probe_bytes"]
         oversized_json = (
             b'{"type":"response.output_text.delta","delta":"' + b"x" * limit + b'"}'
         )
@@ -3978,6 +3978,169 @@ def test_untrusted_sse_event_before_terminal_cannot_heal_half_open_lane(
             service.server_close()
         for running in (thread, worker):
             running.join(timeout=2)
+
+
+def test_proxy_does_not_emit_duplicate_date_or_server_headers() -> None:
+    """BaseHTTPRequestHandler.send_response emits Date/Server; upstream copies must not duplicate them."""
+    payload = b'{"id":"resp_dedup","status":"completed","output":[]}'
+
+    class UpstreamWithDateServer(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("X-Upstream-Custom", "kept")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(UpstreamWithDateServer)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        client.request(
+            "POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":false}'
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        response.read()
+        date_headers = response.headers.get_all("Date") or []
+        server_headers = response.headers.get_all("Server") or []
+        assert len(date_headers) == 1
+        assert len(server_headers) == 1
+        assert response.headers.get("X-Upstream-Custom") == "kept"
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+def test_large_sse_terminal_event_within_stream_probe_bytes_preserves_usage(
+    caplog: Any,
+) -> None:
+    """A response.completed frame above probe_bytes (256 KiB) but within stream_probe_bytes (2 MiB) completes cleanly."""
+    loaded = config()
+    assert loaded["stream_probe_bytes"] > loaded["probe_bytes"]
+    padding = "a" * (loaded["probe_bytes"] + 4096)
+    terminal_payload = (
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"message","content":[{"type":"output_text","text":"'
+        + padding.encode("ascii")
+        + b'"}]}],"usage":{"input_tokens":50000,"input_tokens_details":{"cached_tokens":45000},"output_tokens":1200}}}\n\n'
+    )
+
+    class LargeSSEUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(terminal_payload)))
+            self.end_headers()
+            self.wfile.write(terminal_payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(LargeSSEUpstream)
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    caplog.set_level(logging.INFO)
+    try:
+        client.request("POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":true}')
+        response = client.getresponse()
+        assert response.status == 200
+        body = response.read()
+        assert body.startswith(terminal_payload)
+        assert "protocol_result=completed" in caplog.text
+        assert "usage_in=50000 usage_cached=45000 usage_out=1200" in caplog.text
+        assert "inspection_limit" not in caplog.text
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+def test_half_open_and_model_half_open_probes_account_against_rpm_window() -> None:
+    """Recovery probes bypass RPM gating to re-test cooldowns, but still consume RPM budget."""
+    loaded = config()
+    lane_cfg = next(
+        dict(lane) for lane in loaded["lanes"] if lane["name"] == "workbuddy-oauth"
+    )
+    lane_cfg["requests_per_minute"] = 2
+    lane_cfg["max_inflight"] = 1
+    lane_cfg["max_pending"] = 0
+    lane_cfg["queue_timeout_seconds"] = 1
+    lane_cfg["retry_after_max_seconds"] = 86400
+    lane_cfg["early_probe_interval_seconds"] = 1.0
+    lane = LaneState(lane_cfg)
+
+    now = time.monotonic()
+    lane.open_until = now - 1.0
+    probe_lease = lane.acquire(model="deepseek-v4.1-flash")
+    assert probe_lease.admitted is True
+    assert probe_lease.reason == "half_open"
+    lane.release(
+        probe_lease,
+        successful=True,
+        capacity_error=False,
+        retry_after=None,
+    )
+
+    normal_lease = lane.acquire(model="deepseek-v4.1-flash")
+    assert normal_lease.admitted is True
+    lane.release(
+        normal_lease,
+        successful=True,
+        capacity_error=False,
+        retry_after=None,
+    )
+
+    # With rpm=2 and 1 half_open probe + 1 normal request already admitted,
+    # a third request inside the same 60s window must be rate_limited (not 3).
+    third_lease = lane.acquire(model="deepseek-v4.1-flash")
+    assert third_lease.admitted is False
+    assert third_lease.reason == "rate_limited"
+
+    # Verify the same accounting for model_half_open probes.
+    lane2 = LaneState(lane_cfg)
+    lane2._model_open_until["deepseek-v4.1-flash"] = time.monotonic() + 60.0
+    lane2._model_probe_at["deepseek-v4.1-flash"] = time.monotonic() - 1.0
+    model_probe = lane2.acquire(model="deepseek-v4.1-flash")
+    assert model_probe.admitted is True
+    assert model_probe.reason == "model_half_open"
+    lane2.release(
+        model_probe,
+        successful=True,
+        capacity_error=False,
+        retry_after=None,
+    )
+    normal_lease2 = lane2.acquire(model="deepseek-v4.1-flash")
+    assert normal_lease2.admitted is True
+    lane2.release(
+        normal_lease2,
+        successful=True,
+        capacity_error=False,
+        retry_after=None,
+    )
+    third_lease2 = lane2.acquire(model="deepseek-v4.1-flash")
+    assert third_lease2.admitted is False
+    assert third_lease2.reason == "rate_limited"
 
 
 @pytest.mark.parametrize(

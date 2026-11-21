@@ -1948,6 +1948,40 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         compat_entry["connection-pool"] = {}
         self.assertEqual(policy["validate_config"](config), [])
 
+    def test_shutdown_timeout_and_stream_probe_bytes_are_pinned(self) -> None:
+        """server.shutdown-timeout and admission stream_probe_bytes must be validated."""
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+
+        config["server"]["shutdown-timeout"] = 0
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("shutdown-timeout" in issue for issue in issues), issues)
+        config["server"]["shutdown-timeout"] = 15
+        self.assertEqual(policy["validate_config"](config), [])
+
+        admission = json.loads(
+            (repo_root / "scripts/remote/cpa-admission.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(admission.get("stream_probe_bytes"), 2097152)
+        self.assertEqual(
+            policy["_admission_config_issues"](policy["ROUTE_MANIFEST"], admission),
+            [],
+        )
+
+        bad_admission = dict(admission, stream_probe_bytes=1024)
+        bad_issues = policy["_admission_config_issues"](
+            policy["ROUTE_MANIFEST"], bad_admission
+        )
+        self.assertTrue(
+            any("stream_probe_bytes" in issue for issue in bad_issues), bad_issues
+        )
+
     def test_antigravity_natural_prompts_are_not_rewritten(self) -> None:
         """Natural user text must remain verbatim to preserve cache prefixes."""
         import runpy

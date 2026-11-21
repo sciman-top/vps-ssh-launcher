@@ -5783,6 +5783,13 @@ class CpaAdmissionContractParityTests(unittest.TestCase):
                 with self.subTest(lane=name, field=label):
                     self.assertEqual(actual, expected)
 
+    def test_shutdown_timeout_stream_probe_and_doctor_observability_wired(self) -> None:
+        self.assertIn('server_after["shutdown-timeout"] = 15', self.apply_source)
+        self.assertIn('config.get("stream_probe_bytes") != 2097152', self.apply_source)
+        self.assertIn("invalidated oauth token", self.doctor_source)
+        self.assertIn("workbuddy_failover_probe_401_7d=", self.doctor_source)
+        self.assertIn("refresh_cluster_max_10s=", self.doctor_source)
+
 
 if __name__ == "__main__":
     unittest.main()

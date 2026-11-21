@@ -2196,6 +2196,10 @@ if (
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
+server_after = config_after.setdefault("server", {})
+if not isinstance(server_after, dict):
+    raise SystemExit("REFUSE server must be a mapping")
+server_after["shutdown-timeout"] = 15
 # Safe bootstrap retry for streaming turns. Upstream defaults this to 0, so a
 # stream that failed before its first byte reached the client surfaced as a dead
 # turn and the client re-issued it -- a second upstream spend against a shared
@@ -2853,6 +2857,8 @@ if config.get("version") != 1 or config.get("listen_host") != "127.0.0.1":
 if config.get("listen_port") != 8318 or config.get("upstream_port") != 8317:
     raise SystemExit(1)
 if config.get("max_body_bytes") != 33554432 or config.get("probe_bytes") != 262144:
+    raise SystemExit(1)
+if config.get("stream_probe_bytes") != 2097152:
     raise SystemExit(1)
 if config.get("retry_after_max_seconds") != 86400:
     raise SystemExit(1)

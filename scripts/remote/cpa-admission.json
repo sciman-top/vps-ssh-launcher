@@ -6,6 +6,7 @@
   "upstream_port": 8317,
   "max_body_bytes": 33554432,
   "probe_bytes": 262144,
+  "stream_probe_bytes": 2097152,
   "retry_after_max_seconds": 86400,
   "early_probe_interval_seconds": 10,
   "lanes": [

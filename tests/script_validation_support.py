@@ -335,7 +335,7 @@ class ScriptValidationMixin:
                 # CPA v8 file layout (config-version: 8); canonical paths per
                 # internal/config/config_v8.go in the v8.0.23 source.
                 "config-version": 8,
-                "server": {"host": "0.0.0.0", "port": 8317},
+                "server": {"host": "0.0.0.0", "port": 8317, "shutdown-timeout": 15},
                 "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
                 "requests": {
                     "payload": _expected_payload_tool_rules(),

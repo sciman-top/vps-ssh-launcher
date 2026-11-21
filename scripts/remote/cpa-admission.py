@@ -50,6 +50,10 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+# BaseHTTPRequestHandler.send_response() already emits Server and Date headers.
+# Forwarding upstream Date/Server again produces duplicate response headers
+# (observed as Nginx "upstream sent duplicate header line: Date" warnings).
+GENERATED_RESPONSE_HEADERS = {"date", "server"}
 CPA_TRACE_HEADERS = {"x-cpa-request-id", "x-cpa-admission-reason"}
 
 # Compression is negotiated end-to-end, but every hop here (nginx -> admission
@@ -720,6 +724,11 @@ def load_config(
         raise ValueError("admission config must be a version 1 mapping")
     for key in ("max_body_bytes", "probe_bytes", "retry_after_max_seconds"):
         _positive_int(config.get(key), key)
+    raw_stream_probe_bytes = config.get("stream_probe_bytes")
+    if raw_stream_probe_bytes is None:
+        stream_probe_bytes = config["probe_bytes"]
+    else:
+        stream_probe_bytes = _positive_int(raw_stream_probe_bytes, "stream_probe_bytes")
     early_probe_interval = _positive_number(
         config.get(
             "early_probe_interval_seconds", ADMISSION_EARLY_PROBE_INTERVAL_SECONDS
@@ -736,6 +745,11 @@ def load_config(
         raise ValueError("upstream_port must remain 8317")
     if config["probe_bytes"] > config["max_body_bytes"]:
         raise ValueError("probe_bytes must not exceed max_body_bytes")
+    if stream_probe_bytes < config["probe_bytes"]:
+        raise ValueError("stream_probe_bytes must be at least probe_bytes")
+    if stream_probe_bytes > config["max_body_bytes"]:
+        raise ValueError("stream_probe_bytes must not exceed max_body_bytes")
+    config["stream_probe_bytes"] = stream_probe_bytes
 
     lanes = config.get("lanes")
     if not isinstance(lanes, list) or not lanes:
@@ -3310,6 +3324,9 @@ class LaneState:
                         ):
                             self._model_probe_inflight.add(model)
                             self.inflight += 1
+                            if self._rpm_max is not None:
+                                self._prune_rpm(now)
+                                self._rpm_window.append(now)
                             self._model_probe_at[model] = (
                                 now + self._early_probe_interval
                             )
@@ -3325,6 +3342,9 @@ class LaneState:
                         if self.open_until:
                             self.probe_inflight = True
                             self.inflight += 1
+                            if self._rpm_max is not None:
+                                self._prune_rpm(now)
+                                self._rpm_window.append(now)
                             return lease(True, "half_open", 0, probe=True)
                         # Per-lane request-rate guard (opt-in via
                         # requests_per_minute). It shapes *normal* admissions
@@ -4578,6 +4598,7 @@ class Handler(BaseHTTPRequestHandler):
                     for key, value in response.getheaders():
                         if (
                             key.lower() in HOP_BY_HOP_HEADERS
+                            or key.lower() in GENERATED_RESPONSE_HEADERS
                             or key.lower() in CPA_TRACE_HEADERS
                             or (
                                 lane_name == "claude-oauth"
@@ -4611,7 +4632,7 @@ class Handler(BaseHTTPRequestHandler):
             probe = bytearray()
             stream_probe = (
                 StreamErrorProbe(
-                    config["probe_bytes"],
+                    config["stream_probe_bytes"],
                     lane_config,
                     response.status,
                     self.path,

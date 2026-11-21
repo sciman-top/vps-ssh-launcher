@@ -968,12 +968,15 @@ for provider, records in provider_records.items():
         # refresh visibility: a hot spare that silently stops refreshing must
         # be attributable before failover needs it. Labels hash the auth file
         # name so account emails never reach the doctor output.
+        refresh_epoch_seconds = []
         for label, record in zip(provider_file_labels[provider], records):
             expiry = next(
                 (parsed for value in values_for_keys(record, expiry_keys)
                  if (parsed := parse_time(value))), None,
             )
             refresh = refresh_time_for_record(provider, record)
+            if refresh is not None:
+                refresh_epoch_seconds.append(refresh.timestamp())
             known = "true" if expiry else "false"
             print(f"{prefix}_credential_{label}_expiry_known={known}")
             age = (
@@ -987,6 +990,14 @@ for provider, records in provider_records.items():
                 else "METADATA_OK"
             )
             print(f"{prefix}_credential_{label}_status={cred}")
+        refresh_epoch_seconds.sort()
+        cluster_max_10s = 0
+        left = 0
+        for right, ts_val in enumerate(refresh_epoch_seconds):
+            while ts_val - refresh_epoch_seconds[left] > 10.0:
+                left += 1
+            cluster_max_10s = max(cluster_max_10s, right - left + 1)
+        print(f"{prefix}_refresh_cluster_max_10s={cluster_max_10s}")
         status = "WARN_MULTIPLE_ACTIVE_FILES"
     else:
         record = records[0]
@@ -3635,7 +3646,7 @@ echo "==credential-ban-signals=="
 BAN_TMP="$DIAGNOSTIC_DIR/cpa-doctor-ban-7d.log"
 docker logs --since 168h cli-proxy-api 2>&1 \
   | grep -E 'auth_file=' \
-  | grep -iE 'invalid_grant|TOS_VIOLATION|PERMISSION_DENIED|11140|account[ _](has[ _]been[ _])?(suspended|disabled|deactivated|restricted)|insufficient_quota|6008' \
+  | grep -iE 'invalid_grant|invalidated oauth token|TOS_VIOLATION|PERMISSION_DENIED|11140|account[ _](has[ _]been[ _])?(suspended|disabled|deactivated|restricted)|insufficient_quota|6008' \
   > "$BAN_TMP" 2>/dev/null || true
 BAN_SIGNALS_7D=$(wc -l < "$BAN_TMP")
 echo "credential_ban_signals_7d=$BAN_SIGNALS_7D"
@@ -3665,11 +3676,27 @@ BAN_DISTINCT=$(awk '{
 echo "credential_ban_distinct_credentials=$BAN_DISTINCT"
 # Which signal kinds actually fired, so an operator knows whether to re-login
 # (invalid_grant) or to stop and appeal (TOS/account restricted).
-for marker in invalid_grant TOS_VIOLATION PERMISSION_DENIED 11140 insufficient_quota 6008; do
+for marker in invalid_grant "invalidated oauth token" TOS_VIOLATION PERMISSION_DENIED 11140 insufficient_quota 6008; do
   marker_count=$(grep -ci -- "$marker" "$BAN_TMP" 2>/dev/null || true)
-  echo "credential_ban_kind=$marker n=${marker_count:-0}"
+  marker_label="${marker// /_}"
+  echo "credential_ban_kind=$marker_label n=${marker_count:-0}"
 done
 rm -f "$BAN_TMP"
+# Observation-only: surface dead/disabled WorkBuddy credentials that the plugin
+# failover probe keeps hitting with HTTP 401 every 10 minutes.
+WB_PROBE_401_TMP="$DIAGNOSTIC_DIR/cpa-doctor-wb-probe-401-7d.log"
+docker logs --since 168h cli-proxy-api 2>&1 \
+  | grep -iE '\[workbuddy\].*failover probe failed.*HTTP 401' \
+  > "$WB_PROBE_401_TMP" 2>/dev/null || true
+WB_PROBE_401_7D=$(wc -l < "$WB_PROBE_401_TMP")
+WB_PROBE_401_AUTHS=$(awk '{
+  for (i = 1; i <= NF; i++) {
+    if ($i ~ /^auth=/) { print substr($i, 6) }
+  }
+}' "$WB_PROBE_401_TMP" | sort -u | wc -l)
+rm -f "$WB_PROBE_401_TMP"
+echo "workbuddy_failover_probe_401_7d=$WB_PROBE_401_7D"
+echo "workbuddy_failover_probe_401_auths_7d=$WB_PROBE_401_AUTHS"
 echo "credential_ban_coverage=retained container logs only (168h); container recreation resets coverage; this is an observation, not a gate; labels are sha256[:8] of the auth file name matching the oauth-monitor section; a nonzero count means inspect the matching credential and the provider console before spending more quota on it"
 
 echo "==model-substitution-by-credential=="

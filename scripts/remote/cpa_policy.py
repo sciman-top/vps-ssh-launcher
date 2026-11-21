@@ -37,6 +37,11 @@ SLOT_API_KEY_HEADER_TOKEN = "<slot-api-key>"
 EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("server", "host"): _EXPECTED_CONTAINER_BIND_HOST,
     ("server", "port"): 8317,
+    # Graceful drain budget on SIGTERM (CLIProxyAPI v8.0.80+). Upstream
+    # defaults to 0 (immediate disconnect), cutting active SSE streams during
+    # container upgrades or restarts. 15s matches the updater's Docker stop
+    # grace window so in-flight turns can finish cleanly without hanging stop.
+    ("server", "shutdown-timeout"): 15,
     ("routing", "force-model-prefix"): True,
     ("routing", "retry", "request-retry"): 0,
     # Bound the upstream credentials one client request may traverse.
@@ -1511,6 +1516,14 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         and probe_bytes > max_body_bytes
     ):
         issues.append("admission probe_bytes must not exceed max_body_bytes")
+    stream_probe_bytes = admission.get("stream_probe_bytes")
+    if stream_probe_bytes is not None:
+        if type(stream_probe_bytes) is not int or stream_probe_bytes <= 0:
+            issues.append("admission stream_probe_bytes must be a positive integer")
+        elif type(probe_bytes) is int and stream_probe_bytes < probe_bytes:
+            issues.append("admission stream_probe_bytes must be at least probe_bytes")
+        elif type(max_body_bytes) is int and stream_probe_bytes > max_body_bytes:
+            issues.append("admission stream_probe_bytes must not exceed max_body_bytes")
     early_probe_interval = admission.get("early_probe_interval_seconds")
     if type(early_probe_interval) not in (int, float) or early_probe_interval <= 0:
         issues.append(
