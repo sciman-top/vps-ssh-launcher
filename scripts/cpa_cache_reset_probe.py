@@ -50,7 +50,8 @@ _MIN_PREFIX_TOKENS_DEFAULT = 20000
 _DEFAULT_REMOTE_HOURS = 48.0
 
 _PROVIDER_MODEL_ALIASES = (
-    (re.compile(r"^(gemini-3\.8-flash)(?:-n)?$"), r"\1-high"),
+    # 2026-11-21: v8.0.80 echoes the flash slug as -control (was -n).
+    (re.compile(r"^(gemini-3\.8-flash)(?:-n|-control)?$"), r"\1-high"),
     (re.compile(r"^(gemini-4-hydrogen)$"), r"\1-xhigh"),
     (re.compile(r"^(gemini-4-carbon)$"), r"\1-high"),
     (re.compile(r"^(gemini-4-argon)(?:-trial)?$"), r"\1-high"),

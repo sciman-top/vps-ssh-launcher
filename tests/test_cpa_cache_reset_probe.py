@@ -79,6 +79,7 @@ def test_provider_variant_is_not_a_model_switch() -> None:
     """flash-n is the provider echo of flash-high; both normalise to one name."""
 
     assert probe.normalise_model("gemini-3.8-flash-n") == "gemini-3.8-flash-high"
+    assert probe.normalise_model("gemini-3.8-flash-control") == "gemini-3.8-flash-high"
     assert probe.normalise_model("gemini-3.8-flash") == "gemini-3.8-flash-high"
     assert probe.normalise_model("gemini-4-hydrogen") == "gemini-4-hydrogen-xhigh"
     assert probe.normalise_model("gemini-4-carbon") == "gemini-4-carbon-high"

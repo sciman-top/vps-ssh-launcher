@@ -765,9 +765,10 @@ _CHANNEL_ECHO_MODEL = {
     and isinstance(model.get("name"), str)
 }
 # Antigravity's catalog rewrites the public model name in its response (for
-# example gemini-3.8-flash-high -> gemini-3.8-flash-n). The route alias is
-# what clients request; this suffix is not evidence of model substitution.
-# Accept only that one exact upstream form, not a loose prefix or substring.
+# example gemini-3.8-flash-high -> gemini-3.8-flash-n; v8.0.80 echoes -control).
+# The route alias is what clients request; this suffix is not evidence of model
+# substitution. Accept only those exact upstream forms, not a loose prefix or
+# substring.
 _ANTIGRAVITY_ROUTE = next(
     (
         route
@@ -780,6 +781,7 @@ _ANTIGRAVITY_ECHO_MODEL = {
     model["alias"]: {
         model["name"],
         model["name"].removesuffix("-high") + "-n",
+        model["name"].removesuffix("-high") + "-control",
     }
     for model in _ANTIGRAVITY_ROUTE.get("models", [])
     if isinstance(model, dict)

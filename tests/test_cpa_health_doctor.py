@@ -1034,6 +1034,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         echo_set = echo_map[alias]
         self.assertIsInstance(echo_set, set)
         self.assertIn("gemini-3.8-flash-n", echo_set)
+        self.assertIn("gemini-3.8-flash-control", echo_set)
         self.assertNotIn("gemini-3.8-flash-n-plus", echo_set)
         self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
 
