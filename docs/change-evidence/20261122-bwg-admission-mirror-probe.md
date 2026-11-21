@@ -14,6 +14,12 @@
 - 事务内置 `MIRROR_PROBE_LIVE_OK`：重启后 `/healthz` 实证 `antigravity-oauth` `mirror_probe_interval=600`。strict doctor 全 MATCH（`cpa-admission.py`、`cpa-admission.json`、`cpa_request_guard.py` 等 11 项投影零漂移）、`admission-integrity=OK`、`runtime_binary_hash=MATCH`。
 - 实弹验收：`gemini-3.8-flash-high` 与 `gemini-4-argon-high` 各一发 loopback `/v1/responses` 均 HTTP 200；额度组窗（`claude-gpt` 组，截止仍为 06:05:24）由 `3af4ba3` 机制维持，claude 系模型按组窗恢复。镜像探测的清窗路径由单测覆盖，本次窗内无可安全触发的 lane 级 503/未分类 429，未做实弹触发。
 
+## 受控实战演练（mirror probe 全链路，同日补录）
+
+- 首轮验收后随即做受控演练：确认全部车道 idle 后，备份 `antigravity-risk.json` 至 `/root/antigravity-risk.json.bak-drill-20261122`，向 `not_before` 注入 +700s（`quota_group_not_before` 原样保留），重启 `cpa-admission`。healthz 实证 `cooldown_remaining=697`、`cooldown_scope=lane`、`mirror_probe_in=598`。
+- 信封契约实弹：槽位前两发探测分别得到 `429 + Retry-After: 584 / 379 + X-CPA-Admission-Reason: cooldown`——广告值 = 距下一 recheck slot 的实际剩余秒数（非固定 600），且随时间单调递减，未指向窗口终点。
+- 槽位实弹清窗：到达 `restart+600s` 槽位后一发探测被 `lane_probe lane=antigravity-oauth reason=mirror_probe scope=lane` 放行，上游 `status=200 protocol_result=completed`，车道随即 `cooldown_active=False`（700s 窗口仅 ~600s 即被探测提前清窗），risk 文件 `not_before` 自动归零、`quota_group_not_before` 原样保留。全链路（信封→槽位→放行→上游→清窗→持久化自净）PASS，事后无需手工恢复。
+
 ## 回滚
 
 - 备份目录 `/opt/cliproxyapi/backups/20261121T183431.840524094Z-admission-mirror-probe-20261122`（含 admission 源码、lane JSON、request guard、pin）。事务失败自动恢复该组备份并重启校验。
