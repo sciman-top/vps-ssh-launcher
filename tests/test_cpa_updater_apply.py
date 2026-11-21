@@ -29,9 +29,19 @@ WSL_BASH_TIMEOUT_SECONDS = 60
 
 
 def _read_bash_source(path: Path) -> str:
-    """Read the newline projection explicitly on Windows and Linux."""
+    """Read the immutable projection source on Windows and Linux."""
 
-    return path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    repo_root = Path(__file__).parents[1]
+    relative = path.relative_to(repo_root).as_posix()
+    completed = subprocess.run(
+        ["git", "-C", str(repo_root), "show", f"HEAD:{relative}"],
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"cannot read committed projection source {relative}")
+    return completed.stdout.decode("utf-8").replace("\r\n", "\n")
 
 
 def _extract_bash_function(source: str, name: str, *, start: int = 0) -> str:
@@ -687,9 +697,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_process_identity_arming_accepts_precreated_group_leader(
         self,
     ) -> None:
-        source = (
+        source = _read_bash_source(
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
-        ).read_text(encoding="utf-8")
+        )
         bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
@@ -951,12 +961,12 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("systemd_timeout_seconds", doctor)
 
     def test_updater_schedule_budget_uses_the_slot_and_effective_timeout(self) -> None:
-        source = (
+        source = _read_bash_source(
             Path(__file__).parents[1] / "scripts/remote/cpa-updater-schedule-check.sh"
-        ).read_text(encoding="utf-8")
-        updater = (
+        )
+        updater = _read_bash_source(
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
-        ).read_text(encoding="utf-8")
+        )
         dropin = (
             Path(__file__).parents[1] / "scripts/remote/cpa-update-timeout.conf"
         ).read_text(encoding="utf-8")
