@@ -76,6 +76,22 @@ connection reset / admission 拒连，随后 `HEALTH_OK`。容器启动时间变
 均 OPEN；Claude 为 retired/inert tombstone。7d `credential_ban_signals_7d=0`，
 Antigravity 刷新失败 0。
 
+## controlled_live 复核
+
+投影后只对非 OAuth 的 Zhipu API-key lane 做最小受控验收，未发送任何 OAuth
+生成请求：
+
+- `cpa-health.py cache-canary glm-5.3-flash chat`：sample 1
+  `input_tokens=4114 cache_read_tokens=0 hit_ratio=0.0000`；sample 2
+  `input_tokens=4114 cache_read_tokens=4096 hit_ratio=0.9956`；
+  `HEALTH_OK`。
+- 经 `127.0.0.1:8318/v1/responses` 单发流式 SSE
+  （`glm-5.3-flash`）：`PROBE_HTTP_TIME=200 1.400743`、
+  `PROBE_EVENTS=61`、`PROBE_COMPLETED_OK`、正文精确返回 `PONG`。
+- admission journal 归因：
+  `lane=zhipu-coding-plan model=glm-5.3-flash status=200 capacity=false
+  retry_after=absent`。
+
 ## 当前已接受风险
 
 - 24h 自然流量审计仍报告 WorkBuddy CN `admit_peak_60s=19`，处于社区
