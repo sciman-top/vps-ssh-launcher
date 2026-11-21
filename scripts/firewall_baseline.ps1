@@ -24,6 +24,7 @@ $rulesSha = (
 $rulesBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($rulesText))
 $tcpLiteral = $contract.TcpPorts -join ' '
 $udpLiteral = $contract.UdpPorts -join ' '
+$bridgeLiteral = $contract.LocalBridgeSidecarTcpPorts -join ' '
 $liveStatePython = Get-ProxyFirewallLiveStatePython
 $expectedUnit = (New-ProxyFirewallUnit).Replace("`r`n", "`n").Replace("`r", "`n")
 $unitB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($expectedUnit))
@@ -39,6 +40,7 @@ EXPECTED_SHA="__RULES_SHA__"
 EXPECTED_UNIT_B64="__UNIT_B64__"
 EXPECTED_TCP="__TCP_PORTS__"
 EXPECTED_UDP="__UDP_PORTS__"
+EXPECTED_BRIDGE_TCP="__BRIDGE_PORTS__"
 SSH_PORT="__SSH_PORT__"
 HOP_START="__HOP_START__"
 HOP_END="__HOP_END__"
@@ -108,7 +110,7 @@ live_chain_state() {
     local nft_json
     nft_json="$(nft -j list table inet "$TABLE_NAME" 2>/dev/null)" || return 1
     FIREWALL_NFT_JSON="$nft_json" python3 - \
-        "$HOP_START" "$HOP_END" "$HOP_TARGET" "$EXPECTED_TCP" "$EXPECTED_UDP" \
+        "$HOP_START" "$HOP_END" "$HOP_TARGET" "$EXPECTED_TCP" "$EXPECTED_UDP" "$EXPECTED_BRIDGE_TCP" \
         <<'PY_FIREWALL'
 __LIVE_FIREWALL_PYTHON__
 PY_FIREWALL
@@ -284,6 +286,7 @@ echo 'FIREWALL_BASELINE_APPLIED'
   Replace("__UNIT_B64__", $unitB64).
   Replace("__TCP_PORTS__", $tcpLiteral).
   Replace("__UDP_PORTS__", $udpLiteral).
+  Replace("__BRIDGE_PORTS__", $bridgeLiteral).
   Replace("__SSH_PORT__", "$($contract.SshPort)").
   Replace("__HOP_START__", "$($contract.Hysteria2HopStart)").
   Replace("__HOP_END__", "$($contract.Hysteria2HopEnd)").

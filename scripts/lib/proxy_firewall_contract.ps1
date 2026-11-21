@@ -17,12 +17,17 @@ function Get-ProxyFirewallContract {
     bwg = 29712
     zz  = 31854
   }
+  $bridgeSidecarByProfile = @{
+    bwg = @(18082)
+    zz  = @()
+  }
 
   [pscustomobject]@{
     Profile = $Profile
     TcpPorts = @($tcpByProfile[$Profile] | Sort-Object -Unique)
     UdpPorts = @($udpByProfile[$Profile] | Sort-Object -Unique)
     SshPort = [int]$sshByProfile[$Profile]
+    LocalBridgeSidecarTcpPorts = @($bridgeSidecarByProfile[$Profile] | Sort-Object -Unique)
     Hysteria2HopStart = 20000
     Hysteria2HopEnd = 20999
     Hysteria2HopTarget = 8444
@@ -44,6 +49,14 @@ function New-ProxyFirewallRules {
   }
   $tcpPorts = $contract.TcpPorts -join ', '
   $udpPorts = $contract.UdpPorts -join ', '
+  $bridgeLines = foreach ($port in @($contract.LocalBridgeSidecarTcpPorts)) {
+    "        # Allow local Docker bridge containers (CPA) to reach host sidecar.`n        iifname `"br-*`" ip daddr 172.17.0.1 tcp dport $port accept"
+  }
+  $localBridgeBlock = if ($bridgeLines) {
+    "`n" + ($bridgeLines -join "`n")
+  } else {
+    ""
+  }
   $template = @'
 table inet vps_launcher_guard {
 }
@@ -92,6 +105,7 @@ table inet vps_launcher_guard {
 
         tcp dport { __TCP_PORTS__ } accept
         udp dport { __UDP_PORTS__ } accept
+__LOCAL_BRIDGE_RULES__
     }
 }
 '@
@@ -100,7 +114,8 @@ table inet vps_launcher_guard {
     Replace("__HOP_END__", "$($contract.Hysteria2HopEnd)").
     Replace("__HOP_TARGET__", "$($contract.Hysteria2HopTarget)").
     Replace("__TCP_PORTS__", $tcpPorts).
-    Replace("__UDP_PORTS__", $udpPorts)
+    Replace("__UDP_PORTS__", $udpPorts).
+    Replace("`n__LOCAL_BRIDGE_RULES__", $localBridgeBlock)
 }
 
 function Get-ProxyFirewallLiveStatePython {
@@ -230,8 +245,10 @@ try:
     hop_target = int(sys.argv[3])
     tcp_text = sys.argv[4]
     udp_text = sys.argv[5]
+    bridge_text = sys.argv[6] if len(sys.argv) > 6 else ""
     tcp = [int(value) for value in tcp_text.split()]
     udp = [int(value) for value in udp_text.split()]
+    bridge_tcp = [int(value) for value in bridge_text.split() if value.strip()]
 except (IndexError, TypeError, ValueError):
     print("live-unreadable")
     raise SystemExit(0)
@@ -309,6 +326,13 @@ expected_input = [
         {"accept": None},
     ],
 ]
+for bridge_port in bridge_tcp:
+    expected_input.append([
+        {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "br-*"}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}}, "right": "172.17.0.1"}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": bridge_port}},
+        {"accept": None},
+    ])
 
 
 def canonical(value):

@@ -83,6 +83,7 @@ $firewallRulesSha = (
 ).Replace("-", "").ToLowerInvariant()
 $firewallTcpLiteral = $firewallContract.TcpPorts -join ' '
 $firewallUdpLiteral = $firewallContract.UdpPorts -join ' '
+$firewallBridgeLiteral = $firewallContract.LocalBridgeSidecarTcpPorts -join ' '
 $firewallExpectedUnitB64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes(
     (New-ProxyFirewallUnit).Replace("`r`n", "`n").Replace("`r", "`n")
@@ -2454,7 +2455,7 @@ firewall_live_state() {
     nft_json="$(nft -j list table inet vps_launcher_guard 2>/dev/null)" || return 1
     FIREWALL_NFT_JSON="$nft_json" python3 - \
         '__FIREWALL_HOP_START__' '__FIREWALL_HOP_END__' '__FIREWALL_HOP_TARGET__' \
-        '__FIREWALL_TCP__' '__FIREWALL_UDP__' <<'PY_FIREWALL'
+        '__FIREWALL_TCP__' '__FIREWALL_UDP__' '__FIREWALL_BRIDGE_TCP__' <<'PY_FIREWALL'
 __LIVE_FIREWALL_PYTHON__
 PY_FIREWALL
 }
@@ -2516,7 +2517,7 @@ for lane in "${drift[@]}"; do
 done
 echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__CDN_CONTRACT_PYTHON__", $cdnContractPython).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__VERIFIED_TLS_HELPER__", $verifiedTlsHelper).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_HOP_START__", "$($firewallContract.Hysteria2HopStart)").Replace("__FIREWALL_HOP_END__", "$($firewallContract.Hysteria2HopEnd)").Replace("__FIREWALL_HOP_TARGET__", "$($firewallContract.Hysteria2HopTarget)").Replace("__LIVE_FIREWALL_PYTHON__", $liveFirewallPython).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__FIREWALL_EXPECTED_UNIT_B64__", $firewallExpectedUnitB64).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__CDN_CONTRACT_PYTHON__", $cdnContractPython).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__VERIFIED_TLS_HELPER__", $verifiedTlsHelper).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_HOP_START__", "$($firewallContract.Hysteria2HopStart)").Replace("__FIREWALL_HOP_END__", "$($firewallContract.Hysteria2HopEnd)").Replace("__FIREWALL_HOP_TARGET__", "$($firewallContract.Hysteria2HopTarget)").Replace("__LIVE_FIREWALL_PYTHON__", $liveFirewallPython).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_BRIDGE_TCP__", $firewallBridgeLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha).Replace("__FIREWALL_EXPECTED_UNIT_B64__", $firewallExpectedUnitB64).Replace("__TLS_PORTS_HELPER_B64__", $proxyTlsPortsB64)
 
 try {
   Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"
