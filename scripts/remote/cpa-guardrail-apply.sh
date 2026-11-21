@@ -3207,7 +3207,13 @@ fi
 # generation must fail this transaction rather than appear green in its file.
 if [ -f "$UPDATER_TIMER_UNIT" ]; then
   UPDATER_TIMER_CALENDAR=$(systemctl show "$UPDATER_TIMER_UNIT" -p TimersCalendar --value 2>/dev/null || true)
+  if [ -z "$UPDATER_TIMER_CALENDAR" ]; then
+    UPDATER_TIMER_CALENDAR=$(systemctl show "$(basename "$UPDATER_TIMER_UNIT")" -p TimersCalendar --value 2>/dev/null || true)
+  fi
   UPDATER_TIMER_DELAY_USEC=$(systemctl show "$UPDATER_TIMER_UNIT" -p RandomizedDelayUSec --value 2>/dev/null || true)
+  if [ -z "$UPDATER_TIMER_DELAY_USEC" ]; then
+    UPDATER_TIMER_DELAY_USEC=$(systemctl show "$(basename "$UPDATER_TIMER_UNIT")" -p RandomizedDelayUSec --value 2>/dev/null || true)
+  fi
   case "$UPDATER_TIMER_DELAY_USEC" in
     __UPDATER_TIMER_RANDOM_DELAY_USEC__|__UPDATER_TIMER_RANDOM_DELAY_SHORT__)
       ;;
