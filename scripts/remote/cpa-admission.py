@@ -1392,6 +1392,52 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
     return hold, delay
 
 
+ANTIGRAVITY_QUOTA_GROUPS = ("gemini", "claude-gpt")
+
+
+def antigravity_quota_group(model: str | None) -> str | None:
+    name = routing_model(model or "").lower()
+    if name.startswith("gemini-"):
+        return "gemini"
+    if name.startswith(("claude-", "gpt-oss-")):
+        return "claude-gpt"
+    return None
+
+
+def antigravity_individual_quota(body: bytes, model: str | None) -> bool:
+    """Accept only the observed Cloud Code quota envelope and matching model."""
+    errors = protocol_errors(body)
+    if len(errors) != 1 or not isinstance(errors[0], dict):
+        return False
+    error = errors[0]
+    if (
+        error.get("code") != 429
+        or error.get("status") != "RESOURCE_EXHAUSTED"
+        or not str(error.get("message", "")).startswith("Individual quota reached")
+        or antigravity_quota_group(model) is None
+    ):
+        return False
+    details = error.get("details")
+    if not isinstance(details, list):
+        return False
+    error_info = [
+        detail
+        for detail in details
+        if isinstance(detail, dict)
+        and detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo"
+    ]
+    if len(error_info) != 1:
+        return False
+    info = error_info[0]
+    metadata = info.get("metadata")
+    return (
+        info.get("reason") == "QUOTA_EXHAUSTED"
+        and info.get("domain") == "cloudcode-pa.googleapis.com"
+        and isinstance(metadata, dict)
+        and metadata.get("model") == routing_model(model or "")
+    )
+
+
 def capacity_scope(
     status: int,
     body_prefix: bytes,
@@ -2721,6 +2767,14 @@ class LaneState:
         self._rpm_max: int | None = config.get("requests_per_minute")
         self._rpm_window: deque[float] = deque()
         self._lane_name = str(config.get("name") or "")
+        self._antigravity_models = (
+            tuple(config.get("models") or ())
+            if self._lane_name == "antigravity-oauth"
+            else ()
+        )
+        self._quota_group_until: dict[str, float] = {}
+        self._saved_quota_groups: dict[str, float] = {}
+        self._quota_checks = 0
         # Models this lane serves at x0.00 credits. A billing lock must not gate
         # them; the lane config is the authority so no code change is needed
         # when the provider's free catalog moves.
@@ -2744,10 +2798,26 @@ class LaneState:
             saved, identity = _load_risk_state(state_path)
             if identity is not None:
                 self._state_identity = identity
+            state_fields = {"version", "not_before", "hold_reason"}
+            if not isinstance(saved, dict):
+                raise ValueError(
+                    "invalid OAuth circuit state; operator review required"
+                )
+            group_deadlines = saved.get("quota_group_not_before", {})
+            allowed_fields = state_fields | (
+                {"quota_group_not_before"} if self._antigravity_models else set()
+            )
             if (
-                not isinstance(saved, dict)
-                or saved.get("version") != 1
-                or set(saved) != {"version", "not_before", "hold_reason"}
+                saved.get("version") != 1
+                or not state_fields <= saved.keys() <= allowed_fields
+                or not isinstance(group_deadlines, dict)
+                or any(
+                    group not in ANTIGRAVITY_QUOTA_GROUPS
+                    or type(until) not in (int, float)
+                    or not math.isfinite(until)
+                    or until < 0
+                    for group, until in group_deadlines.items()
+                )
                 or type(saved.get("not_before")) not in (int, float)
                 or not math.isfinite(saved["not_before"])
                 or saved["not_before"] < 0
@@ -2766,7 +2836,13 @@ class LaneState:
                     "invalid OAuth circuit state; operator review required"
                 )
             self._manual_hold = saved["hold_reason"]
-            remaining = max(0, saved["not_before"] - time.time())
+            wall_now, monotonic_now = time.time(), time.monotonic()
+            self._quota_group_until = {
+                group: monotonic_now + (until - wall_now)
+                for group, until in group_deadlines.items()
+            }
+            self._saved_quota_groups = self._quota_group_until.copy()
+            remaining = max(0, saved["not_before"] - wall_now)
             if remaining:
                 self.open_until = time.monotonic() + remaining
                 self._server_not_before = self.open_until
@@ -2841,7 +2917,17 @@ class LaneState:
             # Storage failed while another operator hold was active. A later
             # clean risk transition may not erase that upstream hold.
             self._manual_hold = self._pre_failure_hold or "state_write_failed"
-        if risk == self._saved_risk and not recovering:
+        now = time.monotonic()
+        quota_groups = {
+            group: until
+            for group, until in self._quota_group_until.items()
+            if until > now
+        }
+        if (
+            risk == self._saved_risk
+            and quota_groups == self._saved_quota_groups
+            and not recovering
+        ):
             return
         payload = {
             "version": 1,
@@ -2856,6 +2942,11 @@ class LaneState:
             # for operator review.
             "hold_reason": risk[1] or ("unverified_request" if risk[2] else None),
         }
+        if quota_groups:
+            wall_now = time.time()
+            payload["quota_group_not_before"] = {
+                group: wall_now + (until - now) for group, until in quota_groups.items()
+            }
         state_directory = self._state_path.parent
         state_directory.mkdir(parents=True, exist_ok=True)
         candidate = state_directory / (
@@ -2940,6 +3031,7 @@ class LaneState:
                     self._manual_hold,
                 )
             self._saved_risk = (risk[0], risk[1], risk[2])
+            self._saved_quota_groups = quota_groups
         except (OSError, ValueError) as exc:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -3139,6 +3231,17 @@ class LaneState:
             )
             self._model_probe_at[model] = now + self._early_probe_interval
 
+    def begin_quota_check(self) -> None:
+        with self._condition:
+            self._quota_checks += 1
+
+    def _quota_retry_after(self, model: str | None, now: float) -> int:
+        if not self._antigravity_models:
+            return 0
+        group = antigravity_quota_group(model)
+        until = self._quota_group_until.get(group, 0.0) if group is not None else 0.0
+        return max(0, _ceil_remaining_seconds(until, now))
+
     def acquire(
         self, alive: Callable[[], bool] | None = None, model: str | None = None
     ) -> Lease:
@@ -3228,7 +3331,16 @@ class LaneState:
                                 self._open_retry_after(now),
                             ),
                         )
-                    if self.probe_inflight:
+                    quota_wait = self._quota_retry_after(model, now)
+                    if quota_wait:
+                        return lease(
+                            False,
+                            "quota_group_cooldown",
+                            max(quota_wait, self._open_retry_after(now)),
+                        )
+                    if self.probe_inflight or self._quota_checks:
+                        # While a quota error is being classified, admit no
+                        # new work until its shared or group deadline is durable.
                         # A half-open probe is a real upstream request and can
                         # take as long as an ordinary generation turn. Rejecting
                         # every concurrent arrival immediately turns one probe
@@ -3464,9 +3576,12 @@ class LaneState:
         successful: bool = True,
         capacity_scope: str = "lane",
         hold_reason: str | None = None,
+        quota_check: bool = False,
     ) -> None:
         with self._condition:
             now = time.monotonic()
+            if quota_check:
+                self._quota_checks -= 1
             self.inflight = max(0, self.inflight - 1)
             if lease.probe and not lease.model_probe:
                 self.probe_inflight = False
@@ -3480,7 +3595,24 @@ class LaneState:
                 # that CPA may already have rotated away. 2026-11-08: the
                 # antigravity 401s of 01:59 had no attributable latch at all.
                 self._latch_hold(hold_reason, "response_signal")
-            if capacity_error and capacity_scope == "model" and lease.model is not None:
+            quota_group = (
+                antigravity_quota_group(lease.model)
+                if self._antigravity_models and capacity_scope == "quota_group"
+                else None
+            )
+            if capacity_error and quota_group is not None and retry_after is not None:
+                self._quota_group_until[quota_group] = max(
+                    self._quota_group_until.get(quota_group, 0.0), now + retry_after
+                )
+                logging.info(
+                    "quota_group_cooldown lane=%s group=%s retry_after=%s",
+                    self._lane_name,
+                    quota_group,
+                    retry_after,
+                )
+            elif (
+                capacity_error and capacity_scope == "model" and lease.model is not None
+            ):
                 # The upstream named one model, so only that model is parked.
                 # Promoting it to the lane would refuse the healthy siblings
                 # that share the credential (and the concurrency budget).
@@ -3635,6 +3767,12 @@ class LaneState:
                 for model, until in sorted(self._model_open_until.items())
                 if until > now
             }
+            for model in self._antigravity_models:
+                quota_wait = self._quota_retry_after(model, now)
+                if quota_wait:
+                    model_cooldowns[model] = max(
+                        model_cooldowns.get(model, 0), quota_wait
+                    )
             return {
                 "inflight": self.inflight,
                 "strict_backoff": self._strict_backoff,
@@ -4376,6 +4514,11 @@ class Handler(BaseHTTPRequestHandler):
                     message = (
                         f"Shared upstream lane {lane_name} requires operator review."
                     )
+                elif lease.reason == "quota_group_cooldown":
+                    message = (
+                        f"Antigravity quota group for {model} is cooling down; "
+                        f"retry after {lease.retry_after}s."
+                    )
                 elif lease.reason == "rate_limited":
                     message = (
                         f"Shared upstream lane {lane_name} is at its local "
@@ -4452,6 +4595,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
         capacity_error = False
         capacity_kind: str | None = None
+        antigravity_quota_check = False
         successful = False
         retry_after: int | None = None
         hold_reason: str | None = None
@@ -4522,10 +4666,14 @@ class Handler(BaseHTTPRequestHandler):
                 # so release() remains the single authority for scope.
                 if retry_after is not None:
                     retry_after_header = str(retry_after)
-            if lane_name == "antigravity-oauth" and response.status in (429, 503):
-                proxy.lanes[lane_name].record_risk(
-                    None, retry_after or lane_config["cooldown_schedule_seconds"][0]
-                )
+            if lane_name == "antigravity-oauth":
+                if response.status == 429:
+                    proxy.lanes[lane_name].begin_quota_check()
+                    antigravity_quota_check = True
+                elif response.status == 503:
+                    proxy.lanes[lane_name].record_risk(
+                        None, retry_after or lane_config["cooldown_schedule_seconds"][0]
+                    )
             transfer_encoding = response.getheader("Transfer-Encoding", "") or ""
             body_allowed = self.command != "HEAD" and response.status not in {
                 *range(100, 200),
@@ -4906,6 +5054,7 @@ class Handler(BaseHTTPRequestHandler):
             pooled_lane = bool(
                 pooled_models and requested_name.strip().lower() in pooled_models
             )
+            body_delay = None
             if lane_name in DURABLE_OAUTH_LANES:
                 body_hold, body_delay = oauth_risk_signal(
                     lane_name,
@@ -4958,6 +5107,19 @@ class Handler(BaseHTTPRequestHandler):
                 retry_after = workbuddy_6004_retry_after(
                     response.status, bytes(probe), lane_config
                 )
+            if antigravity_quota_check:
+                capacity_kind = "lane"
+                if (
+                    lease is not None
+                    and stream_probe is None
+                    and not client_lost.is_set()
+                    and hold_reason is None
+                    and body_delay is not None
+                    and retry_after == body_delay
+                    and 0 < body_delay <= 2147483647
+                    and antigravity_individual_quota(bytes(probe), lease.model)
+                ):
+                    capacity_kind = "quota_group"
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
@@ -5232,11 +5394,13 @@ class Handler(BaseHTTPRequestHandler):
             if lease is not None and lane_name is not None:
                 proxy.lanes[lane_name].release(
                     lease,
-                    capacity_error=capacity_error,
+                    # A torn or unreadable 429 still provides shared evidence.
+                    capacity_error=capacity_error or antigravity_quota_check,
                     retry_after=retry_after,
                     successful=successful,
                     capacity_scope=capacity_kind or "lane",
                     hold_reason=hold_reason,
+                    quota_check=antigravity_quota_check,
                 )
 
     def _downstream_alive(self) -> bool:

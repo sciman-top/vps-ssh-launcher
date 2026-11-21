@@ -3836,6 +3836,104 @@ def test_chatgpt_prose_wrapped_upstream_error_surfaces_risk_signal() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("error_reason", "metadata_model", "expected_scope"),
+    [
+        ("QUOTA_EXHAUSTED", "claude-opus-5-5-high", "model"),
+        ("QUOTA_EXHAUSTED", "claude-sonnet-5-5-high", "lane"),
+        ("RATE_LIMIT_EXCEEDED", "claude-opus-5-5-high", "lane"),
+    ],
+)
+def test_antigravity_provider_quota_window_survives_restart(
+    tmp_path: Path, error_reason: str, metadata_model: str, expected_scope: str
+) -> None:
+    opus = "claude-opus-5-5-high"
+    sonnet = "claude-sonnet-5-5-high"
+    flash = "gemini-3.8-flash-high"
+    delay = 17505
+    error = {
+        "code": 429,
+        "status": "RESOURCE_EXHAUSTED",
+        "message": "Individual quota reached. Resets in 4h51m44s.",
+        "details": [
+            {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": error_reason,
+                "domain": "cloudcode-pa.googleapis.com",
+                "metadata": {"model": metadata_model, "quotaResetDelay": "17504.62s"},
+            },
+            {
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                "retryDelay": "17504.62s",
+            },
+        ],
+    }
+    received: list[str] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            model = json.loads(self.rfile.read(int(self.headers["Content-Length"])))[
+                "model"
+            ]
+            received.append(model)
+            payload = json.dumps({"error": error} if model == opus else {"ok": True})
+            body = payload.encode()
+            self.send_response(429 if model == opus else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = AdmissionProxy(loaded, state_path=path)
+
+    def call(model: str) -> tuple[int, str | None]:
+        client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        try:
+            client.request("POST", "/v1/responses", json.dumps({"model": model}))
+            response = client.getresponse()
+            response.read()
+            return response.status, response.getheader("Retry-After")
+        finally:
+            client.close()
+
+    try:
+        assert call(opus)[0] == 429
+        state = server.proxy.lanes["antigravity-oauth"]
+        with state._condition:
+            assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
+        disk = json.loads(path.read_text(encoding="utf-8"))
+        # Replace the proxy from the same durable state as a process restart.
+        server.proxy = AdmissionProxy(loaded, state_path=path)
+        lane_state = server.proxy.lanes["antigravity-oauth"].snapshot()
+        assert lane_state["cooldown_scope"] == expected_scope
+        status, retry_after = call(sonnet)
+        assert status == 429 and delay - 3 <= int(retry_after or 0) <= delay
+        if expected_scope == "model":
+            assert disk["not_before"] == 0
+            assert set(disk["quota_group_not_before"]) == {"claude-gpt"}
+            assert call(flash)[0] == 200
+            assert call(opus)[0] == 429
+            assert received == [opus, flash]
+        else:
+            assert "quota_group_not_before" not in disk
+            assert call(flash)[0] == 429
+            assert received == [opus]
+    finally:
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
 @pytest.mark.parametrize("retry_after", [None, 125])
 def test_antigravity_upstream_429_explains_failure_in_responses_stream(
     retry_after: int | None,
