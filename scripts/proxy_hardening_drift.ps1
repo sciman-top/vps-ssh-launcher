@@ -781,7 +781,12 @@ for path in root.glob("*.conf"):
     except OSError:
         continue
     if not re.search(
-        r"server_name\s+[^;]*\b" + re.escape(host) + r"\s*;", text
+        # A \b before the host would also match inside static-zz.sciman.top
+        # (the "-" before "zz" is a word boundary), pulling a sibling vhost's
+        # certificate into this name's candidate set. Require the host to be
+        # a complete label instead: not preceded by a word character or a
+        # dot/hyphen label separator.
+        r"server_name\s+[^;]*(?<![\w.-])" + re.escape(host) + r"\s*;", text
     ):
         continue
     candidates.extend(
@@ -2462,7 +2467,11 @@ firewall_unit_current() {
     case "$actual" in
         *" (offset)"*) return 1 ;;
     esac
-    [ "$(printf '%s\n' "$actual" | sed '/^$/d')" = "$(printf '%s\n' "$expected" | sed '/^$/d')" ]
+    # `systemctl cat` prefixes each fragment with a "# /path" comment; strip
+    # comments together with blank lines or the header never matches. The
+    # drop-in "(offset)" marker is detected above on the raw output, and a
+    # drop-in's override lines are not comments, so they still mismatch.
+    [ "$(printf '%s\n' "$actual" | sed -e '/^#/d' -e '/^$/d')" = "$(printf '%s\n' "$expected" | sed -e '/^#/d' -e '/^$/d')" ]
 }
 if [ ! -f "$FIREWALL_RULES" ]; then
     echo 'firewall_baseline=drift rules-missing'

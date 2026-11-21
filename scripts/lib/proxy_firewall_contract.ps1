@@ -248,13 +248,12 @@ expected_prerouting = [[
         "right": {"range": [hop_start, hop_end]},
     }},
     {"counter": {"packets": 0, "bytes": 0}},
-    {"redir": {"port": hop_target}},
+    {"redirect": {"port": hop_target}},
 ]]
 expected_output = [[
     {"match": {
         "op": "==",
-        "left": {"fib": {"result": "type", "flags": ["local"],
-                         "daddr": {"payload": {"protocol": "ip", "field": "daddr"}}}},
+        "left": {"fib": {"result": "type", "flags": ["daddr"]}},
         "right": "local",
     }},
     {"match": {
@@ -263,7 +262,7 @@ expected_output = [[
         "right": {"range": [hop_start, hop_end]},
     }},
     {"counter": {"packets": 0, "bytes": 0}},
-    {"redir": {"port": hop_target}},
+    {"redirect": {"port": hop_target}},
 ]]
 expected_input = [
     [
@@ -312,6 +311,29 @@ expected_input = [
 ]
 
 
+def canonical(value):
+    # nft's JSON spelling of the same rule varies across releases: the NAT
+    # redirect appears as "redir" or "redirect", and `fib daddr type local`
+    # has been observed as flags ["daddr"] with the "local" value carried by
+    # the surrounding match, or as a nested daddr payload plus a redundant
+    # "local" flag. Collapse those spellings so semantic equivalence decides
+    # the verdict instead of one release's serialization detail.
+    if isinstance(value, list):
+        return [canonical(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    collapsed = {}
+    for key, item in value.items():
+        if key == "redir":
+            key = "redirect"
+        elif key == "fib" and isinstance(item, dict):
+            item = {name: part for name, part in item.items() if name != "daddr"}
+            if isinstance(item.get("flags"), list):
+                item["flags"] = [flag for flag in item["flags"] if flag != "local"]
+        collapsed[key] = canonical(item)
+    return collapsed
+
+
 def normalize(exprs):
     # nft -j includes volatile packet/byte counters. Their values are not part
     # of the configuration contract, but their presence and ordinal position
@@ -326,7 +348,7 @@ def normalize(exprs):
             if not isinstance(counter, dict) or set(counter) != {"packets", "bytes"}:
                 return None
             expression["counter"] = {"packets": 0, "bytes": 0}
-        normalized.append(expression)
+        normalized.append(canonical(expression))
     return normalized
 
 

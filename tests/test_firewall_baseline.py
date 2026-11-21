@@ -19,6 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "firewall_baseline.ps1"
 LIB = ROOT / "scripts" / "lib" / "proxy_firewall_contract.ps1"
 
+# Verbatim `nft -j list table inet vps_launcher_guard` capture from the bwg
+# host (nftables 1.0.9, 2026-11-21). The live-state checker's expected JSON
+# shapes were once written against a guessed serialization ("redir", a
+# nested fib daddr payload) and flagged every conformant table as drift;
+# this capture pins the checker to what nft actually emits.
+_REAL_NFT_109_BWG = '{"nftables":[{"metainfo":{"version":"1.0.9","release_name":"Old Doc Yak #3","json_schema_version":1}},{"table":{"family":"inet","name":"vps_launcher_guard","handle":12}},{"chain":{"family":"inet","table":"vps_launcher_guard","name":"prerouting","handle":1,"type":"nat","hook":"prerouting","prio":-100,"policy":"accept"}},{"chain":{"family":"inet","table":"vps_launcher_guard","name":"output","handle":2,"type":"nat","hook":"output","prio":-100,"policy":"accept"}},{"chain":{"family":"inet","table":"vps_launcher_guard","name":"input","handle":3,"type":"filter","hook":"input","prio":-10,"policy":"drop"}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"prerouting","handle":31,"expr":[{"match":{"op":"!=","left":{"meta":{"key":"iifname"}},"right":"lo"}},{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":{"range":[20000,20999]}}},{"counter":{"packets":36,"bytes":6646}},{"redirect":{"port":8444}}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"output","handle":32,"expr":[{"match":{"op":"==","left":{"fib":{"result":"type","flags":["daddr"]}},"right":"local"}},{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":{"range":[20000,20999]}}},{"counter":{"packets":0,"bytes":0}},{"redirect":{"port":8444}}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":33,"expr":[{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":"tcp"}},{"match":{"op":">","left":{"payload":{"protocol":"ip","field":"hdrlength"}},"right":5}},{"drop":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":34,"expr":[{"match":{"op":"in","left":{"ct":{"key":"state"}},"right":["established","related"]}},{"accept":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":35,"expr":[{"match":{"op":"in","left":{"ct":{"key":"state"}},"right":"invalid"}},{"drop":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":36,"expr":[{"match":{"op":"==","left":{"meta":{"key":"iif"}},"right":"lo"}},{"accept":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":38,"expr":[{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":{"set":["icmp","ipv6-icmp"]}}},{"accept":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":39,"expr":[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"sport"}},"right":67}},{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":68}},{"accept":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":40,"expr":[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"sport"}},"right":547}},{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":546}},{"accept":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":42,"expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":{"set":[443,2087,8443,10094,21470,28317,29712,33387]}}},{"accept":null}]}},{"rule":{"family":"inet","table":"vps_launcher_guard","chain":"input","handle":44,"expr":[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":{"set":[443,8444]}}},{"accept":null}]}}]}'
+
 
 def _stdout_section(stdout: str, name: str) -> list[str]:
     """Return the non-empty lines between <name>_BEGIN and <name>_END."""
@@ -147,7 +154,7 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                                 }
                             },
                             {"counter": {"packets": 99, "bytes": 488}},
-                            {"redir": {"port": 8444}},
+                            {"redirect": {"port": 8444}},
                         ],
                     }
                 },
@@ -163,13 +170,7 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                                     "left": {
                                         "fib": {
                                             "result": "type",
-                                            "flags": ["local"],
-                                            "daddr": {
-                                                "payload": {
-                                                    "protocol": "ip",
-                                                    "field": "daddr",
-                                                }
-                                            },
+                                            "flags": ["daddr"],
                                         }
                                     },
                                     "right": "local",
@@ -188,7 +189,7 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                                 }
                             },
                             {"counter": {"packets": 20, "bytes": 100}},
-                            {"redir": {"port": 8444}},
+                            {"redirect": {"port": 8444}},
                         ],
                     }
                 },
@@ -404,7 +405,9 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             ]
         }
 
-        def classify(candidate: dict) -> str:
+        def classify(
+            candidate: dict, tcp_text: str = "443 8443", udp_text: str = "443 8444"
+        ) -> str:
             env = os.environ.copy()
             env["FIREWALL_NFT_JSON"] = json.dumps(candidate)
             result = subprocess.run(
@@ -415,8 +418,8 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                     "20000",
                     "20999",
                     "8444",
-                    "443 8443",
-                    "443 8444",
+                    tcp_text,
+                    udp_text,
                 ],
                 env=env,
                 capture_output=True,
@@ -428,6 +431,24 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             return result.stdout.strip()
 
         self.assertEqual(classify(document), "exact")
+        bwg_tcp = "443 2087 8443 10094 21470 28317 29712 33387"
+        real_world = json.loads(_REAL_NFT_109_BWG)
+        self.assertEqual(
+            classify(real_world, tcp_text=bwg_tcp, udp_text="443 8444"), "exact"
+        )
+        # The canonicalization layer must also collapse the legacy "redir"
+        # spelling onto the same verdict so older nft releases stay compatible.
+        legacy_spelling = json.loads(_REAL_NFT_109_BWG)
+        for item in legacy_spelling["nftables"]:
+            rule = item.get("rule")
+            if not isinstance(rule, dict):
+                continue
+            for expression in rule["expr"]:
+                if "redirect" in expression:
+                    expression["redir"] = expression.pop("redirect")
+        self.assertEqual(
+            classify(legacy_spelling, tcp_text=bwg_tcp, udp_text="443 8444"), "exact"
+        )
         deleted_nat = copy.deepcopy(document)
         deleted_nat["nftables"] = [
             item
@@ -449,14 +470,14 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
         redir_index = next(
             index
             for index, expression in enumerate(expressions)
-            if "redir" in expression
+            if "redirect" in expression
         )
         self.assertGreater(redir_index, 0)
         expressions[redir_index - 1]["counter"]["bytes"] += 1
         for index in indexes:
             item = bad_target["nftables"][index]
             if item.get("rule", {}).get("chain") == "prerouting":
-                item["rule"]["expr"][-1]["redir"]["port"] = 8443
+                item["rule"]["expr"][-1]["redirect"]["port"] = 8443
         self.assertEqual(classify(bad_target), "live-rules:prerouting")
         extra_rule = copy.deepcopy(document)
         extra_rule["nftables"].append(copy.deepcopy(extra_rule["nftables"][3]))

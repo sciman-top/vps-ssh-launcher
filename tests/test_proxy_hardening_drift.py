@@ -988,6 +988,74 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("true_sni_ok", text)
         self.assertIn("true_sni_broken", text)
 
+    def test_stealth_cert_candidates_match_whole_labels(self) -> None:
+        # The candidate scan once used a \b before the host, so the sibling
+        # vhost name static-zz.sciman.top matched a zz.sciman.top probe (the
+        # "-" before "zz" is a word boundary) and its CDN certificate made
+        # the candidate set ambiguous on every conformant host. Extract the
+        # streamed PY_STEALTH_CERT block and drive it against a minimal
+        # conf.d: a sibling name with a different certificate must not
+        # pollute the true SNI's candidates, while two certificates for the
+        # same name stay ambiguous.
+        block = self.text.split("<<'PY_STEALTH_CERT'", 1)[1].split(
+            chr(10) + "PY_STEALTH_CERT", 1
+        )[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            verify_dir = root / "verify"
+            verify_dir.mkdir()
+            (verify_dir / "verify_tls.py").write_text(
+                "def verified_tls_curl_args(host, cert):\n"
+                "    return ['--stub', host, cert]\n",
+                encoding="utf-8",
+            )
+            conf_dir = root / "conf.d"
+            conf_dir.mkdir()
+            true_conf = (
+                "server {\n"
+                "    listen 12378 ssl;\n"
+                "    server_name zz.sciman.top;\n"
+                "    ssl_certificate /etc/tls/zz.sciman.top.crt;\n"
+                "}\n"
+            )
+            (conf_dir / "true.conf").write_text(true_conf, encoding="utf-8")
+            sibling_conf = (
+                "server {\n"
+                "    listen 12378 ssl;\n"
+                "    server_name static-zz.sciman.top;\n"
+                "    ssl_certificate /etc/tls/cdn.zz.sciman.top.crt;\n"
+                "}\n"
+            )
+            (conf_dir / "sibling.conf").write_text(sibling_conf, encoding="utf-8")
+
+            def run_scan(directory: Path, host: str) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    [sys.executable, "-c", block, str(directory), host],
+                    cwd=verify_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            sibling = run_scan(conf_dir, "zz.sciman.top")
+            self.assertEqual(sibling.returncode, 0, sibling.stderr)
+            self.assertEqual(
+                sibling.stdout.strip(),
+                "--stub\nzz.sciman.top\n/etc/tls/zz.sciman.top.crt",
+            )
+            second_conf = (
+                "server {\n"
+                "    listen 12379 ssl;\n"
+                "    server_name zz.sciman.top;\n"
+                "    ssl_certificate /etc/tls/other.crt;\n"
+                "}\n"
+            )
+            (conf_dir / "second.conf").write_text(second_conf, encoding="utf-8")
+            ambiguous = run_scan(conf_dir, "zz.sciman.top")
+            self.assertNotEqual(ambiguous.returncode, 0)
+            self.assertIn("ambiguous local TLS certificate", ambiguous.stderr)
+
     def test_xhttp_front_drift_is_detected(self) -> None:
         text = self.text
         # A vasma menu reconfiguration restores the dokodemo wrapper and turns
