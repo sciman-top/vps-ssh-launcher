@@ -5016,7 +5016,13 @@ class Handler(BaseHTTPRequestHandler):
                 and (stream_probe.terminal_success or stream_probe.has_error)
             )
             if early_stream and not client_lost.is_set() and not terminal_delivered:
-                if (
+                if lane_name == "antigravity-oauth" and response.status == 429:
+                    message = "Antigravity upstream returned HTTP 429."
+                    if retry_after is None:
+                        message += " CPA did not receive a retry time."
+                    else:
+                        message += f" Retry after {retry_after} seconds."
+                elif (
                     stream_probe is not None
                     and stream_probe.has_error
                     and stream_probe.last_event_type

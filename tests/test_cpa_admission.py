@@ -3836,6 +3836,64 @@ def test_chatgpt_prose_wrapped_upstream_error_surfaces_risk_signal() -> None:
     )
 
 
+@pytest.mark.parametrize("retry_after", [None, 125])
+def test_antigravity_upstream_429_explains_failure_in_responses_stream(
+    retry_after: int | None,
+) -> None:
+    body = (
+        b'{"error":{"status":"RESOURCE_EXHAUSTED","message":"private upstream detail"}}'
+    )
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            if retry_after is not None:
+                self.send_header("Retry-After", str(retry_after))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = AdmissionProxy(loaded)
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        client.request(
+            "POST", "/v1/responses", b'{"model":"gemini-3.8-flash-high","stream":true}'
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        stream = response.read()
+        payload = next(
+            json.loads(line.removeprefix(b"data: "))
+            for line in stream.splitlines()
+            if line.startswith(b"data: ") and b'"type":"response.failed"' in line
+        )
+        error = payload["response"]["error"]
+        assert error["code"] == "capacity"
+        assert "Antigravity upstream returned HTTP 429" in error["message"]
+        assert error.get("retry_after") == retry_after
+        if retry_after is None:
+            assert "did not receive a retry time" in error["message"]
+        else:
+            assert "125 seconds" in error["message"]
+        assert b"private upstream detail" not in stream
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
 @pytest.mark.parametrize(
     ("preceding", "expected_fragment"),
     [
