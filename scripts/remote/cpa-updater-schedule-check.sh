@@ -120,18 +120,17 @@ budget_declaration_exact() {
 }
 
 budgets_every() {
-  local key value
-  local -a seen=''
+  local key value seen=" "
   for key in pull_seconds compose_seconds start_stop_seconds restore_seconds \
     docker_kill_after_seconds health_request_seconds; do
     value="$(budget_seconds "$key" || true)"
     case "$value" in
       ''|*[!0-9]*) return 1 ;;
     esac
-    for seen_value in "${seen[@]}"; do
-      [[ "$seen_value" == "$key" ]] && return 1
-    done
-    seen+=("$key")
+    case "$seen" in
+      *" $key "*) return 1 ;;
+    esac
+    seen="$seen$key "
   done
 }
 

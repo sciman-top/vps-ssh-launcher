@@ -1248,6 +1248,12 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         # exact outer fail-stop.
         self.assertIn("__CPA_UPDATER_BUDGETS__", checker)
         self.assertIn("budget_declaration_exact", checker)
+        # The doctor invokes this file with `sh -c`, not Bash. A POSIX
+        # `local -a` array makes dash reject the whole checker before any
+        # gate result is emitted, which is exactly the 2026-11-21 production
+        # `updater-schedule=UNVERIFIED reason=readout_failed` failure.
+        self.assertNotIn("local -a", checker)
+        self.assertNotIn("[[ ", checker)
         self.assertIn('"$start_seconds" -eq "$expected_start_seconds"', checker)
         self.assertIn('"$largest_budget" -lt "$start_seconds"', checker)
         self.assertIn("full_path_budget", checker)
