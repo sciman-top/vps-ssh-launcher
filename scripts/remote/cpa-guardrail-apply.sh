@@ -581,6 +581,21 @@ restore_all() {
   else
     systemctl stop cpa-admission.service >/dev/null 2>&1 || true
   fi
+  # The admission generation is a three-file set (script, pin, request guard).
+  # A restore that mixes generations boots into the admission bootstrap's
+  # mismatch crash loop, so verify the restored set before declaring rollback
+  # complete (2026-11-21 incident evidence).
+  if [ -f "$ADMISSION_SCRIPT" ] && [ -f "$ADMISSION_INTEGRITY_PIN" ] &&
+    [ -f "$ADMISSION_REQUEST_GUARD" ] &&
+    [ "$(sha256sum "$ADMISSION_SCRIPT" | awk '{print $1}')" =
+      "$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")" ] &&
+    grep -Fq "SOURCE_SHA256 = \"$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")\"" \
+      "$ADMISSION_REQUEST_GUARD" 2>/dev/null; then
+    :
+  else
+    echo "ROLLBACK_FAILED admission_generation_set_mismatch"
+    rollback_failed=1
+  fi
   if [ "$LEGACY_ADMISSION_WAS_ENABLED" -eq 1 ]; then
     systemctl enable cpa-luna-admission.service >/dev/null 2>&1 || rollback_failed=1
   else

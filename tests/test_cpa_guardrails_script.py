@@ -2171,6 +2171,7 @@ $result | ConvertTo-Json -Depth 6 -Compress
             ("missing_launcher", body, digest, 1, "broker_compatible_launcher_missing"),
             ("invalid_pin", body, "not-a-sha", 1, "invalid_pin"),
             ("hash_mismatch", body, "f" * 64, 1, "hash_mismatch"),
+            ("guard_generation_mismatch", body, digest, 1, "guard_generation_mismatch"),
         ):
             with self.subTest(branch=name), tempfile.TemporaryDirectory() as tmp:
                 workdir = Path(tmp)
@@ -2187,8 +2188,22 @@ $result | ConvertTo-Json -Depth 6 -Compress
                 if name != "missing_launcher":
                     unit_body += "ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh\n"
                 (workdir / "unit").write_text(unit_body, encoding="utf-8")
+                if name == "guard_generation_mismatch":
+                    guard_dir = workdir / "libexec"
+                    guard_dir.mkdir()
+                    (guard_dir / "cpa_request_guard.py").write_text(
+                        'SOURCE_SHA256 = "0" * 64\n', encoding="utf-8"
+                    )
+                else:
+                    guard_dir = workdir / "libexec"
+                    guard_dir.mkdir(exist_ok=True)
+                    (guard_dir / "cpa_request_guard.py").write_text(
+                        f'SOURCE_SHA256 = "{digest}"\n', encoding="utf-8"
+                    )
                 completed = subprocess.run(
-                    self._bash_command(bash, "-c", script),
+                    self._bash_command(
+                        bash, "-c", script.replace("/usr/local/libexec", "./libexec")
+                    ),
                     cwd=workdir,
                     capture_output=True,
                     text=True,

@@ -27,6 +27,14 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+GUARD=/usr/local/libexec/cpa_request_guard.py
+if [ -f "$GUARD" ]; then
+  if ! grep -Fq "SOURCE_SHA256 = \"$expected\"" "$GUARD"; then
+    echo "ADMISSION_INTEGRITY_REFUSE guard_generation_mismatch" >&2
+    exit 1
+  fi
+fi
+
 if ! grep -Fqx \
   'Environment=VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER=/run/cpa-admission/process' \
   "$UNIT"; then
