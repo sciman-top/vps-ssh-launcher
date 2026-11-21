@@ -367,7 +367,7 @@ auth 文件一直保持启用：插件周期余额扫描仍会读它们，余额
 （v7.3.17 与 v8.0.2 的 bootstrap 实现逐字节同构，该结论与镜像版本无关。）
 
 公网 gateway 同时固定校验 `client_max_body_size 32m`、
-`client_body_buffer_size 128k`、SSE `proxy_buffering off` 以及 300s 读写
+`client_body_buffer_size 2m`（2026-11-22 由 `128k` 同步提升，覆盖 200K–320K 上下文请求避免频繁落盘临时文件）、SSE `proxy_buffering off` 以及 300s 读写
 超时；`cpa_safe` 日志格式末尾追加 `upstream_header_time=$upstream_header_time`，
 该字段测量 Nginx 收到上游响应头的等待时间，不等于首个 SSE 事件或首个文本
 delta 的延迟；`upstream_time` 包含 admission 等待与上游响应过程，也不能独立

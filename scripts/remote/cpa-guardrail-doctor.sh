@@ -459,7 +459,7 @@ if grep -Eq '^[[:space:]]*logs-max-total-size-mb:[[:space:]]*32[[:space:]]*$' "$
 else
   mark_fail logs-max-total-size-mb
 fi
-if grep -Fq 'client_body_buffer_size 128k;' /etc/nginx/conf.d/cpa-gateway.conf; then
+if grep -Fq 'client_body_buffer_size 2m;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo client-body-buffer=OK
 else
   mark_fail client-body-buffer

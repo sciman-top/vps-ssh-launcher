@@ -2448,12 +2448,25 @@ if new_limit_conn not in nginx:
     # migrated value before nginx -t runs.
     nginx = nginx.replace(legacy_limit_conn, new_limit_conn, 1)
 
+new_body_buffer = "client_body_buffer_size 2m;"
+if new_body_buffer not in nginx:
+    for legacy_body_buffer in (
+        "client_body_buffer_size 128k;",
+        "client_body_buffer_size 1m;",
+    ):
+        if legacy_body_buffer in nginx:
+            # Accept previously deployed request-body buffer sizes as input
+            # states and migrate to 2m so 200K-320K context requests stay in
+            # memory instead of spilling to /var/cache/nginx temporary files.
+            nginx = nginx.replace(legacy_body_buffer, new_body_buffer, 1)
+            break
+
 required = [
     "limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;",
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
     "limit_conn cpa_cc 20;",
     "client_max_body_size 32m;",
-    "client_body_buffer_size 128k;",
+    "client_body_buffer_size 2m;",
     "proxy_buffering off;",
     "proxy_read_timeout 300s;",
     "proxy_send_timeout 300s;",
@@ -3114,7 +3127,7 @@ if ! grep -Fq 'map $uri $cpa_route_class {' "$NGINX_CONF" ||
 fi
 for anchor in \
   'client_max_body_size 32m;' \
-  'client_body_buffer_size 128k;' \
+  'client_body_buffer_size 2m;' \
   'proxy_buffering off;' \
   'proxy_read_timeout 300s;' \
   'proxy_send_timeout 300s;'; do

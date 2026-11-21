@@ -4151,13 +4151,14 @@ except Exception as exc:
         )
         self.assertIn('[ "$lane443_body_buffer" = "$canonical_body_buffer" ]', doctor)
         # Scoped to the lane block: the canonical lane's own pinned
-        # `client_body_buffer_size 128k;` assertion lives elsewhere in the
+        # `client_body_buffer_size 2m;` assertion lives elsewhere in the
         # doctor and must stay a literal, while the desktop lane's copy has to
         # follow the canonical value.
         lane_block = doctor.split(
             "LANE443_CONF=/etc/nginx/conf.d/00-cpa-443-http.conf", 1
         )[1].split("echo gateway-443-lane=ABSENT", 1)[0]
         self.assertNotIn("client_body_buffer_size 128k;", lane_block)
+        self.assertNotIn("client_body_buffer_size 2m;", lane_block)
         self.assertIn("grep -Fq 'proxy_buffering off;' \"$LANE443_SERVER\"", doctor)
         self.assertIn("grep -Fq 'proxy_read_timeout 300s;' \"$LANE443_SERVER\"", doctor)
         self.assertIn("grep -Fq 'proxy_send_timeout 300s;' \"$LANE443_SERVER\"", doctor)
@@ -5786,6 +5787,10 @@ class CpaAdmissionContractParityTests(unittest.TestCase):
     def test_shutdown_timeout_stream_probe_and_doctor_observability_wired(self) -> None:
         self.assertIn('server_after["shutdown-timeout"] = 15', self.apply_source)
         self.assertIn('server_block.pop("shutdown-timeout", None)', self.apply_source)
+        self.assertIn(
+            'new_body_buffer = "client_body_buffer_size 2m;"', self.apply_source
+        )
+        self.assertIn("client_body_buffer_size 2m;", self.doctor_source)
         self.assertIn('config.get("stream_probe_bytes") != 2097152', self.apply_source)
         self.assertIn("invalidated oauth token", self.doctor_source)
         self.assertIn("workbuddy_failover_probe_401_7d=", self.doctor_source)
