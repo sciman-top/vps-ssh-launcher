@@ -330,7 +330,13 @@ system-first / 会话头格式问题应先修正协议。selected 的拒绝行�
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
 无所选账号时仍会初始化候选，不承诺跨重启持久绑定。
 
-当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。`routing.retry.max-retry-credentials` 的目标与当前生产值均为 `1`：单请求只用一份凭据，失败直接暴露而不再把同一请求重放到兄弟账号。后续独立请求仍可由 `credits` 选择其他合格凭据。现有账号与 API key 未删除。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 当作账号保护。
+CN 插件保留 `checkin_auto`，其他后台动作按 doctor 的开关契约检查。宿主的
+`routing.retry.max-retry-credentials: 1` 约束宿主调度。`workbuddy-provider`
+0.21.29 在执行器里还有 `retry_on_4xx`，冷启动缺省为 10 次，流式路径也拿
+这项预算处理部分 5xx 和断流。守卫投影为活跃 CN 插件写入整数
+`plugins.configs.workbuddy-provider.retry_on_4xx: 0`，doctor 拦截缺失或非零值。
+投影后以 doctor 和插件重载回执确认生效。后续独立请求仍由 `credits` 选择合格
+凭据。调用端应收紧请求与流式自动重试，保留上游错误、冷却和账号状态。
 
 | 信号 | 处置 |
 | --- | --- |

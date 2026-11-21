@@ -3007,14 +3007,6 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"', apply_script)
         self.assertIn("stream-bootstrap-timeout", apply_script)
         self.assertIn('"session-affinity-rebind-on": "quota",', apply_script)
-        self.assertIn(
-            'workbuddy_after["scheduler_priority_reclaim"] = True',
-            apply_script,
-        )
-        self.assertIn(
-            "REFUSE plugins change exceeded scheduler_priority_reclaim",
-            apply_script,
-        )
         # The projected value is the disabled contract, not merely a present
         # key: the bootstrap hold cost ~10s of dead air per Luna turn and the
         # apply script must not silently restore it.
@@ -3064,7 +3056,13 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     "enabled": True,
                     "scheduler_mode": "credits",
                     "account_max_concurrent": 1,
-                }
+                },
+                "workbuddy-provider": {
+                    "enabled": True,
+                    "scheduler_mode": "credits",
+                    "retry_on_4xx": 10,
+                },
+                "workbuddy-ai-provider": {"enabled": False},
             },
         }
         route_manifest = policy["ROUTE_MANIFEST"]
@@ -3146,12 +3144,12 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             transformed["oauth"]["settings"],
             route_manifest["oauth_settings"],
         )
-        self.assertIs(
-            transformed["plugins"]["configs"]["workbuddy"][
-                "scheduler_priority_reclaim"
-            ],
-            True,
-        )
+        expected_plugins = json.loads(json.dumps(config["plugins"]))
+        expected_plugins["configs"]["workbuddy"]["scheduler_priority_reclaim"] = True
+        expected_plugins["configs"]["workbuddy-provider"]["retry_on_4xx"] = 0
+        self.assertEqual(transformed["plugins"], expected_plugins)
+        cn_plugin = transformed["plugins"]["configs"]["workbuddy-provider"]
+        self.assertIs(type(cn_plugin["retry_on_4xx"]), int)
         compatibility = {
             provider["name"]: provider["models"]
             for provider in transformed["api-keys"]["openai-compatibility"]

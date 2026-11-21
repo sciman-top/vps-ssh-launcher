@@ -1185,6 +1185,7 @@ docker() {{
                 "token_keepalive": False,
                 "rotation_enabled": False,
                 "scheduler_mode": "credits",
+                "retry_on_4xx": 0,
             }
             cn_section.update(overrides)
             return {
@@ -1214,6 +1215,7 @@ docker() {{
         self.assertIn("workbuddy-growth_auto=false", healthy.stdout)
         self.assertIn("workbuddy-rotation_enabled=false", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
+        self.assertIn("workbuddy-retry_on_4xx=0", healthy.stdout)
         self.assertIn(
             "workbuddy-intl-plugin=disabled keepalive=off note=closed_dark_20261117",
             healthy.stdout,
@@ -1247,6 +1249,7 @@ docker() {{
         self.assertIn("workbuddy-growth_auto=ABSENT expected=false", wiped.stdout)
         self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
         self.assertIn("scheduler_mode:absent", wiped.stdout)
+        self.assertIn("retry_on_4xx:absent", wiped.stdout)
         self.assertIn("intl_plugin:not_disabled", wiped.stdout)
         self.assertIn("oauth_model_alias:deepseek-v4.1-flash-intl", wiped.stdout)
         self.assertIn("oauth_excluded_models:workbuddy-provider", wiped.stdout)
@@ -1263,6 +1266,14 @@ docker() {{
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn("scheduler_mode:", result.stdout)
                 self.assertIn("workbuddy-config=DRIFT", result.stdout)
+
+        for retry_budget in (10, False, "0"):
+            with self.subTest(retry_on_4xx=retry_budget):
+                result = run_case(healthy_config(retry_on_4xx=retry_budget))
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(
+                    "workbuddy-retry_on_4xx=UNEXPECTED expected=0", result.stdout
+                )
 
         growth_flip = run_case(healthy_config(growth_auto=True))
         self.assertEqual(growth_flip.returncode, 1, growth_flip.stdout)

@@ -3294,7 +3294,7 @@ echo "==workbuddy-config=="
 # oauth-excluded-models narrowing; the ==client-model-catalog== gate proves
 # the actual surface, this gate pins the deployed policy directly: the
 # legacy section must be gone, the luode default-on loops stay explicitly
-# off, the INTL plugin stays enabled with keepalive off, and the alias
+# off, the INTL plugin stays disabled with keepalive off, and the alias
 # bridge entries the admission lane entry points depend on must exist.
 INTL_DISABLED_EXPECTED=$(python3 "$DIR/cpa_policy.py" count-intl-disabled "$DIR/auth" 2>/dev/null || true)
 python3 - "$DIR/config.yaml" "$DIR/auth" "$WORKBUDDY_INTL_PREFIX" "$INTL_DISABLED_EXPECTED" <<'PY'
@@ -3363,6 +3363,14 @@ else:
     mode_state = "absent" if "scheduler_mode" not in section else "unexpected"
     drift.append(f"scheduler_mode:{mode_state}")
     print(f"workbuddy-scheduler_mode={mode_state.upper()} expected=credits")
+
+retry_on_4xx = section.get("retry_on_4xx")
+if type(retry_on_4xx) is int and retry_on_4xx == 0:
+    print("workbuddy-retry_on_4xx=0")
+else:
+    retry_state = "absent" if "retry_on_4xx" not in section else "unexpected"
+    drift.append(f"retry_on_4xx:{retry_state}")
+    print(f"workbuddy-retry_on_4xx={retry_state.upper()} expected=0")
 
 for key, expected in SWITCHES:
     if key not in section:

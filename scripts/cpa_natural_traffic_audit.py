@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
@@ -165,6 +166,8 @@ def _text_finish_reason(line: str) -> str | None:
 
 def parse_journal(
     lines: Iterable[str],
+    *,
+    rejections: Counter[tuple[str, str, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Pair admission and downstream header lines with terminal delivery.
 
@@ -187,6 +190,15 @@ def parse_journal(
         if timestamp is None:
             continue
         fields = {key: value for key, value in _FIELD.findall(line)}
+        if rejections is not None and " lane_reject " in line:
+            rejections[
+                (
+                    fields.get("lane", "unknown"),
+                    fields.get("model", "other"),
+                    fields.get("reason", "unknown"),
+                )
+            ] += 1
+            continue
         request_id = fields.get("request_id")
         if request_id and " lane_probe " in line:
             probe_ids.add(request_id)
@@ -267,6 +279,9 @@ def parse_journal(
                 "header_ms": header_ms,
                 "first_byte_ms": first_byte_ms,
                 "first_text_ms": first_text_ms,
+                "first_text_with_queue_ms": waited_ms + first_text_ms
+                if waited_ms is not None and first_text_ms is not None
+                else None,
                 "sse_bytes": _parse_int(fields.get("sse_bytes")) or 0,
                 "sse_events": sse_events,
                 "sse_inspection": sse_inspection,
@@ -414,6 +429,8 @@ def summarize(
     window_hours: float,
     header_logs: int = 0,
     origins: Sequence[str] | None = None,
+    *,
+    rejections: Counter[tuple[str, str, str]] | None = None,
 ) -> dict[str, Any]:
     """Aggregate by lane/model without retaining request-level identifiers."""
 
@@ -472,6 +489,7 @@ def summarize(
             if record.get("first_byte_ms") is not None
         ]
         first_text_ms = _values(completed, "first_text_ms")
+        first_text_with_queue_ms = _values(completed, "first_text_with_queue_ms")
         decode_ms = _values(completed, "decode_ms")
         slow_parts = {
             "queue": sum(value >= 5000 for value in queue_ms),
@@ -654,6 +672,13 @@ def summarize(
                 "first_text_p50_ms": _percentile(first_text_ms, 0.5),
                 "first_text_p90_ms": _percentile(first_text_ms, 0.9),
                 "first_text_reports": len(first_text_ms),
+                "first_text_with_queue_p50_ms": _percentile(
+                    first_text_with_queue_ms, 0.5
+                ),
+                "first_text_with_queue_p90_ms": _percentile(
+                    first_text_with_queue_ms, 0.9
+                ),
+                "first_text_with_queue_reports": len(first_text_with_queue_ms),
                 "queue_ms_p50": _percentile(queue_ms, 0.5),
                 "queue_ms_p90": _percentile(queue_ms, 0.9),
                 "decode_ms_p50": _percentile(decode_ms, 0.5),
@@ -816,6 +841,10 @@ def summarize(
         "window_hours": window_hours,
         "records": len(records),
         "header_logs": header_logs,
+        "admission_rejections": [
+            {"lane": lane, "model": model, "reason": reason, "count": count}
+            for (lane, model, reason), count in sorted((rejections or {}).items())
+        ],
         "lanes": lanes,
         "warnings": warnings,
         "origins_tracked": len(origins or ()),
@@ -846,6 +875,11 @@ def render(summary: dict[str, Any]) -> list[str]:
     ]
     if not summary["lanes"]:
         lines.append("NO_TRAFFIC: the journal window contains no upstream_result lines")
+    for rejection in summary["admission_rejections"]:
+        lines.append(
+            f"local_reject {rejection['lane']}/{rejection['model']} "
+            f"reason={rejection['reason']} count={rejection['count']}"
+        )
     for warning in summary.get("warnings", []):
         lines.append(f"WARN: {warning}")
     for lane in summary["lanes"]:
@@ -859,7 +893,7 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"probes={lane['probe_requests']} "
             f"completed={lane['completed']} capacity={lane['capacity']} "
             f"client_disconnect={lane['client_disconnect']} "
-            f"upstream_error={lane['upstream_error']}"
+            f"upstream_error={lane['upstream_error']} other={lane['other']}"
         )
         lines.append(
             "  header "
@@ -871,13 +905,17 @@ def render(summary: dict[str, Any]) -> list[str]:
         )
         attribution = lane["slow_5s_attribution"]
         lines.append(
-            "  first_output_ttft "
+            "  first_upstream_byte_with_queue "
             f"p50={_format_metric(lane['first_output_p50_ms'], 'ms')} "
             f"p90={_format_metric(lane['first_output_p90_ms'], 'ms')} "
-            "first_text "
+            "first_text_after_admit "
             f"p50={_format_metric(lane['first_text_p50_ms'], 'ms')} "
             f"p90={_format_metric(lane['first_text_p90_ms'], 'ms')} "
             f"reports={lane['first_text_reports']} "
+            "first_text_with_queue "
+            f"p50={_format_metric(lane['first_text_with_queue_p50_ms'], 'ms')} "
+            f"p90={_format_metric(lane['first_text_with_queue_p90_ms'], 'ms')} "
+            f"reports={lane['first_text_with_queue_reports']} "
             f"queue p50={_format_metric(lane['queue_ms_p50'], 'ms')} "
             f"p90={_format_metric(lane['queue_ms_p90'], 'ms')} "
             f"decode p50={_format_metric(lane['decode_ms_p50'], 'ms')} "
@@ -965,11 +1003,14 @@ def render(summary: dict[str, Any]) -> list[str]:
         "admit_peak_60s uses lane_admit when present and a bounded derivation "
         "otherwise; stream_duration starts at downstream headers, which queued "
         "SSE sends before admission; total_duration includes the measured queue "
-        "and runs to terminal delivery; first_output_ttft adds queue wait to "
-        "upstream first byte; decode and stream rates cover the time from first "
+        "and runs to terminal delivery; first_upstream_byte_with_queue adds "
+        "queue wait to the first upstream byte, which can carry metadata or a "
+        "keepalive; decode and stream rates cover the time from first "
         "upstream byte to completion of an inspected multi-event SSE response; "
-        "first_text is the first non-empty visible text event when reported; "
-        "health-probe counts remain visible but probe records are excluded "
+        "first_text_after_admit starts at the upstream attempt and "
+        "first_text_with_queue also includes measured admission wait; local_reject "
+        "counts lane_reject events separately from upstream_result; "
+        "marked breaker-probe counts remain visible but those records are excluded "
         "from natural latency/protocol/cache/cost aggregates --"
     )
     return lines
@@ -1227,18 +1268,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         f"{label}:{state}" for label, states in origin_sets.items() for state in states
     )
 
-    if args.remote:
-        records, header_logs = parse_journal(sys.stdin)
-        print(
-            json.dumps(
-                summarize(records, args.hours, header_logs, origins),
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        return 0
-
-    if args.ssh_profile:
+    if args.ssh_profile and not args.remote:
         try:
             returncode, output, remote_stderr = _analyse_remotely(
                 args.ssh_profile, args.hours
@@ -1264,14 +1294,17 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return 2
         return 0
 
+    rejections: Counter[tuple[str, str, str]] = Counter()
     try:
-        lines = _read_lines(args.file) if args.file else sys.stdin
-        records, header_logs = parse_journal(lines)
+        lines = _read_lines(args.file) if args.file and not args.remote else sys.stdin
+        records, header_logs = parse_journal(lines, rejections=rejections)
     except OSError as exc:
         print(f"input error: {exc}", file=sys.stderr)
         return 2
-    summary = summarize(records, args.hours, header_logs, origins)
-    if args.json:
+    summary = summarize(
+        records, args.hours, header_logs, origins, rejections=rejections
+    )
+    if args.json or args.remote:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:
         print("\n".join(render(summary)))

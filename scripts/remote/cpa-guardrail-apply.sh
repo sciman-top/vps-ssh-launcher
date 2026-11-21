@@ -2283,12 +2283,12 @@ requests_after["payload"] = {
     "replace": [],
 }
 
-# WorkBuddy 0.9.85 upstreamed priority reclaim as an opt-in scheduler field.
-# Keep the deployed first-live behavior across panel PUTs and guardrail
-# re-projections by owning this one plugin field. Everything else under
-# plugins/configs remains round-trip-preserved and is checked below.
+# The plugin owns its executor retry loop. CPA's max-retry-credentials only
+# bounds the host scheduler and cannot prevent that loop replaying a request.
 plugins_before = config_before.get("plugins")
 plugins_after = config_after.get("plugins")
+if plugins_after != plugins_before:
+    raise SystemExit("REFUSE plugins changed before WorkBuddy policy projection")
 if plugins_after is not None:
     if not isinstance(plugins_after, dict):
         raise SystemExit("REFUSE plugins must be a mapping")
@@ -2296,19 +2296,17 @@ if plugins_after is not None:
     if plugin_configs_after is not None and not isinstance(plugin_configs_after, dict):
         raise SystemExit("REFUSE plugins.configs must be a mapping")
     if isinstance(plugin_configs_after, dict):
-        workbuddy_after = plugin_configs_after.get("workbuddy")
-        if workbuddy_after is not None:
-            if not isinstance(workbuddy_after, dict):
-                raise SystemExit("REFUSE plugins.configs.workbuddy must be a mapping")
-            if workbuddy_after.get("enabled"):
-                workbuddy_after["scheduler_priority_reclaim"] = True
-                expected_plugins_after = deepcopy(plugins_before)
-                expected_workbuddy = expected_plugins_after["configs"]["workbuddy"]
-                expected_workbuddy["scheduler_priority_reclaim"] = True
-                if plugins_after != expected_plugins_after:
-                    raise SystemExit(
-                        "REFUSE plugins change exceeded scheduler_priority_reclaim"
-                    )
+        for plugin, field, value in (
+            ("workbuddy", "scheduler_priority_reclaim", True),
+            ("workbuddy-provider", "retry_on_4xx", 0),
+        ):
+            section = plugin_configs_after.get(plugin)
+            if section is None:
+                continue
+            if not isinstance(section, dict):
+                raise SystemExit(f"REFUSE plugins.configs.{plugin} must be a mapping")
+            if section.get("enabled"):
+                section[field] = value
 
 # Only the blocks this transaction owns may differ from the deployed file;
 # everything else must round-trip untouched (v8 root sections).

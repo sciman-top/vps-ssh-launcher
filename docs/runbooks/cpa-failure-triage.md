@@ -222,11 +222,14 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
   完成，所以它**不是**准入 RPM，也不能拿来判断是否贴着上游请求阈值。
 - `first_text_ms` 缺失时一律写 `na`（2026-11-08 起）。此前无测量值会留字面
   `None`，同一状态两种拼写，看 `na=` 计数的人会低估不可用样本量。
-- `first_output_ttft` / `first_text` / `queue` / `decode` 是独立观察量。
-  `first_output_ttft` 从上方的 `upstream_first_byte_ms` 得到；`first_text`
-  是第一个非空可见文字事件的时间；`queue` 是准入等待；`decode`
-  是首个上游 payload 之后到终态的窗口。`slow_5s` 分别数三阶段超过 5 秒的
-  请求，三类可以重叠，不应相加成失败数。
+- `first_upstream_byte_with_queue` 把准入等待加到上游首包耗时。首包可以是元数据
+  或保活。`first_text_after_admit` 从发起上游请求计到可见文字，
+  `first_text_with_queue` 在同一次请求上加计准入等待，再求 p50/p90。
+  两种首字时间只覆盖观察到可见文字的请求。`decode` 是首个上游 payload 到终态
+  的窗口，可能包含思考或流内等待。`slow_5s` 按阶段计数，同一请求可以命中多项。
+- `local_reject` 按 lane/model/reason 统计本地 `lane_reject`。这部分保留在
+  JSON 的 `admission_rejections`，上游 `capacity` 和延迟分母继续使用
+  `upstream_result`。只发生准入拒绝的窗口也会报告拒绝原因。
 - `admit_peak_60s` 优先使用 `lane_admit`，缺该行时做有界推导：SSE lane 的下游
   头在排队前提交，使用 `header time + waited_ms`；非 SSE 的下游头在上游响应后
   提交，使用 `header time - upstream_header_ms`。`admission_paired` 给出可配对

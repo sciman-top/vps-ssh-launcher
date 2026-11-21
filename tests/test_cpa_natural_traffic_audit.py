@@ -496,7 +496,8 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
             "capacity=false waited_ms=5000 successful=true "
             "protocol_result=completed upstream_header_ms=4000 "
-            "upstream_first_byte_ms=4000 sse_bytes=1000 sse_events=10 "
+            "upstream_first_byte_ms=4000 first_text_ms=4500 "
+            "sse_bytes=1000 sse_events=10 "
             "sse_inspection_complete=true sse_terminal_seen=true "
             "usage_in=1000 usage_out=70 "
             "request_id=r1\n"
@@ -506,9 +507,46 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         lane = summary["lanes"][0]
         self.assertEqual(lane["total_duration_p50_s"], 16.0)
         self.assertEqual(lane["first_output_p50_ms"], 9000.0)
+        self.assertEqual(lane["first_text_p50_ms"], 4500.0)
+        self.assertEqual(lane["first_text_with_queue_p50_ms"], 9500.0)
+        self.assertEqual(lane["first_text_with_queue_p90_ms"], 9500.0)
+        self.assertEqual(lane["first_text_with_queue_reports"], 1)
         self.assertEqual(lane["decode_ms_p50"], 7000.0)
         self.assertEqual(lane["output_rate_reports"], 1)
         self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 10.0)
+
+    def test_rejection_only_window_reports_local_reasons_without_upstream_traffic(
+        self,
+    ) -> None:
+        log = (
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO lane_reject "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash reason=model_cooldown "
+            "retry_after=18 waited_ms=0 request_id=private_request\n"
+        )
+        output = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(log)), redirect_stdout(output):
+            self.assertEqual(main(["--json"]), 0)
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["records"], 0)
+        self.assertEqual(result["lanes"], [])
+        self.assertEqual(
+            result["admission_rejections"],
+            [
+                {
+                    "lane": "workbuddy-oauth",
+                    "model": "deepseek-v4.1-flash",
+                    "reason": "model_cooldown",
+                    "count": 1,
+                }
+            ],
+        )
+        self.assertNotIn("private_request", output.getvalue())
+        self.assertIn(
+            "local_reject workbuddy-oauth/deepseek-v4.1-flash "
+            "reason=model_cooldown count=1",
+            render(result),
+        )
 
     def test_non_sse_reports_total_time_without_fabricating_output_rate(self) -> None:
         """A buffered response has queue and delivery timing but no token stream."""
@@ -531,6 +569,8 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         lane = summary["lanes"][0]
         self.assertEqual(lane["total_duration_p50_s"], 12.0)
         self.assertEqual(lane["first_output_p50_ms"], 4000.0)
+        self.assertIsNone(lane["first_text_with_queue_p50_ms"])
+        self.assertEqual(lane["first_text_with_queue_reports"], 0)
         self.assertEqual(lane["output_rate_reports"], 0)
         self.assertIsNone(lane["output_tokens_per_s_p50"])
 
