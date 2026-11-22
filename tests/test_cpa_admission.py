@@ -684,13 +684,16 @@ def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> 
     assert antigravity_risk_signal(403, lower) == ("account_restricted", None)
 
 
-def test_gemini_resource_exhausted_cools_the_lane() -> None:
+def test_gemini_resource_exhausted_cools_the_model() -> None:
     """Google's own quota verdict must reach the ladder before the exemptions.
 
     RESOURCE_EXHAUSTED appears in none of the configured marker lists (no
     "quota exceeded" / "rate limit" substring), so a 400- or 200-shaped wrapper
     carried it past capacity_scope: the client saw the refusal while the lane
-    stayed open and kept spending the same account's quota.
+    stayed open and kept spending the same account's quota. Its scope is the
+    requested model (2026-11-21 17:13Z: one opus Retry-After of 17504s froze
+    never-used siblings; 2026-11-22 00:12Z: flash was exhausted while neon on
+    the same credential kept serving), so the verdict parks one model.
     """
 
     config = load_config(
@@ -712,8 +715,8 @@ def test_gemini_resource_exhausted_cools_the_lane() -> None:
             }
         }
     ).encode()
-    assert capacity_scope(400, exhausted, None, lane_config) == "lane"
-    assert capacity_scope(200, exhausted, None, lane_config) == "lane"
+    assert capacity_scope(400, exhausted, None, lane_config) == "model"
+    assert capacity_scope(200, exhausted, None, lane_config) == "model"
     # The marker is scoped to the lane it belongs to: no other lane declares
     # it, so the guard cannot leak a Google verdict onto another provider.
     for other in ("chatgpt-oauth", "zhipu-coding-plan"):
@@ -849,7 +852,10 @@ def test_all_generation_protocols_share_antigravity_admission(
             200,
             b'{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}',
             "application/json",
-            "cooldown",
+            # The generic Google quota verdict parks the requested model
+            # only; the replay-stop contract below is unchanged (the same
+            # model must not be sent upstream twice).
+            "model_cooldown",
         ),
         (
             429,
@@ -2302,6 +2308,231 @@ def test_mirror_probe_cadence_survives_a_restart_inside_the_window(
     assert not blocked.admitted
     assert blocked.reason == "cooldown"
     assert blocked.retry_after == 600
+
+
+def test_antigravity_quota_group_splits_the_argon_bucket() -> None:
+    """The GEMINI 4 ARGON weekly bucket rolled out separately from the shared
+    GEMINI pool (same-account panels diverged at one instant, 2026-11-21
+    09:42:16: GEMINI 83% vs ARGON 32%), so an argon verdict must not cool
+    the gemini group or vice versa."""
+    assert MODULE["antigravity_quota_group"]("gemini-4-argon-high") == "argon"
+    assert MODULE["antigravity_quota_group"]("gemini-4-neon-xhigh") == "gemini"
+    assert MODULE["antigravity_quota_group"]("gemini-3.8-flash-high") == "gemini"
+    assert MODULE["antigravity_quota_group"]("claude-opus-5-5-high") == "claude-gpt"
+    assert set(MODULE["ANTIGRAVITY_QUOTA_GROUPS"]) == {"gemini", "claude-gpt", "argon"}
+
+
+def test_antigravity_envelope_scope_maps_verdicts() -> None:
+    """The envelope's google.rpc reason owns the scope: QUOTA_EXHAUSTED with
+    the bucket message cools the family group (a sibling model name is still
+    the same bucket), the #7884 capacity reasons park one model, per-user
+    rate limiters stay lane-conservative, and a non-envelope body defers to
+    the generic verdict."""
+
+    def envelope(reason: str, status: str, message: str, model: str | None) -> bytes:
+        details: list[dict[str, Any]] = [
+            {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": reason,
+                "domain": "cloudcode-pa.googleapis.com",
+            }
+        ]
+        if model is not None:
+            details[0]["metadata"] = {"model": model}
+        return json.dumps(
+            {
+                "error": {
+                    "code": 429,
+                    "status": status,
+                    "message": message,
+                    "details": details,
+                }
+            }
+        ).encode()
+
+    scope = MODULE["antigravity_envelope_scope"]
+    quota = envelope(
+        "QUOTA_EXHAUSTED",
+        "RESOURCE_EXHAUSTED",
+        "Individual quota reached. Resets in 4h51m44s.",
+        "claude-opus-5-5-high",
+    )
+    assert scope(quota, "claude-opus-5-5-high") == "quota_group"
+    # A sibling name is the same family bucket.
+    sibling = envelope(
+        "QUOTA_EXHAUSTED",
+        "RESOURCE_EXHAUSTED",
+        "Individual quota reached. Resets in 4h51m44s.",
+        "claude-sonnet-5-5-high",
+    )
+    assert scope(sibling, "claude-opus-5-5-high") == "quota_group"
+    # A cross-family reference is not a verdict about this request's bucket.
+    cross = envelope(
+        "QUOTA_EXHAUSTED",
+        "RESOURCE_EXHAUSTED",
+        "Individual quota reached. Resets in 4h51m44s.",
+        "gemini-3.8-flash-high",
+    )
+    assert scope(cross, "claude-opus-5-5-high") == "lane"
+    assert (
+        scope(
+            envelope(
+                "RATE_LIMIT_EXCEEDED",
+                "RESOURCE_EXHAUSTED",
+                "Rate limit exceeded.",
+                "claude-opus-5-5-high",
+            ),
+            "claude-opus-5-5-high",
+        )
+        == "lane"
+    )
+    capacity = envelope(
+        "MODEL_CAPACITY_EXHAUSTED",
+        "RESOURCE_EXHAUSTED",
+        "Model is at capacity.",
+        "claude-opus-5-5-high",
+    )
+    assert scope(capacity, "claude-opus-5-5-high") == "model"
+    # The 503 UNAVAILABLE twin names the model in the message instead of
+    # metadata (upstream credits-fallback fixture shape).
+    twin = json.dumps(
+        {
+            "error": {
+                "code": 503,
+                "message": "No capacity available for model claude-opus-5-5-high",
+                "status": "UNAVAILABLE",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "MODEL_CAPACITY_EXHAUSTED",
+                    }
+                ],
+            }
+        }
+    ).encode()
+    assert scope(twin, "claude-opus-5-5-high") == "model"
+    # A model reference disagreeing with the request defers to the generic
+    # verdict rather than parking the wrong model.
+    mismatched = envelope(
+        "MODEL_CAPACITY_EXHAUSTED",
+        "RESOURCE_EXHAUSTED",
+        "Model is at capacity.",
+        "gemini-3.8-flash-high",
+    )
+    assert scope(mismatched, "claude-opus-5-5-high") is None
+    # Not a Cloud Code envelope at all.
+    plain = b'{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}'
+    assert scope(plain, "claude-opus-5-5-high") is None
+
+
+def test_model_capacity_verdict_parks_only_the_requested_model(
+    monkeypatch: Any,
+) -> None:
+    """2026-11-21 17:13Z: one opus 429 (Retry-After 17504) froze the whole
+    lane -- including never-used argon -- for the advertised ~4.9h while
+    sibling traffic was still being served seconds later. The generic Google
+    quota verdict now parks exactly the requested model, and the rejection
+    points at the mirror cadence's recheck slot instead of the advertised
+    end, so a client retry rides the probe."""
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    lease = state.acquire(model="claude-opus-5-5-high")
+    state.release(
+        lease,
+        capacity_error=True,
+        retry_after=17504,
+        capacity_scope="model",
+    )
+
+    # The lane itself stays open for siblings...
+    sibling = state.acquire(model="gemini-4-argon-high")
+    assert sibling.admitted and not sibling.probe
+    state.release(sibling, capacity_error=False, retry_after=None)
+
+    # ...while the failing model is refused at the next recheck slot.
+    blocked = state.acquire(model="claude-opus-5-5-high")
+    assert not blocked.admitted
+    assert blocked.reason == "model_cooldown"
+    assert blocked.retry_after == 600
+
+    # The slot re-tests that one model, and a surviving probe clears it.
+    clock[0] += 600
+    probe = state.acquire(model="claude-opus-5-5-high")
+    assert probe.admitted and probe.probe and probe.model_probe
+    assert probe.reason == "model_half_open"
+    state.release(probe, capacity_error=False, retry_after=None)
+    normal = state.acquire(model="claude-opus-5-5-high")
+    assert normal.admitted and not normal.probe
+    state.release(normal, capacity_error=False, retry_after=None)
+
+
+def test_model_capacity_failure_remirrors_and_rearms_the_cadence(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    state.release(
+        state.acquire(model="claude-opus-5-5-high"),
+        capacity_error=True,
+        retry_after=17504,
+        capacity_scope="model",
+    )
+
+    clock[0] += 600
+    probe = state.acquire(model="claude-opus-5-5-high")
+    assert probe.admitted and probe.reason == "model_half_open"
+    state.release(
+        probe,
+        capacity_error=True,
+        retry_after=900,
+        capacity_scope="model",
+    )
+
+    # A failed probe re-mirrors the upstream window (never shortens it) and
+    # re-arms the cadence, so the per-model probe rate stays bounded.
+    blocked = state.acquire(model="claude-opus-5-5-high")
+    assert not blocked.admitted
+    assert blocked.reason == "model_cooldown"
+    assert blocked.retry_after == 600
+    # The sibling still rides free while the failing model is parked.
+    sibling = state.acquire(model="gemini-4-argon-high")
+    assert sibling.admitted
+    state.release(sibling, capacity_error=False, retry_after=None)
+
+
+def test_model_capacity_hint_shorter_than_the_cadence_keeps_its_deadline(
+    monkeypatch: Any,
+) -> None:
+    """A 30s hint (the MODEL_CAPACITY_EXHAUSTED shape from upstream #7884)
+    must not be stretched to the 600s cadence: the bound is the hint itself,
+    so the envelope and the probe slot both land at the hint's deadline."""
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "antigravity-oauth"))
+    state.release(
+        state.acquire(model="gemini-4-hydrogen-xhigh"),
+        capacity_error=True,
+        retry_after=30,
+        capacity_scope="model",
+    )
+    blocked = state.acquire(model="gemini-4-hydrogen-xhigh")
+    assert not blocked.admitted
+    assert blocked.reason == "model_cooldown"
+    assert blocked.retry_after == 30
+    # Inside the hint the model stays parked...
+    clock[0] += 29
+    still_blocked = state.acquire(model="gemini-4-hydrogen-xhigh")
+    assert not still_blocked.admitted
+    assert still_blocked.reason == "model_cooldown"
+    # ...and at the hint's own deadline the window is simply over: normal
+    # admission, no probe needed (the hint was its own bound, never a
+    # stretched 600s cadence).
+    clock[0] += 1
+    normal = state.acquire(model="gemini-4-hydrogen-xhigh")
+    assert normal.admitted and not normal.probe
+    state.release(normal, capacity_error=False, retry_after=None)
 
 
 def test_config_rejects_unsafe_mirror_probe_intervals(tmp_path: Path) -> None:
@@ -4016,7 +4247,11 @@ def test_chatgpt_prose_wrapped_upstream_error_surfaces_risk_signal() -> None:
     ("error_reason", "metadata_model", "expected_scope"),
     [
         ("QUOTA_EXHAUSTED", "claude-opus-5-5-high", "model"),
-        ("QUOTA_EXHAUSTED", "claude-sonnet-5-5-high", "lane"),
+        # The bucket is family-shared, so a report naming a sibling model is
+        # still a claude-gpt bucket verdict; only a cross-family reference
+        # (the gemini row) is not a verdict about this request's bucket.
+        ("QUOTA_EXHAUSTED", "claude-sonnet-5-5-high", "model"),
+        ("QUOTA_EXHAUSTED", "gemini-3.8-flash-high", "lane"),
         ("RATE_LIMIT_EXCEEDED", "claude-opus-5-5-high", "lane"),
     ],
 )
@@ -4112,6 +4347,176 @@ def test_antigravity_provider_quota_window_survives_restart(
             assert "quota_group_not_before" not in disk
             assert call(flash)[0] == 429
             assert received == [opus]
+    finally:
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+def test_argon_quota_group_window_isolates_and_survives_restart(
+    tmp_path: Path,
+) -> None:
+    """An argon bucket verdict cools only argon: the gemini sibling rides
+    free, the window keys as its own group on disk, and it survives a
+    restart (same envelope contract as the claude-gpt arm above)."""
+    argon = "gemini-4-argon-high"
+    flash = "gemini-3.8-flash-high"
+    error = {
+        "code": 429,
+        "status": "RESOURCE_EXHAUSTED",
+        "message": "Individual quota reached. Resets in 1h.",
+        "details": [
+            {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "QUOTA_EXHAUSTED",
+                "domain": "cloudcode-pa.googleapis.com",
+                "metadata": {"model": argon, "quotaResetDelay": "3600s"},
+            },
+            {
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                "retryDelay": "3600s",
+            },
+        ],
+    }
+    received: list[str] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            model = json.loads(self.rfile.read(int(self.headers["Content-Length"])))[
+                "model"
+            ]
+            received.append(model)
+            payload = json.dumps({"error": error} if model == argon else {"ok": True})
+            body = payload.encode()
+            self.send_response(429 if model == argon else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = AdmissionProxy(loaded, state_path=path)
+
+    def call(model: str) -> tuple[int, str | None]:
+        client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        try:
+            client.request("POST", "/v1/responses", json.dumps({"model": model}))
+            response = client.getresponse()
+            response.read()
+            return response.status, response.getheader("Retry-After")
+        finally:
+            client.close()
+
+    try:
+        assert call(argon)[0] == 429
+        state = server.proxy.lanes["antigravity-oauth"]
+        with state._condition:
+            assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
+        disk = json.loads(path.read_text(encoding="utf-8"))
+        assert disk["not_before"] == 0
+        assert set(disk["quota_group_not_before"]) == {"argon"}
+        # Replace the proxy from the same durable state as a process restart.
+        server.proxy = AdmissionProxy(loaded, state_path=path)
+        status, retry_after = call(flash)
+        assert status == 200
+        status, retry_after = call(argon)
+        assert status == 429
+        assert 3597 <= int(retry_after or 0) <= 3600
+        assert received == [argon, flash]
+    finally:
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+def test_generic_resource_exhausted_parks_only_the_requested_model(
+    tmp_path: Path,
+) -> None:
+    """The 2026-11-21 17:13Z live shape: a plain RESOURCE_EXHAUSTED 429 with
+    a huge Retry-After must leave the lane open -- no lane mirror on disk,
+    sibling traffic 200 -- while the requested model is parked at the
+    mirror cadence's recheck slot."""
+    opus = "claude-opus-5-5-high"
+    flash = "gemini-3.8-flash-high"
+    body = json.dumps(
+        {
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "message": "Resource has been exhausted (e.g. check quota)",
+            }
+        }
+    ).encode()
+    received: list[str] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            model = json.loads(self.rfile.read(int(self.headers["Content-Length"])))[
+                "model"
+            ]
+            received.append(model)
+            payload = body if model == opus else b'{"ok": true}'
+            self.send_response(429 if model == opus else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Retry-After", "17504" if model == opus else "0")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = AdmissionProxy(loaded, state_path=path)
+
+    def call(model: str) -> tuple[int, str | None, str | None]:
+        client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        try:
+            client.request("POST", "/v1/responses", json.dumps({"model": model}))
+            response = client.getresponse()
+            response.read()
+            return (
+                response.status,
+                response.getheader("Retry-After"),
+                response.getheader("X-CPA-Admission-Reason"),
+            )
+        finally:
+            client.close()
+
+    try:
+        status, _, _ = call(opus)
+        assert status == 429
+        state = server.proxy.lanes["antigravity-oauth"]
+        with state._condition:
+            assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
+        disk = json.loads(path.read_text(encoding="utf-8"))
+        assert disk["not_before"] == 0
+        assert "quota_group_not_before" not in disk
+        # The sibling rides free immediately after the opus verdict.
+        status, _, _ = call(flash)
+        assert status == 200
+        # The failing model is refused locally at the recheck slot, without a
+        # second upstream contact.
+        status, retry_after, reason = call(opus)
+        assert status == 429
+        assert reason == "model_cooldown"
+        assert int(retry_after or 0) == 600
+        assert received == [opus, flash]
     finally:
         for service in (server, upstream):
             service.shutdown()
