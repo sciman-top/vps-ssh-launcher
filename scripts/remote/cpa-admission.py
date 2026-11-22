@@ -900,6 +900,21 @@ def load_config(
                     f"lanes[{index}].requests_per_minute must not exceed "
                     f"{ADMISSION_RPM_MAX_CEILING}"
                 )
+        # Optional bounded recovery probe for a mirrored capacity cooldown.
+        # Absent => 0 (disabled), which keeps the historical blind window for
+        # any older projected JSON. A positive value re-tests recovery one
+        # request at a time on that cadence while the lane cools; holds and
+        # operator review never probe.
+        mirror_probe = raw_lane.get("mirror_probe_interval_seconds")
+        if mirror_probe is not None:
+            mirror_probe = _positive_number(
+                mirror_probe, f"lanes[{index}].mirror_probe_interval_seconds"
+            )
+            if mirror_probe < 30:
+                raise ValueError(
+                    f"lanes[{index}].mirror_probe_interval_seconds must be at "
+                    "least 30 seconds"
+                )
         normalized_lanes.append(
             {
                 "name": name,
@@ -911,6 +926,7 @@ def load_config(
                 "cooldown_cap_seconds": schedule_cap,
                 "retry_after_max_seconds": config["retry_after_max_seconds"],
                 "early_probe_interval_seconds": early_probe_interval,
+                "mirror_probe_interval_seconds": mirror_probe or 0,
                 "capacity_statuses": frozenset(statuses),
                 "capacity_markers": tuple(item.strip().lower() for item in markers),
                 "model_capacity_markers": tuple(
@@ -2756,6 +2772,20 @@ class LaneState:
                 "early_probe_interval_seconds", ADMISSION_EARLY_PROBE_INTERVAL_SECONDS
             )
         )
+        # Optional bounded recovery probe for a mirrored capacity cooldown.
+        # Zero (the default for lanes that omit the key) keeps the historical
+        # blind window: an upstream-advertised Retry-After then parks the lane
+        # with no in-window verification at all. A positive interval re-tests
+        # recovery one request at a time on that cadence, so a credential- or
+        # shed-scoped refusal heals on real demand instead of at the window's
+        # end (2026-11-21: one Antigravity 429 carrying Retry-After 17504 froze
+        # the shared lane for the whole window while sibling traffic was still
+        # being served seconds later). Holds never probe: the operator-review
+        # gate in acquire() returns before this branch is reachable.
+        self._mirror_probe_interval = float(
+            config.get("mirror_probe_interval_seconds") or 0.0
+        )
+        self._mirror_probe_at = 0.0
         self.inflight = 0
         self.pending = 0
         self.failure_streak = 0
@@ -2882,6 +2912,13 @@ class LaneState:
             if remaining:
                 self.open_until = time.monotonic() + remaining
                 self._server_not_before = self.open_until
+                if self._mirror_probe_interval:
+                    # A restart inside an unverified window must not turn the
+                    # first client request into an immediate probe; the next
+                    # recheck waits one full interval instead.
+                    self._mirror_probe_at = (
+                        time.monotonic() + self._mirror_probe_interval
+                    )
         self._persisted_clear = (
             self._manual_hold is None
             and not self.open_until
@@ -3132,7 +3169,11 @@ class LaneState:
                     self.open_until = max(self.open_until, until)
                     self._server_not_before = max(self._server_not_before, until)
                     self._next_probe_at = self.open_until
-            self._failure_generation += 1
+                    if self._mirror_probe_interval:
+                        self._mirror_probe_at = (
+                            time.monotonic() + self._mirror_probe_interval
+                        )
+                self._failure_generation += 1
             self._persist_risk()
             self._condition.notify_all()
 
@@ -3171,6 +3212,8 @@ class LaneState:
         self.open_until = max(self.open_until, until)
         self._server_not_before = max(self._server_not_before, until)
         self._next_probe_at = self.open_until
+        if self._mirror_probe_interval:
+            self._mirror_probe_at = time.monotonic() + self._mirror_probe_interval
         logging.warning(
             "implausible_retry_after_clamped lane=%s seconds=%s cap=%s source=%s",
             self._lane_name or "other",
@@ -3181,6 +3224,21 @@ class LaneState:
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, _ceil_remaining_seconds(self.open_until, now))
+
+    def _cooldown_retry_after(self, now: float) -> int:
+        # The cooldown rejection must point at the moment the lane will
+        # actually re-evaluate recovery. For a mirror-probe lane that is the
+        # next probe slot, so a client retrying on the advertised value rides
+        # the probe; for every other lane this stays the window's end.
+        if self._mirror_probe_interval:
+            return max(
+                1,
+                min(
+                    _ceil_remaining_seconds(self.open_until, now),
+                    _ceil_remaining_seconds(self._mirror_probe_at, now),
+                ),
+            )
+        return self._open_retry_after(now)
 
     def _shed_retry_after(self, now: float) -> int:
         # A shed request that already burned its whole queue budget must not be
@@ -3297,6 +3355,7 @@ class LaneState:
             retry_after: int,
             probe: bool = False,
             model_probe: bool = False,
+            reset_probe: bool = False,
         ) -> Lease:
             if admitted and self._durable_risk and self._state_path is not None:
                 self._persist_risk()
@@ -3316,6 +3375,7 @@ class LaneState:
                 probe,
                 waited_ms=int((time.monotonic() - started) * 1000),
                 generation=self._failure_generation,
+                reset_probe=reset_probe,
                 model=model,
                 model_probe=model_probe,
                 model_generation=(
@@ -3417,6 +3477,25 @@ class LaneState:
                     free_under_billing_state = model in self._zero_cost_models
                     if self.open_until > now and not free_under_billing_state:
                         if (
+                            self._mirror_probe_interval
+                            and now >= self._mirror_probe_at
+                            and self.inflight < self._max_inflight
+                            and queue_turn
+                        ):
+                            # A mirrored capacity cooldown re-verifies recovery
+                            # one request at a time on the lane's configured
+                            # cadence. The probe is a reset probe: its success
+                            # clears the window immediately, and its failure
+                            # re-mirrors the upstream window and re-arms the
+                            # cadence, so the rate stays bounded no matter how
+                            # long the upstream claims to be busy.
+                            self.probe_inflight = True
+                            self.inflight += 1
+                            self._mirror_probe_at = now + self._mirror_probe_interval
+                            return lease(
+                                True, "mirror_probe", 0, probe=True, reset_probe=True
+                            )
+                        if (
                             not self._strict_backoff
                             and now >= max(self._next_probe_at, self._server_not_before)
                             and self.inflight < self._max_inflight
@@ -3432,6 +3511,11 @@ class LaneState:
                                 next_admission,
                                 max(self._next_probe_at, self._server_not_before),
                             )
+                        if self._mirror_probe_interval:
+                            # A mirror-probe lane queues a fitting arrival for
+                            # the next recheck slot instead of bouncing it for
+                            # the whole window; the queue head rides the probe.
+                            next_admission = min(next_admission, self._mirror_probe_at)
                         if not queued and (next_admission - now <= self._queue_timeout):
                             # A long local cooldown can still have an early
                             # probe inside the queue budget. Wait for that slot
@@ -3455,7 +3539,7 @@ class LaneState:
                                 timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                             )
                             continue
-                        return lease(False, "cooldown", self._open_retry_after(now))
+                        return lease(False, "cooldown", self._cooldown_retry_after(now))
                     if model is not None and (
                         self._model_open_until.get(model, 0.0) > now
                     ):
@@ -3674,11 +3758,6 @@ class LaneState:
                     model_retry_after is None
                     and self._lane_name == "antigravity-oauth"
                 ):
-                    # A generic 429 has no provider reset hint. Apply the
-                    # first local model cooldown immediately so one observed
-                    # refusal cannot be retried in a tight loop, while
-                    # preserving the response's "no upstream retry time"
-                    # wording.
                     model_retry_after = self._schedule[0]
                 self._record_model_capacity(lease.model, model_retry_after, now)
                 if (
@@ -3694,6 +3773,7 @@ class LaneState:
                     self.open_until = 0.0
                     self._next_probe_at = 0.0
                     self._server_not_before = 0.0
+                    self._mirror_probe_at = 0.0
             elif capacity_error:
                 self._failure_generation += 1
                 self.failure_streak += 1
@@ -3753,6 +3833,8 @@ class LaneState:
                         if self._strict_backoff
                         else now + self._early_probe_interval
                     )
+                    if self._mirror_probe_interval:
+                        self._mirror_probe_at = now + self._mirror_probe_interval
                 if lease.model is not None:
                     # A lane-scoped refusal that landed on this model's request
                     # is still evidence about *this model*: upstream sheds are
@@ -3794,6 +3876,7 @@ class LaneState:
                 self.open_until = 0.0
                 self._next_probe_at = 0.0
                 self._server_not_before = 0.0
+                self._mirror_probe_at = 0.0
                 if (
                     lease.model is not None
                     and lease.model_generation
@@ -3864,6 +3947,10 @@ class LaneState:
                 "model_cooldowns": model_cooldowns,
                 "early_probe_in": max(
                     0, _ceil_remaining_seconds(self._next_probe_at, now)
+                ),
+                "mirror_probe_interval": self._mirror_probe_interval,
+                "mirror_probe_in": max(
+                    0, _ceil_remaining_seconds(self._mirror_probe_at, now)
                 ),
                 "half_open_probe": self.probe_inflight,
                 "failure_generation": self._failure_generation,
@@ -5183,11 +5270,6 @@ class Handler(BaseHTTPRequestHandler):
                     response.status, bytes(probe), lane_config
                 )
             if antigravity_quota_check:
-                # A generic Antigravity 429 has no trustworthy quota family
-                # or reset deadline. Park only the requested model until its
-                # bounded local cooldown expires. A structured
-                # QUOTA_EXHAUSTED envelope below can widen this to the exact
-                # verified family.
                 capacity_kind = "model" if lease is not None else "lane"
                 if (
                     lease is not None
