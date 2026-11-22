@@ -1410,6 +1410,11 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
 
 ANTIGRAVITY_QUOTA_GROUPS = (
     "gemini",
+    # The GEMINI 4 ARGON weekly bucket rolled out separately from the shared
+    # GEMINI pool (same-account panels diverged at one instant, 2026-11-21
+    # 09:42:16: GEMINI 83% vs ARGON 32%), so argon gets its own family key
+    # and an argon verdict never cools the gemini pool or vice versa.
+    "argon",
     "claude",
     "gpt",
     "glm",
@@ -1419,6 +1424,8 @@ ANTIGRAVITY_QUOTA_GROUPS = (
 
 def antigravity_quota_group(model: str | None) -> str | None:
     name = routing_model(model or "").lower()
+    if name.startswith("gemini-4-argon"):
+        return "argon"
     if name.startswith("gemini-"):
         return "gemini"
     if name.startswith("claude-"):
@@ -1440,22 +1447,23 @@ def antigravity_quota_scope_key(model: str | None) -> str | None:
     return f"model:{name}"
 
 
-def antigravity_individual_quota(body: bytes, model: str | None) -> bool:
-    """Accept only the observed Cloud Code quota envelope and matching model."""
+def antigravity_envelope(body: bytes) -> dict[str, Any] | None:
+    """Return the parts of a verified Cloud Code error envelope.
+
+    Field data: the quota and capacity verdicts Google sends on this lane
+    carry exactly one error object (HTTP code 429, or the 503 UNAVAILABLE
+    twin pinned by the upstream credits-fallback suite) with exactly one
+    google.rpc ErrorInfo detail on the cloudcode-pa domain.
+    """
     errors = protocol_errors(body)
     if len(errors) != 1 or not isinstance(errors[0], dict):
-        return False
+        return None
     error = errors[0]
-    if (
-        error.get("code") != 429
-        or error.get("status") != "RESOURCE_EXHAUSTED"
-        or not str(error.get("message", "")).startswith("Individual quota reached")
-        or antigravity_quota_group(model) is None
-    ):
-        return False
+    if error.get("code") not in (429, 503):
+        return None
     details = error.get("details")
     if not isinstance(details, list):
-        return False
+        return None
     error_info = [
         detail
         for detail in details
@@ -1463,15 +1471,83 @@ def antigravity_individual_quota(body: bytes, model: str | None) -> bool:
         and detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo"
     ]
     if len(error_info) != 1:
-        return False
+        return None
     info = error_info[0]
+    domain = info.get("domain")
+    if domain not in (None, "cloudcode-pa.googleapis.com"):
+        return None
+    reason = info.get("reason")
+    if not isinstance(reason, str) or not reason:
+        return None
+    return {"error": error, "info": info, "reason": reason}
+
+
+def antigravity_envelope_scope(body: bytes, model: str | None) -> str | None:
+    """Map a verified Cloud Code envelope onto the quota-key taxonomy.
+
+    "quota_group": the family-bucket verdict (QUOTA_EXHAUSTED with the
+    "Individual quota reached" message) or a model-capacity reason
+    (upstream #7884) whose body carries a reset delay -- both arm the
+    durable per-model key via antigravity_quota_scope_key, so no sibling
+    ever shares the cooldown. The envelope's own model reference may name a
+    sibling in the same family (the bucket is shared); a cross-family
+    reference is not a verdict about this request and defers to the
+    caller's default. "account": the per-user rate limiter reasons
+    (RATE_LIMIT_EXCEEDED / USER_RATE_LIMIT_EXCEEDED) are explicitly
+    account-level signals, so they keep the shared lane breaker and are
+    exempt from the lane-to-model narrowing in release(). None: anything
+    else, including a body that is not a Cloud Code envelope at all.
+    """
+    parsed = antigravity_envelope(body)
+    if parsed is None:
+        return None
+    error: dict[str, Any] = parsed["error"]
+    info: dict[str, Any] = parsed["info"]
+    reason: str = parsed["reason"]
     metadata = info.get("metadata")
-    return (
-        info.get("reason") == "QUOTA_EXHAUSTED"
-        and info.get("domain") == "cloudcode-pa.googleapis.com"
-        and isinstance(metadata, dict)
-        and metadata.get("model") == routing_model(model or "")
-    )
+    named = metadata.get("model") if isinstance(metadata, dict) else None
+    message = str(error.get("message", ""))
+    requested_group = antigravity_quota_group(model)
+    if reason == "QUOTA_EXHAUSTED":
+        if (
+            error.get("status") != "RESOURCE_EXHAUSTED"
+            or not message.startswith("Individual quota reached")
+            or requested_group is None
+            or not isinstance(named, str)
+            or not named
+            or antigravity_quota_group(named) != requested_group
+        ):
+            return None
+        return "quota_group"
+    if reason in ("MODEL_CAPACITY_EXHAUSTED", "CAPACITY_EXHAUSTED"):
+        if requested_group is None:
+            return None
+        if not isinstance(named, str) or not named:
+            marker = "no capacity available for model "
+            lowered = message.lower()
+            named = (
+                lowered.split(marker, 1)[1].strip().strip("\"'.")
+                if marker in lowered
+                else ""
+            )
+        if named and str(named) != routing_model(model or ""):
+            return None
+        # Only arm the durable per-model key when the envelope itself
+        # advertises a reset the key can carry; otherwise defer to the
+        # caller's in-memory model window.
+        retry_info = [
+            detail
+            for detail in (error.get("details") or [])
+            if isinstance(detail, dict)
+            and detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo"
+        ]
+        quota_reset = (
+            isinstance(metadata, dict) and metadata.get("quotaResetDelay")
+        ) or retry_info
+        return "quota_group" if quota_reset else None
+    if reason in ("RATE_LIMIT_EXCEEDED", "USER_RATE_LIMIT_EXCEEDED"):
+        return "account"
+    return None
 
 
 def capacity_scope(
@@ -3263,19 +3339,27 @@ class LaneState:
         refused outright (it will not recover inside the client's queue
         budget), and telling the client "retry in 1s" only burns its retry
         budget, so the value points at the probe slot or the window's end.
+        On a mirror-probe lane a Retry-After-armed model window is rechecked
+        at the cadence, so the advertised retry points at the next recheck
+        slot (when it fits inside the window) instead of the unverified
+        magnitude; ladder-armed windows keep advertising the window's end.
         """
 
-        return max(
-            1,
-            _ceil_remaining_seconds(
-                max(
-                    self._model_open_until.get(model, 0.0),
-                    self._model_probe_at.get(model, 0.0),
-                    self._model_server_not_before.get(model, 0.0),
-                ),
-                now,
-            ),
+        deadline = max(
+            self._model_open_until.get(model, 0.0),
+            self._model_probe_at.get(model, 0.0),
+            self._model_server_not_before.get(model, 0.0),
         )
+        server_not_before = self._model_server_not_before.get(model, 0.0)
+        if self._mirror_probe_interval and server_not_before:
+            deadline = min(
+                deadline,
+                max(
+                    server_not_before,
+                    self._model_probe_at.get(model, 0.0),
+                ),
+            )
+        return max(1, _ceil_remaining_seconds(deadline, now))
 
     def _prune_rpm(self, now: float) -> None:
         """Drop admission timestamps older than the rolling 60s window."""
@@ -3302,9 +3386,22 @@ class LaneState:
         )
         if retry_after is not None:
             delay = min(max(1, retry_after), self._retry_after_max)
-        elif streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
+        elif self._strict_backoff or streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
+            # Strict lanes park the model from the first refusal, mirroring
+            # the lane ladder's strict behavior: on the shared OAuth
+            # credential one upstream capacity verdict about a model is
+            # enough evidence to stop spending requests on it, while the
+            # early probe keeps the window short.
             index = min(
-                streak - ADMISSION_COOLDOWN_FAILURE_THRESHOLD,
+                max(
+                    0,
+                    streak
+                    - (
+                        1
+                        if self._strict_backoff
+                        else ADMISSION_COOLDOWN_FAILURE_THRESHOLD
+                    ),
+                ),
                 len(self._schedule) - 1,
             )
             delay = self._schedule[index]
@@ -3313,17 +3410,29 @@ class LaneState:
         if delay is not None:
             # An upstream-advertised Retry-After is the upstream itself telling
             # us to back off that model, so the probe may not fire before it.
-            # Same contract as the lane-level `_server_not_before`.
+            # Same contract as the lane-level `_server_not_before` -- except on
+            # a mirror-probe lane, where the advertised magnitude is treated as
+            # unverified: the 2026-11-21 opus window claimed 17504s while the
+            # upstream kept serving the account seconds later, and the
+            # 2026-11-22 flash window recovered in minutes. The model deadline
+            # is re-checked at the lane's mirror cadence instead of
+            # blind-parking the model for the whole advertisement; a hint
+            # shorter than the cadence keeps its own (shorter) deadline.
+            probe_delay = self._early_probe_interval
             if retry_after is not None:
+                bound = min(max(1, retry_after), self._retry_after_max)
+                if self._mirror_probe_interval:
+                    bound = min(bound, int(self._mirror_probe_interval))
+                    probe_delay = float(bound)
                 self._model_server_not_before[model] = max(
                     self._model_server_not_before.get(model, 0.0),
-                    now + min(max(1, retry_after), self._retry_after_max),
+                    now + bound,
                 )
             self._model_open_until[model] = max(
                 self._model_open_until.get(model, 0.0),
                 now + min(delay, self._retry_after_max),
             )
-            self._model_probe_at[model] = now + self._early_probe_interval
+            self._model_probe_at[model] = now + probe_delay
 
     def begin_quota_check(self) -> None:
         with self._condition:
@@ -3754,10 +3863,7 @@ class LaneState:
                 # Promoting it to the lane would refuse the healthy siblings
                 # that share the credential (and the concurrency budget).
                 model_retry_after = retry_after
-                if (
-                    model_retry_after is None
-                    and self._lane_name == "antigravity-oauth"
-                ):
+                if model_retry_after is None and self._lane_name == "antigravity-oauth":
                     model_retry_after = self._schedule[0]
                 self._record_model_capacity(lease.model, model_retry_after, now)
                 if (
@@ -4679,7 +4785,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif lease.reason == "model_cooldown":
                     message = (
                         f"Antigravity model {model} is cooling down; "
-                        f"retry after {lease.retry_after}s."
+                        f"retry after {lease.retry_after}s. Sibling models "
+                        f"on the lane remain available."
                     )
                 elif lease.reason == "rate_limited":
                     message = (
@@ -5270,18 +5377,32 @@ class Handler(BaseHTTPRequestHandler):
                     response.status, bytes(probe), lane_config
                 )
             if antigravity_quota_check:
+                # Default: a model-bearing Antigravity 429 parks only that
+                # model (the user-directed no-collective-cooldown contract).
+                # A verified Cloud Code envelope upgrades the verdict: the
+                # bucket/capacity reasons arm the durable per-model quota key,
+                # and the per-user rate limiter reasons stay account-level
+                # ("account" scopes the shared lane breaker and is exempt
+                # from the lane-to-model narrowing in release()).
                 capacity_kind = "model" if lease is not None else "lane"
-                if (
-                    lease is not None
+                envelope_scope = (
+                    antigravity_envelope_scope(bytes(probe), lease.model)
+                    if lease is not None
                     and stream_probe is None
                     and not client_lost.is_set()
                     and hold_reason is None
-                    and body_delay is not None
+                    else None
+                )
+                if envelope_scope == "quota_group" and not (
+                    body_delay is not None
                     and retry_after == body_delay
                     and 0 < body_delay <= 2147483647
-                    and antigravity_individual_quota(bytes(probe), lease.model)
                 ):
-                    capacity_kind = "quota_group"
+                    # The durable key is only armable from a body-advertised
+                    # reset; without it the in-memory model window applies.
+                    envelope_scope = None
+                if envelope_scope is not None:
+                    capacity_kind = envelope_scope
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
