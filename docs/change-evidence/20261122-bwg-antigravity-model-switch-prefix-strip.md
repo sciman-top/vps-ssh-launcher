@@ -34,3 +34,18 @@
 ## 关联观察（不在本切片处理）
 
 - `gemini-3.8-flash-high` "正在思考"卡顿：2026-11-22 06:00Z 起仅 `antigravity-knaha367` 账号 TTFB 47–65s（含一次 15s 零输出被客户端掐断），其余账号 flash 全部 2.4–2.8s。账号级上游降级，网关侧无法根治；是否将 `knaha367` 移出 flash 路由面属 OAuth 池操作，留待用户裁决。
+
+## 第二代追加：独立 `<skills_instructions>` 重注入块（2026-11-22 17:10Z 实证）
+
+前缀区剥离上线（09:05Z）后，失败会话仍裸 429（`protocol_normalized stripped=4` 后 709ms 429）。对照取证：
+
+- **图片无罪**：11-21 06:31–08:30Z 带 1 图的 neon/hydrogen 会话 229 条全 200。
+- **turn_aborted / collaboration_mode 无罪**：成功对照会话（`672b2d91a9e2`，重建自本地 rollout）同时含两者仍全 200。
+- **新实锤**：失败请求独有"重注入的独立整项 `<skills_instructions>`（34211B + 117B）"；成功会话的 skills 内容在开头 multi-part bundle 内（joined 以 `<app-context>` 开头，随 systemInstruction 走），形态不同。
+
+修复（`df3f306`）：剥离泛化为整项标签元组 `(model_switch, skills_instructions)`，日志改 `kind=antigravity_developer_notice model_switch=N skills_instructions=M`；multi-part bundle、user 引用、未闭合项天然豁免。pin `2822eb0a`。
+
+- 事务脚本：`outputs/deploy-admission-skills-strip-20261122.ps1`（`DRY_RUN_OK` → `DEPLOY_OK`，备份 `/opt/cliproxyapi/backups/20261122T093438.984338727Z-admission-skills-strip-20261122`）
+- 门禁：`1859 passed, 30 skipped, 896 subtests`；doctor `DOCTOR_CONTRACT_OK`、`HEALTH_OK`
+- 回放：5/5 转储 `residual_tagged=0`（171047 样本 `skills_instructions=2`、397324→362310B）
+- live_accepted：待用户在原失败会话复测；若仍 429，剩余嫌疑=图片（11-21 后政策窗未验证）与原始体积，届时另行裁决（图片属用户内容不做静默剥离）。
