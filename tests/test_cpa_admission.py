@@ -4256,9 +4256,10 @@ def test_normalize_antigravity_developer_context_promotes_bundle_and_trims_dupli
         == "<codex_apps_client_time_context>t2</codex_apps_client_time_context>"
     )
 
-    # Non-antigravity lane and non-responses path must stay byte-identical.
-    unchanged_lane, stats_lane = normalize("/v1/responses", raw, "chatgpt-oauth")
-    assert unchanged_lane == raw and stats_lane == {}
+    # Other /responses lanes also benefit from displaced bundle promotion and dedupe.
+    cleaned_lane, stats_lane = normalize("/v1/responses", raw, "chatgpt-oauth")
+    assert cleaned_lane == cleaned and stats_lane == stats
+    # Non-responses path must stay byte-identical.
     unchanged_path, stats_path = normalize(
         "/v1/chat/completions", raw, "antigravity-oauth"
     )
@@ -4578,9 +4579,10 @@ def test_strip_antigravity_model_switch_items_removes_mid_session_notices() -> N
         == "<collaboration_mode>Default</collaboration_mode>"
     )
 
-    # Non-antigravity lane and non-responses path must stay byte-identical.
-    unchanged_lane, removed_lane = strip("/v1/responses", raw, "chatgpt-oauth")
-    assert unchanged_lane == raw and removed_lane == {}
+    # Other /responses lanes also strip redundant <model_switch> notices to preserve prefix cache.
+    cleaned_lane, removed_lane = strip("/v1/responses", raw, "chatgpt-oauth")
+    assert cleaned_lane == cleaned and removed_lane == removed
+    # Non-responses path must stay byte-identical.
     unchanged_path, removed_path = strip(
         "/v1/chat/completions", raw, "antigravity-oauth"
     )
@@ -9814,6 +9816,25 @@ def test_antigravity_credential_switch_429_does_not_park_model_or_arm_repeat_rej
                 assert response.status == 200
                 response.read()
                 assert calls[0] == 3
+
+                # Early-stream SSE path also reports the 1s credential-switch hint
+                # without arming a model cooldown.
+                calls[0] = 0
+                client.request(
+                    "POST",
+                    "/v1/responses",
+                    b'{"model":"gemini-4-argon-high","input":[],"stream":true}',
+                    headers={"X-Client-Request-Id": "switch-case-stream"},
+                )
+                response = client.getresponse()
+                assert response.status == 200
+                sse_payload = response.read().decode("utf-8")
+                wait_lane_idle()
+                assert "Antigravity credential rotated locally" in sse_payload
+                assert '"retry_after":1' in sse_payload
+                assert (
+                    proxy.lanes["antigravity-oauth"].snapshot()["model_cooldowns"] == {}
+                )
             finally:
                 client.close()
     finally:

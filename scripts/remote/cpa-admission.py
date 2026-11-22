@@ -2812,7 +2812,9 @@ def normalize_cross_provider_agent_messages(
         normalized = True
     if not normalized:
         return body, False
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(), True
+    out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    _body_parse_state.entry = (out, payload)
+    return out, True
 
 
 def _model_switch_developer_text(item: Any) -> str | None:
@@ -2923,10 +2925,9 @@ def omit_antigravity_historical_user_images(
 
     if not omitted:
         return body, 0
-    return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-        omitted,
-    )
+    out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    _body_parse_state.entry = (out, payload)
+    return out, omitted
 
 
 def collapse_antigravity_retry_user_turns(
@@ -2942,8 +2943,7 @@ def collapse_antigravity_retry_user_turns(
     images, tool results, and arbitrary user text pass through. The latest
     retry-only turn for each retry text is retained.
     """
-    if lane_name != "antigravity-oauth":
-        return body, 0
+    _ = lane_name
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
         return body, 0
     payload = parsed_json_body(body)
@@ -2987,16 +2987,15 @@ def collapse_antigravity_retry_user_turns(
     payload["input"] = [
         item for index, item in enumerate(items) if index not in duplicate_indices
     ]
-    return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-        len(duplicate_indices),
-    )
+    out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    _body_parse_state.entry = (out, payload)
+    return out, len(duplicate_indices)
 
 
 def strip_antigravity_model_switch_items(
     path: str, body: bytes, lane_name: str | None
 ) -> tuple[bytes, dict[str, int]]:
-    """Strip Codex developer notice items on Antigravity.
+    """Strip Codex developer notice items on /responses routes.
 
     When Codex Desktop switches models mid-session, it injects a ~20 KiB
     ``role="developer"`` message wrapped in ``<model_switch>...</model_switch>``
@@ -3016,8 +3015,7 @@ def strip_antigravity_model_switch_items(
     ``<collaboration_mode>`` notices never start with a stripped tag, and
     user-quoted or non-``developer`` text never matches.
     """
-    if lane_name != "antigravity-oauth":
-        return body, {}
+    _ = lane_name
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
         return body, {}
     payload = parsed_json_body(body)
@@ -3043,10 +3041,9 @@ def strip_antigravity_model_switch_items(
     if not removed:
         return body, {}
     payload["input"] = filtered
-    return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-        removed,
-    )
+    out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    _body_parse_state.entry = (out, payload)
+    return out, removed
 
 
 def _wrapped_xml_tag(text: str, tags: tuple[str, ...]) -> str | None:
@@ -3097,7 +3094,7 @@ def normalize_antigravity_developer_context(
     multi-part ``developer`` items combining ``<skills_instructions>`` with
     ``<collaboration_mode>`` / ``<plugins_instructions>``, plus repeated
     ``<collaboration_mode>`` and ``<codex_apps_client_time_context>`` notices.
-    On Antigravity ``/responses`` requests, this helper:
+    On ``/responses`` requests across all lanes, this helper:
       1. Promotes displaced ``<app-context>`` developer bundles into the
          leading developer prefix (zero information loss, routed to
          ``systemInstruction``).
@@ -3108,8 +3105,7 @@ def normalize_antigravity_developer_context(
          parts, dropping copies identical to the leading prefix and keeping
          only the latest changed copy when state actually changed.
     """
-    if lane_name != "antigravity-oauth":
-        return body, {}
+    _ = lane_name
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
         return body, {}
     payload = parsed_json_body(body)
@@ -3238,10 +3234,9 @@ def normalize_antigravity_developer_context(
         return body, {}
 
     payload["input"] = [*items[:first_conv_index], *reversed(kept_tail_rev)]
-    return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-        stats,
-    )
+    out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    _body_parse_state.entry = (out, payload)
+    return out, stats
 
 
 def normalize_antigravity_image_detail(
@@ -3289,10 +3284,9 @@ def normalize_antigravity_image_detail(
                 changed += 1
     if not changed:
         return body, 0
-    return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-        changed,
-    )
+    out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    _body_parse_state.entry = (out, payload)
+    return out, changed
 
 
 def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
@@ -5593,6 +5587,7 @@ class Handler(BaseHTTPRequestHandler):
         capacity_kind: str | None = None
         antigravity_quota_check = False
         antigravity_park_on_release = False
+        antigravity_credential_switch = False
         successful = False
         retry_after: int | None = None
         hold_reason: str | None = None
@@ -6146,6 +6141,7 @@ class Handler(BaseHTTPRequestHandler):
                     # bound the downstream retry hint to 1s for fast failover.
                     capacity_kind = None
                     antigravity_park_on_release = False
+                    antigravity_credential_switch = True
                     retry_after = 1
                 elif (
                     capacity_kind == "model"
@@ -6224,7 +6220,13 @@ class Handler(BaseHTTPRequestHandler):
                 and (stream_probe.terminal_success or stream_probe.has_error)
             )
             if early_stream and not client_lost.is_set() and not terminal_delivered:
-                if lane_name == "antigravity-oauth" and response.status == 429:
+                if antigravity_credential_switch:
+                    message = (
+                        "Antigravity credential rotated locally after short cooldown "
+                        "or daily cap; retry after 1 second to bind a healthy sibling "
+                        "credential."
+                    )
+                elif lane_name == "antigravity-oauth" and response.status == 429:
                     message = "Antigravity upstream returned HTTP 429."
                     if retry_after is None:
                         message += " CPA did not receive a retry time."
