@@ -111,6 +111,23 @@ v0/v8 两前缀路由组不同——auth-files 只在 v0，cooldown/reset 只在
 清除。两号 200 ok 后 flash-high 直连/过 admission 双路 200、neon 200、零
 lane_reject。
 
+## 升级后体检（v8.1.1 fork，2026-11-22 17:03Z swap，17:43Z 复核）
+
+并行会话完成 `ops(cpa): upgrade bwg to CLIProxyAPI v8.1.1 fork and
+workbuddy-provider 0.21.30`（9475f2f）：**三补丁栈完整移植**（gemini-raw +
+agy-effort + antigravity-guard/daily-cap，Commit=`6eb8554f+gemini-raw+
+agy-effort+daily-cap`，binary `e8286533`，账面已更新），overlay v8.1.1 移植与
+v8.0.80 原版逐字一致（仅行尾差）。复核全绿：admission pin `1db06a15` 未动、
+config 两旋钮存活、WorkBuddy 0.21.30 插件 active ping 8/8 + credits sweep 8/8
++ 16 models、池 7 号、探针 flash/neon 200、`DOCTOR_CONTRACT_OK`。
+缓存边界对比（按 swap 真实边界 17:03:36Z 拆窗）：antigravity 0.911→**0.946**
+(N=162)、chatgpt 0.150→**0.749**（0.15=recreate 后会话重预热瞬态，N=23）——
+**零缓存回归**。上游 83 commits 风控面速览：Retry-After header 兜底（body
+分类不变，对 admission 无影响）、CountTokens 加冷却（desktop 不走该路径、
+不进日量帽计数）、403/401 凭据级隔离（利好）、reasoning replay 提交时序两改
+（P2 规格需按新代码复核）、新增 Copilot provider（非本车道）。外置参考仓已
+重置至生产锚 6eb8554f（工作树零污染，历史"本地污染"标记解除）。
+
 **P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
 model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
