@@ -1424,6 +1424,36 @@ def antigravity_bare_resource_exhausted(status: int, body: bytes) -> bool:
     )
 
 
+def antigravity_credential_switch_429(status: int, body: bytes) -> bool:
+    """Identify CPA's local single-credential switch 429 on Antigravity.
+
+    When one Antigravity credential is in short cooldown or reaches its local
+    daily cap, CPA returns a local 429 ("auth in short cooldown, ... remaining"
+    or "antigravity daily credential cap reached, ... seconds remaining") with
+    the single credential's Retry-After so conductor cools that credential and
+    selects a sibling on the next attempt. Because max-retry-credentials=1 is
+    enforced, CPA returns that single-credential 429 to admission. It is a
+    credential-rotation signal, not model-wide or lane-wide capacity
+    exhaustion and not a rejected payload, so admission must neither park the
+    model across healthy sibling credentials nor count it toward repeat-reject.
+    """
+    if status != 429:
+        return False
+    payload = parsed_json_body(body)
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return False
+    message = str(error.get("message", "")).strip().lower()
+    return (
+        message.startswith("auth in short cooldown,") and message.endswith("remaining")
+    ) or (
+        message.startswith("antigravity daily credential cap reached,")
+        and message.endswith("seconds remaining")
+    )
+
+
 # A bare Antigravity RESOURCE_EXHAUSTED carries no usable scope, so the 429
 # flows straight back to the caller and retry timing belongs to the client.
 # Resubmitting the same rejected payload is the documented escalation path to a
@@ -5050,6 +5080,11 @@ class Handler(BaseHTTPRequestHandler):
         -- so answering it here costs nothing and frees the ring for the dumps
         an operator actually needs.
 
+        Cockpit Desktop likewise probes /v1/cockpit/connection on startup and
+        reconnect to check whether a remote gateway is a native Cockpit server;
+        answering /v1/cockpit(/...) locally prevents those probes from hitting
+        CPA :8317 or polluting passthrough/other HTTP 404 error telemetry.
+
         This is deliberately narrow: it answers only routes with no upstream
         semantics, and it must never swallow a path a provider could serve.
         """
@@ -5059,6 +5094,8 @@ class Handler(BaseHTTPRequestHandler):
             return "files_api_unsupported"
         if route.startswith("/v1/files/"):
             return "files_api_unsupported"
+        if route == "/v1/cockpit" or route.startswith("/v1/cockpit/"):
+            return "cockpit_api_unsupported"
         return None
 
     def _answers_locally_without_a_dump(self) -> bool:
@@ -5075,14 +5112,19 @@ class Handler(BaseHTTPRequestHandler):
         if probe_reason is not None:
             # Drain the body first (done above) so the connection stays
             # reusable, then answer with the same 404 shape CPA would send.
+            probe_message = (
+                "This gateway does not implement the Cockpit management API."
+                if probe_reason == "cockpit_api_unsupported"
+                else (
+                    "This gateway does not implement the Anthropic Files "
+                    "API. Inline the file content in the request instead."
+                )
+            )
             self._send_json(
                 404,
                 {
                     "error": {
-                        "message": (
-                            "This gateway does not implement the Anthropic Files "
-                            "API. Inline the file content in the request instead."
-                        ),
+                        "message": probe_message,
                         "type": "not_found_error",
                         "code": probe_reason,
                     }
@@ -5550,6 +5592,7 @@ class Handler(BaseHTTPRequestHandler):
         capacity_error = False
         capacity_kind: str | None = None
         antigravity_quota_check = False
+        antigravity_park_on_release = False
         successful = False
         retry_after: int | None = None
         hold_reason: str | None = None
@@ -5624,6 +5667,7 @@ class Handler(BaseHTTPRequestHandler):
                 if response.status == 429:
                     proxy.lanes[lane_name].begin_quota_check()
                     antigravity_quota_check = True
+                    antigravity_park_on_release = True
                 elif response.status == 503:
                     proxy.lanes[lane_name].record_risk(
                         None, retry_after or lane_config["cooldown_schedule_seconds"][0]
@@ -6089,6 +6133,21 @@ class Handler(BaseHTTPRequestHandler):
                 if envelope_scope is not None:
                     capacity_kind = envelope_scope
                 elif (
+                    stream_probe is None
+                    and hold_reason is None
+                    and antigravity_credential_switch_429(response.status, bytes(probe))
+                ):
+                    # CPA's local single-credential rotation 429 ("auth in
+                    # short cooldown, ... remaining" or "antigravity daily
+                    # credential cap reached, ... seconds remaining") tells
+                    # conductor to cool that one credential and switch to a
+                    # healthy sibling on the next attempt. Do not lock the
+                    # model across all credentials or arm repeat-reject, and
+                    # bound the downstream retry hint to 1s for fast failover.
+                    capacity_kind = None
+                    antigravity_park_on_release = False
+                    retry_after = 1
+                elif (
                     capacity_kind == "model"
                     and retry_after_header is None
                     and antigravity_bare_resource_exhausted(
@@ -6277,6 +6336,7 @@ class Handler(BaseHTTPRequestHandler):
             # cooldown for a request that the caller abandoned.
             capacity_error = False
             capacity_kind = None
+            antigravity_park_on_release = False
             logging.info(
                 "downstream_disconnect lane=%s model=%s waited_ms=%s "
                 "sse_bytes=%s sse_events=%s sse_last_event=%s "
@@ -6382,7 +6442,7 @@ class Handler(BaseHTTPRequestHandler):
                 proxy.lanes[lane_name].release(
                     lease,
                     # A torn or unreadable 429 still provides shared evidence.
-                    capacity_error=capacity_error or antigravity_quota_check,
+                    capacity_error=capacity_error or antigravity_park_on_release,
                     retry_after=retry_after,
                     successful=successful,
                     capacity_scope=capacity_kind or "lane",

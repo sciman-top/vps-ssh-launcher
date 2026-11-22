@@ -2893,6 +2893,30 @@ def test_antigravity_bare_resource_exhausted_has_no_local_reset_scope() -> None:
     assert not classify(500, b'{"error":{"status":"RESOURCE_EXHAUSTED"}}')
 
 
+def test_antigravity_credential_switch_429_classification() -> None:
+    classify = MODULE["antigravity_credential_switch_429"]
+    assert classify(
+        429,
+        b'{"error":{"code":"rate_limit_exceeded","message":"auth in short cooldown, 17s remaining","type":"rate_limit_error"}}',
+    )
+    assert classify(
+        429,
+        b'{"error":{"code":"rate_limit_exceeded","message":"antigravity daily credential cap reached, 21955 seconds remaining","type":"rate_limit_error"}}',
+    )
+    assert not classify(
+        429,
+        b'{"error":{"code":"rate_limit_exceeded","message":"all credentials for model gemini-3.8-flash-high are in cooldown","type":"rate_limit_error"}}',
+    )
+    assert not classify(
+        429,
+        b'{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}',
+    )
+    assert not classify(
+        503,
+        b'{"error":{"message":"auth in short cooldown, 17s remaining"}}',
+    )
+
+
 def test_model_probe_success_cannot_clear_a_newer_model_failure(
     monkeypatch: Any,
 ) -> None:
@@ -9478,6 +9502,16 @@ def test_unimplemented_files_probe_is_answered_locally() -> None:
             assert (
                 response.getheader("X-CPA-Admission-Reason") == "files_api_unsupported"
             )
+        for route in ("/v1/cockpit", "/v1/cockpit/connection", "/v1/cockpit/status"):
+            client.request("GET", route)
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            assert response.status == 404, route
+            assert payload["error"]["code"] == "cockpit_api_unsupported"
+            assert (
+                response.getheader("X-CPA-Admission-Reason")
+                == "cockpit_api_unsupported"
+            )
         # Nothing reached the upstream, so nothing can reach the dump ring.
         assert received == []
         # Every other route still forwards, including a sibling under /v1.
@@ -9692,6 +9726,94 @@ def test_antigravity_repeat_reject_pauses_unchanged_payload_before_upstream(
                 )
                 response.read()
                 assert len(received) == 4
+            finally:
+                client.close()
+    finally:
+        MODULE["reset_antigravity_repeat_reject_state"]()
+
+
+def test_antigravity_credential_switch_429_does_not_park_model_or_arm_repeat_reject(
+    tmp_path: Path,
+) -> None:
+    calls = [0]
+    switch_bodies = (
+        b'{"error":{"code":"rate_limit_exceeded","message":"antigravity daily credential cap reached, 21955 seconds remaining","type":"rate_limit_error"}}',
+        b'{"error":{"code":"rate_limit_exceeded","message":"auth in short cooldown, 17s remaining","type":"rate_limit_error"}}',
+    )
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            idx = calls[0]
+            calls[0] += 1
+            if idx < len(switch_bodies):
+                payload = switch_bodies[idx]
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Retry-After", "21955")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                ok = b'{"id":"msg_1","type":"message","content":[{"type":"text","text":"OK"}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(ok)))
+                self.end_headers()
+                self.wfile.write(ok)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    MODULE["reset_antigravity_repeat_reject_state"]()
+    try:
+        with _admission_stack(
+            Upstream,
+            lane_overrides={
+                "queue_timeout_seconds": 0.05,
+                "cooldown_schedule_seconds": [60, 180, 600, 1800, 3600],
+            },
+            lane_name="antigravity-oauth",
+            proxy_overrides={"state_path": risk_state_path(tmp_path)},
+        ) as stack:
+            proxy = stack["proxy"]
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+            body = b'{"model":"gemini-4-argon-high","messages":[]}'
+
+            def wait_lane_idle() -> None:
+                deadline = time.monotonic() + 2
+                while proxy.lanes["antigravity-oauth"].snapshot()["inflight"]:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.005)
+
+            try:
+                for _ in range(2):
+                    client.request(
+                        "POST",
+                        "/v1/messages",
+                        body,
+                        headers={"X-Client-Request-Id": "switch-case-1"},
+                    )
+                    response = client.getresponse()
+                    assert response.status == 429
+                    response.read()
+                    wait_lane_idle()
+                    snap = proxy.lanes["antigravity-oauth"].snapshot()
+                    assert snap["model_cooldowns"] == {}
+                    assert snap["cooldown_active"] is False
+
+                # Next retry immediately reaches CPA (sibling credential) without
+                # being blocked by a 600s model_cooldown.
+                client.request(
+                    "POST",
+                    "/v1/messages",
+                    body,
+                    headers={"X-Client-Request-Id": "switch-case-1"},
+                )
+                response = client.getresponse()
+                assert response.status == 200
+                response.read()
+                assert calls[0] == 3
             finally:
                 client.close()
     finally:
