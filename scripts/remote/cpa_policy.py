@@ -256,7 +256,7 @@ EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS: dict[str, list[dict[str, Any]]] = {
         {
             "status": 429,
             "match-regexr": [r'(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$'],
-            "action": "stop",
+            "action": "stop-and-cooldown",
         },
         # CLIProxyAPI #7748 (unpatched in v8.0.79 and v8.0.80): while
         # tos-pause-window is armed, AntigravityExecutor returns a plain

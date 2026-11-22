@@ -2089,7 +2089,7 @@ oauth_request_scoped_after["antigravity"] = [
     {
         "status": 429,
         "match-regexr": [r'(?s)"status"\s*:\s*"RESOURCE_EXHAUSTED"\s*\}\s*\}\s*$'],
-        "action": "stop",
+        "action": "stop-and-cooldown",
     },
     {
         "status": 503,
