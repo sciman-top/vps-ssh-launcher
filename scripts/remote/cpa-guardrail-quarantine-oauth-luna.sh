@@ -672,11 +672,12 @@ other_oauth_aliases = {
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
 provider_aliases = {
-    model["alias"]
+    model.get("alias", model.get("name"))
     for provider in manifest.get("providers", [])
     if isinstance(provider, dict)
     for model in provider.get("models", [])
-    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+    if isinstance(model, dict)
+    and isinstance(model.get("alias", model.get("name")), str)
 }
 optional = {
     model
