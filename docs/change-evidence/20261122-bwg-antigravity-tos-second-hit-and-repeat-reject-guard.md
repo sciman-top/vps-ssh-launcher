@@ -128,6 +128,15 @@ config 两旋钮存活、WorkBuddy 0.21.30 插件 active ping 8/8 + credits swee
 （P2 规格需按新代码复核）、新增 Copilot provider（非本车道）。外置参考仓已
 重置至生产锚 6eb8554f（工作树零污染，历史"本地污染"标记解除）。
 
+**v8.1.1 日量帽受控演练（同日 17:54Z）**：cap=1 写穿热加载后双探针——
+conductor 实证两笔 `429 … err=antigravity daily credential cap reached,
+21955/21954 seconds remaining`（b7177976 于 argon-high=用户实时流量、
+jalumuruvenkatarao 于 flash-high=演练探针；距 UTC 午夜秒数吻合），第二发换号
+200。恢复 cap=150 后经管理 API 读**运行态** config 确认
+`per-credential-daily-cap=150`（日志窗口屡次漏抓 reload 行，运行态读数才是
+权威判据），演练冷却两号经管理 API reset 清空，flash/neon 双 200。手筋固化：
+**演练/恢复一律写穿+运行态读数验收+收尾清冷却**。
+
 **P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
 model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
