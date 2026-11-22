@@ -140,7 +140,11 @@ cap=1 的 429（`rate_limit_error` + Retry-After 21955s）被 admission 镜像�
 **600s 有界模型窗**（`lane_reject retry_after=597→346`，579KB argon turn 的
 dump=CPA 自产 cap 拒绝非上游判定）——有界复检设计按预期工作，但意味着演练
 期间目标模型对全体客户端 600s 循环不可用，**演练协议追加：恢复 cap 后须等
-admission 窗过期（≤600s）或明示用户窗到期时刻**。
+admission 窗过期（≤600s）或明示用户窗到期时刻**。窗过期后 18:04:14Z 复验：
+`lane_admit → lane_probe model_half_open → upstream_result 200` 全序列实证，
+argon-high 经 admission 端到端恢复。**验证方法铁律：客户端路径验收只能走
+8318（过 admission）**——8317 直连探针本次三次造成"已恢复"假阳性
+（18:01 用户在窗内被拒 vs 直连 200 的矛盾即源于此）。
 
 **P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
