@@ -4076,6 +4076,221 @@ def test_only_completed_sse_can_heal_half_open_lane(
             running.join(timeout=2)
 
 
+def test_strip_antigravity_model_switch_items_removes_mid_session_notices_only() -> (
+    None
+):
+    strip = MODULE["strip_antigravity_model_switch_items"]
+    raw = json.dumps(
+        {
+            "model": "gemini-4-argon-high",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {"type": "input_text", "text": "initial system prompt"}
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "hi there"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<model_switch>\nYou are Codex...\n</model_switch>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "turn 2"}],
+                },
+                {
+                    "role": "developer",
+                    "content": "<model_switch>second switch</model_switch>",
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+    cleaned, removed = strip("/v1/responses", raw, "antigravity-oauth")
+    assert removed == 2
+    parsed = json.loads(cleaned)
+    assert len(parsed["input"]) == 5
+    roles = [item["role"] for item in parsed["input"]]
+    assert roles == ["developer", "user", "assistant", "developer", "user"]
+    assert (
+        parsed["input"][3]["content"][0]["text"]
+        == "<collaboration_mode>Default</collaboration_mode>"
+    )
+
+    # Non-antigravity lane and non-responses path must stay byte-identical.
+    unchanged_lane, removed_lane = strip("/v1/responses", raw, "chatgpt-oauth")
+    assert unchanged_lane == raw and removed_lane == 0
+    unchanged_path, removed_path = strip(
+        "/v1/chat/completions", raw, "antigravity-oauth"
+    )
+    assert unchanged_path == raw and removed_path == 0
+
+
+def test_strip_antigravity_model_switch_items_keeps_pre_assistant_and_non_matching() -> (
+    None
+):
+    strip = MODULE["strip_antigravity_model_switch_items"]
+    raw = json.dumps(
+        {
+            "model": "gemini-3.8-flash-high",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<model_switch>turn 1</model_switch>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<model_switch>user quoted</model_switch>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<model_switch>unclosed",
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+    cleaned, removed = strip("/v1/responses", raw, "antigravity-oauth")
+    assert cleaned == raw and removed == 0
+
+
+def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class CaptureUpstream(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(length)
+            captured["content_length"] = length
+            captured["body"] = raw_body
+            payload = b'{"id":"resp_ok","status":"completed"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(CaptureUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    caplog.set_level(logging.INFO)
+    req_body = json.dumps(
+        {
+            "model": "gemini-4-argon-high",
+            "stream": False,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "sys"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "reply"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<model_switch>You are Codex</model_switch>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "next"}],
+                },
+            ],
+        }
+    ).encode("utf-8")
+    try:
+        client.request(
+            "POST",
+            "/v1/responses",
+            req_body,
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        response.read()
+        assert captured["content_length"] == len(captured["body"])
+        assert captured["content_length"] < len(req_body)
+        forwarded = json.loads(captured["body"])
+        assert len(forwarded["input"]) == 3
+        assert "kind=antigravity_model_switch stripped=1" in caplog.text
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
 def test_handler_disables_nagle_algorithm_for_sse_chunks() -> None:
     assert MODULE["Handler"].disable_nagle_algorithm is True
 

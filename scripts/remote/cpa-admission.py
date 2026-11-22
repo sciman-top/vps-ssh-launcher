@@ -2674,6 +2674,86 @@ def normalize_cross_provider_agent_messages(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(), True
 
 
+def _model_switch_developer_text(item: Any) -> str | None:
+    """Return stripped text when *item* is a developer text-only message."""
+    if not isinstance(item, dict):
+        return None
+    if item.get("role") != "developer":
+        return None
+    if item.get("type") not in (None, "message"):
+        return None
+    content = item.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list) or not content:
+        return None
+    chunks: list[str] = []
+    for part in content:
+        if (
+            not isinstance(part, dict)
+            or part.get("type") != "input_text"
+            or not isinstance(part.get("text"), str)
+        ):
+            return None
+        chunks.append(part["text"])
+    return "".join(chunks).strip()
+
+
+def strip_antigravity_model_switch_items(
+    path: str, body: bytes, lane_name: str | None
+) -> tuple[bytes, int]:
+    """Strip mid-conversation Codex ``<model_switch>`` developer notices on Antigravity.
+
+    When Codex Desktop switches models mid-session, it injects a ~20 KiB
+    ``role="developer"`` message wrapped in ``<model_switch>...</model_switch>``
+    after prior assistant turns (duplicating the initial system prompt) and
+    retains it permanently in ``input``. CLIProxyAPI folds mid-conversation
+    developer items into ``contents`` user turns for Antigravity, which causes
+    Google's Cloud Code gateway to reject subsequent requests across all models
+    and accounts with a bare 429 ``RESOURCE_EXHAUSTED``. Removing only those
+    mid-conversation ``<model_switch>`` developer items preserves conversation
+    history, initial system instructions, and ``<collaboration_mode>`` notices.
+    """
+    if lane_name != "antigravity-oauth":
+        return body, 0
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return body, 0
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED or not isinstance(payload, dict):
+        return body, 0
+    items = payload.get("input")
+    if not isinstance(items, list):
+        return body, 0
+    seen_assistant = False
+    filtered: list[Any] = []
+    removed = 0
+    for item in items:
+        if isinstance(item, dict) and (
+            item.get("role") == "assistant"
+            or item.get("type") in ("function_call", "reasoning")
+        ):
+            seen_assistant = True
+            filtered.append(item)
+            continue
+        if seen_assistant:
+            text = _model_switch_developer_text(item)
+            if (
+                text is not None
+                and text.startswith("<model_switch>")
+                and text.endswith("</model_switch>")
+            ):
+                removed += 1
+                continue
+        filtered.append(item)
+    if not removed:
+        return body, 0
+    payload["input"] = filtered
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        removed,
+    )
+
+
 def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
     """Reject unrecognized encrypted inter-agent shapes before upstream."""
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
@@ -4667,6 +4747,16 @@ class Handler(BaseHTTPRequestHandler):
             # body still names it. Preserve that model on the lease so a
             # capacity response cannot fall back to the shared breaker.
             model = observed_model
+        body, stripped_model_switch = strip_antigravity_model_switch_items(
+            self.path, body, lane_name
+        )
+        if stripped_model_switch:
+            logging.info(
+                "protocol_normalized model=%s kind=antigravity_model_switch stripped=%d %s",
+                observed_model,
+                stripped_model_switch,
+                self._trace_context,
+            )
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         response_started = False
