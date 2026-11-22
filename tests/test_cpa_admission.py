@@ -4133,7 +4133,7 @@ def test_strip_antigravity_model_switch_items_removes_mid_session_notices() -> N
     ).encode("utf-8")
 
     cleaned, removed = strip("/v1/responses", raw, "antigravity-oauth")
-    assert removed == 2
+    assert removed == {"model_switch": 2}
     parsed = json.loads(cleaned)
     assert len(parsed["input"]) == 5
     roles = [item["role"] for item in parsed["input"]]
@@ -4145,11 +4145,11 @@ def test_strip_antigravity_model_switch_items_removes_mid_session_notices() -> N
 
     # Non-antigravity lane and non-responses path must stay byte-identical.
     unchanged_lane, removed_lane = strip("/v1/responses", raw, "chatgpt-oauth")
-    assert unchanged_lane == raw and removed_lane == 0
+    assert unchanged_lane == raw and removed_lane == {}
     unchanged_path, removed_path = strip(
         "/v1/chat/completions", raw, "antigravity-oauth"
     )
-    assert unchanged_path == raw and removed_path == 0
+    assert unchanged_path == raw and removed_path == {}
 
 
 def test_strip_antigravity_model_switch_items_removes_prefix_notices_too() -> None:
@@ -4226,7 +4226,7 @@ def test_strip_antigravity_model_switch_items_removes_prefix_notices_too() -> No
     ).encode("utf-8")
 
     cleaned, removed = strip("/v1/responses", raw, "antigravity-oauth")
-    assert removed == 1
+    assert removed == {"model_switch": 1}
     parsed = json.loads(cleaned)
     assert len(parsed["input"]) == 7
     assert parsed["input"][0]["content"][0]["text"] == "initial system prompt"
@@ -4239,6 +4239,86 @@ def test_strip_antigravity_model_switch_items_removes_prefix_notices_too() -> No
         == "<model_switch>multipart</model_switch>"
     )
     assert parsed["input"][3]["content"][0]["text"] == "<model_switch>unclosed"
+
+
+def test_strip_antigravity_skills_instructions_standalone_and_bundle() -> None:
+    # Turn re-inits inject standalone <skills_instructions> developer items
+    # (2026-11-22 17:10Z live 429 evidence); the session-start multi-part
+    # bundle carries the same tag as one part and must survive untouched.
+    strip = MODULE["strip_antigravity_model_switch_items"]
+    raw = json.dumps(
+        {
+            "model": "gemini-4-neon-xhigh",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<app-context>base</app-context>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>host skills</skills_instructions>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>re-injected</skills_instructions>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>update</skills_instructions>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>user quoted</skills_instructions>",
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+    cleaned, removed = strip("/v1/responses", raw, "antigravity-oauth")
+    assert removed == {"skills_instructions": 2}
+    parsed = json.loads(cleaned)
+    assert len(parsed["input"]) == 3
+    assert parsed["input"][0]["content"][1]["text"].startswith(
+        "<skills_instructions>host skills"
+    )
+    assert parsed["input"][0]["content"][2]["text"].startswith("<collaboration_mode>")
+    assert (
+        parsed["input"][2]["content"][0]["text"]
+        == "<skills_instructions>user quoted</skills_instructions>"
+    )
 
 
 def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
@@ -4317,7 +4397,7 @@ def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
         assert captured["content_length"] < len(req_body)
         forwarded = json.loads(captured["body"])
         assert len(forwarded["input"]) == 3
-        assert "kind=antigravity_model_switch stripped=1" in caplog.text
+        assert "kind=antigravity_developer_notice model_switch=1" in caplog.text
     finally:
         client.close()
         for service in (server, upstream):

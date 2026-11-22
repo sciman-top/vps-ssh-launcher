@@ -2699,49 +2699,61 @@ def _model_switch_developer_text(item: Any) -> str | None:
     return "".join(chunks).strip()
 
 
+_ANTIGRAVITY_STRIPPED_DEVELOPER_TAGS = (
+    "model_switch",
+    "skills_instructions",
+)
+
+
 def strip_antigravity_model_switch_items(
     path: str, body: bytes, lane_name: str | None
-) -> tuple[bytes, int]:
-    """Strip Codex ``<model_switch>`` developer notices on Antigravity.
+) -> tuple[bytes, dict[str, int]]:
+    """Strip Codex developer notice items on Antigravity.
 
     When Codex Desktop switches models mid-session, it injects a ~20 KiB
     ``role="developer"`` message wrapped in ``<model_switch>...</model_switch>``
-    (duplicating the initial system prompt) and retains it permanently in
-    ``input``. CLIProxyAPI folds mid-conversation developer items into
-    ``contents`` user turns for Antigravity, which causes Google's Cloud Code
-    gateway to reject subsequent requests across all models and accounts with
-    a bare 429 ``RESOURCE_EXHAUSTED``. 2026-11-22 live evidence showed the
-    notices can also accumulate before the first assistant turn -- aborted
-    turns produce no assistant output, so every later switch notice stays in
-    the prompt prefix and still trips the fingerprint. The strip therefore
-    matches by tag at any position: the initial system prompt and
-    ``<collaboration_mode>`` notices never start with the tag, so they pass
-    through untouched, as does user-quoted or non-``developer`` text.
+    (duplicating the initial system prompt), and on settings/turn re-inits a
+    standalone ``<skills_instructions>...</skills_instructions>`` block
+    (~34 KiB), retaining both permanently in ``input``. CLIProxyAPI folds
+    mid-conversation developer items into ``contents`` user turns for
+    Antigravity, which causes Google's Cloud Code gateway to reject
+    subsequent requests across all models and accounts with a bare 429
+    ``RESOURCE_EXHAUSTED``. 2026-11-22 live evidence showed the notices can
+    also accumulate before the first assistant turn -- aborted turns produce
+    no assistant output, so every later notice stays in the prompt prefix and
+    still trips the fingerprint. The strip therefore matches whole-item tags
+    at any position: the session-start skills bundle is multi-part (its
+    joined text starts with ``<app-context>``) and travels in
+    systemInstruction, the initial system prompt and
+    ``<collaboration_mode>`` notices never start with a stripped tag, and
+    user-quoted or non-``developer`` text never matches.
     """
     if lane_name != "antigravity-oauth":
-        return body, 0
+        return body, {}
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
-        return body, 0
+        return body, {}
     payload = parsed_json_body(body)
     if payload is _PARSE_FAILED or not isinstance(payload, dict):
-        return body, 0
+        return body, {}
     items = payload.get("input")
     if not isinstance(items, list):
-        return body, 0
+        return body, {}
     filtered: list[Any] = []
-    removed = 0
+    removed: dict[str, int] = {}
     for item in items:
         text = _model_switch_developer_text(item)
-        if (
-            text is not None
-            and text.startswith("<model_switch>")
-            and text.endswith("</model_switch>")
-        ):
-            removed += 1
-            continue
-        filtered.append(item)
+        matched: str | None = None
+        if text is not None:
+            for tag in _ANTIGRAVITY_STRIPPED_DEVELOPER_TAGS:
+                if text.startswith(f"<{tag}>") and text.endswith(f"</{tag}>"):
+                    matched = tag
+                    break
+        if matched is None:
+            filtered.append(item)
+        else:
+            removed[matched] = removed.get(matched, 0) + 1
     if not removed:
-        return body, 0
+        return body, {}
     payload["input"] = filtered
     return (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -4742,14 +4754,17 @@ class Handler(BaseHTTPRequestHandler):
             # body still names it. Preserve that model on the lease so a
             # capacity response cannot fall back to the shared breaker.
             model = observed_model
-        body, stripped_model_switch = strip_antigravity_model_switch_items(
+        body, stripped_notices = strip_antigravity_model_switch_items(
             self.path, body, lane_name
         )
-        if stripped_model_switch:
+        if stripped_notices:
+            notice_counts = " ".join(
+                f"{tag}={count}" for tag, count in sorted(stripped_notices.items())
+            )
             logging.info(
-                "protocol_normalized model=%s kind=antigravity_model_switch stripped=%d %s",
+                "protocol_normalized model=%s kind=antigravity_developer_notice %s %s",
                 observed_model,
-                stripped_model_switch,
+                notice_counts,
                 self._trace_context,
             )
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
