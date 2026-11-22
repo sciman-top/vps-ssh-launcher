@@ -100,6 +100,8 @@ b7177976/gantasalabojes 对 flash-high 停至 UTC 午夜（模型级冷却，neo
 与容器 inode 分裂（宿主 524619 vs 容器 525709），宿主后续同 inode 写全部失效；
 修复=docker exec 写穿容器挂载（无停机）+ drain 锁下 force-recreate 重绑归一。
 演练/恢复全程用写穿完成。
+
+**P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
 model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
 A 号铸造的签名注入 B 号请求（#7846：签名密文含 cloud_project_number）。
