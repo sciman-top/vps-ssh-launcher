@@ -12,7 +12,7 @@
 set -eu
 
 DIR="${CPA_DIR:-/opt/cliproxyapi}"
-EXPECTED_CN=0.21.29
+EXPECTED_CN=0.21.30
 EXPECTED_INTL=0.1.40
 
 if [ -f "$DIR/plugins/workbuddy.so" ]; then
