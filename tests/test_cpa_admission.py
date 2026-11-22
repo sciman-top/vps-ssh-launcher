@@ -9564,3 +9564,135 @@ def test_admitted_request_journals_lane_admit(caplog: Any) -> None:
             service.server_close()
         for running in (thread, worker):
             running.join(timeout=2)
+
+
+def test_antigravity_repeat_reject_pause_semantics() -> None:
+    record = MODULE["record_antigravity_repeat_reject_arm"]
+    remaining = MODULE["antigravity_repeat_reject_remaining"]
+    MODULE["reset_antigravity_repeat_reject_state"]()
+    try:
+        base = 1000.0
+        record("case-1", "gemini-4-neon-xhigh", now=base)
+        record("case-1", "gemini-4-neon-xhigh", now=base + 30)
+        assert remaining("case-1", now=base + 60) is None
+        record("case-1", "gemini-4-neon-xhigh", now=base + 60)
+        armed = remaining("case-1", now=base + 61)
+        assert armed is not None and 1700 <= armed <= 1800
+        # Sibling request ids and header-less requests are never paused.
+        assert remaining("case-2", now=base + 61) is None
+        assert remaining(None, now=base + 61) is None
+        # The pause holds for its full window and expires on its own.
+        assert remaining("case-1", now=base + 1859) == 1
+        assert remaining("case-1", now=base + 1861) is None
+        # Arming clears the counter, so a fresh resubmission loop re-escalates.
+        record("case-1", "gemini-4-neon-xhigh", now=base + 1862)
+        record("case-1", "gemini-4-neon-xhigh", now=base + 1875)
+        assert remaining("case-1", now=base + 1876) is None
+        record("case-1", "gemini-4-neon-xhigh", now=base + 1880)
+        assert remaining("case-1", now=base + 1881) is not None
+        # Arms outside the counting window do not accumulate toward the limit.
+        MODULE["reset_antigravity_repeat_reject_state"]()
+        record("case-3", "gemini-4-neon-xhigh", now=base)
+        record("case-3", "gemini-4-neon-xhigh", now=base + 1700)
+        record("case-3", "gemini-4-neon-xhigh", now=base + 3400)
+        assert remaining("case-3", now=base + 3401) is None
+    finally:
+        MODULE["reset_antigravity_repeat_reject_state"]()
+
+
+def test_antigravity_repeat_reject_pauses_unchanged_payload_before_upstream(
+    tmp_path: Path,
+) -> None:
+    received: list[bytes] = []
+    bare_429 = (
+        b'{"error":{"code":429,"message":"Resource has been exhausted '
+        b'(e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}'
+    )
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(bare_429)))
+            self.end_headers()
+            self.wfile.write(bare_429)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    MODULE["reset_antigravity_repeat_reject_state"]()
+    try:
+        with _admission_stack(
+            Upstream,
+            lane_overrides={
+                "queue_timeout_seconds": 0.01,
+                # Shrink the model cooldown ladder so each test hop outlives the
+                # window the bare 429 arms, mirroring the live resubmission
+                # rhythm (upstream hit -> window -> expiry -> next hit).
+                "cooldown_schedule_seconds": [1, 1, 1, 1, 1],
+            },
+            lane_name="antigravity-oauth",
+            proxy_overrides={"state_path": risk_state_path(tmp_path)},
+        ) as stack:
+            proxy = stack["proxy"]
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+            body = b'{"model":"gemini-3.8-flash-high","messages":[]}'
+
+            def wait_lane_idle() -> None:
+                deadline = time.monotonic() + 2
+                while proxy.lanes["antigravity-oauth"].snapshot()["inflight"]:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.005)
+
+            try:
+                for _ in range(3):
+                    client.request(
+                        "POST",
+                        "/v1/messages",
+                        body,
+                        headers={"X-Client-Request-Id": "repeat-case-handler"},
+                    )
+                    response = client.getresponse()
+                    assert response.status == 429
+                    response.read()
+                    wait_lane_idle()
+                    time.sleep(1.1)
+                assert len(received) == 3
+                # The third upstream rejection armed the request-id pause; the
+                # model window has expired, so the next unchanged retry must be
+                # refused locally with the repeat-reject reason.
+                client.request(
+                    "POST",
+                    "/v1/messages",
+                    body,
+                    headers={"X-Client-Request-Id": "repeat-case-handler"},
+                )
+                response = client.getresponse()
+                assert response.status == 429
+                assert (
+                    response.getheader("X-CPA-Admission-Reason")
+                    == "repeat_rejected_cooldown"
+                )
+                retry_after = response.getheader("Retry-After")
+                assert retry_after is not None and int(retry_after) > 1700
+                assert json.loads(response.read())["upstream_contacted"] is False
+                assert len(received) == 3
+                client.request(
+                    "POST",
+                    "/v1/messages",
+                    body,
+                    headers={"X-Client-Request-Id": "repeat-case-sibling"},
+                )
+                response = client.getresponse()
+                assert response.status == 429
+                assert (
+                    response.getheader("X-CPA-Admission-Reason")
+                    != "repeat_rejected_cooldown"
+                )
+                response.read()
+                assert len(received) == 4
+            finally:
+                client.close()
+    finally:
+        MODULE["reset_antigravity_repeat_reject_state"]()

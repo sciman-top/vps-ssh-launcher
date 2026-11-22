@@ -1424,6 +1424,99 @@ def antigravity_bare_resource_exhausted(status: int, body: bytes) -> bool:
     )
 
 
+# A bare Antigravity RESOURCE_EXHAUSTED carries no usable scope, so the 429
+# flows straight back to the caller and retry timing belongs to the client.
+# Resubmitting the same rejected payload is the documented escalation path to a
+# credential-level TOS_VIOLATION (#7562/#7636/#7768; live 2026-11-22: five
+# resubmissions of one ~342 KiB turn across 85 minutes ended in the serving
+# account's service disablement). Admission therefore counts bare-429 arms per
+# client request id and, past the threshold, pauses that exact request id
+# locally before any upstream contact. Other request ids and sibling models on
+# the lane are untouched, and the pause is in-memory only so a restart always
+# clears it.
+ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD = 3
+ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS = 1800
+ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS = 1800
+ANTIGRAVITY_REPEAT_REJECT_MAX_TRACKED = 512
+
+_repeat_reject_arms: dict[str, deque[float]] = {}
+_repeat_reject_pauses: dict[str, float] = {}
+_repeat_reject_lock = threading.Lock()
+
+
+def reset_antigravity_repeat_reject_state() -> None:
+    """Clear all repeat-reject arms and pauses (drill and test entry point)."""
+    with _repeat_reject_lock:
+        _repeat_reject_arms.clear()
+        _repeat_reject_pauses.clear()
+
+
+def _prune_repeat_reject_state(now: float) -> None:
+    for key in [
+        key
+        for key, arms in _repeat_reject_arms.items()
+        if not arms or arms[-1] <= now - ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS
+    ]:
+        _repeat_reject_arms.pop(key, None)
+    for key in [
+        key for key, not_before in _repeat_reject_pauses.items() if not_before <= now
+    ]:
+        _repeat_reject_pauses.pop(key, None)
+    while len(_repeat_reject_arms) > ANTIGRAVITY_REPEAT_REJECT_MAX_TRACKED:
+        _repeat_reject_arms.pop(next(iter(_repeat_reject_arms)))
+    while len(_repeat_reject_pauses) > ANTIGRAVITY_REPEAT_REJECT_MAX_TRACKED:
+        _repeat_reject_pauses.pop(next(iter(_repeat_reject_pauses)))
+
+
+def antigravity_repeat_reject_remaining(
+    client_hash: str | None, now: float | None = None
+) -> int | None:
+    """Return seconds left on a request id's repeat-reject pause, if armed."""
+    if not client_hash:
+        return None
+    current = time.monotonic() if now is None else now
+    with _repeat_reject_lock:
+        not_before = _repeat_reject_pauses.get(client_hash)
+        if not_before is None:
+            return None
+        remaining = int(not_before - current)
+        if remaining <= 0:
+            _repeat_reject_pauses.pop(client_hash, None)
+            return None
+        return remaining
+
+
+def record_antigravity_repeat_reject_arm(
+    client_hash: str | None, model: str | None, now: float | None = None
+) -> None:
+    """Count a bare-429 arm for one client request id and pause repeats."""
+    if not client_hash:
+        return
+    now = time.monotonic() if now is None else now
+    with _repeat_reject_lock:
+        window_start = now - ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS
+        arms = _repeat_reject_arms.setdefault(client_hash, deque())
+        while arms and arms[0] <= window_start:
+            arms.popleft()
+        arms.append(now)
+        _prune_repeat_reject_state(now)
+        if len(arms) < ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD:
+            return
+        _repeat_reject_pauses[client_hash] = (
+            now + ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS
+        )
+        _repeat_reject_arms.pop(client_hash, None)
+    logging.info(
+        "repeat_reject_pause_armed hash=%s model=%s threshold=%s window_s=%s "
+        "cooldown_s=%s",
+        client_hash,
+        model or "other",
+        ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD,
+        ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS,
+        ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS,
+    )
+
+
 ANTIGRAVITY_QUOTA_GROUPS = (
     "gemini",
     # The GEMINI 4 ARGON weekly bucket rolled out separately from the shared
@@ -4821,6 +4914,7 @@ class Handler(BaseHTTPRequestHandler):
             self.headers.get("X-Client-Request-Id") or self.headers.get("X-Request-Id")
         )
         instance_hash = diagnostic_hash(self.headers.get("X-Cockpit-Instance-Id"))
+        self._client_request_hash = client_request_hash
         self._trace_context = (
             f"request_id={self._request_id} route={route} "
             f"client_request_hash={client_request_hash} instance_hash={instance_hash}"
@@ -5224,6 +5318,40 @@ class Handler(BaseHTTPRequestHandler):
                 collapsed_retry_turns,
                 self._trace_context,
             )
+        if lane_name == "antigravity-oauth":
+            repeat_remaining = antigravity_repeat_reject_remaining(
+                getattr(self, "_client_request_hash", None)
+            )
+            if repeat_remaining is not None:
+                reason = "repeat_rejected_cooldown"
+                self._send_json(
+                    429,
+                    {
+                        "error": {
+                            "type": "official_account_admission_circuit_open",
+                            "code": reason,
+                            "message": (
+                                "Upstream repeatedly rejected this exact request; "
+                                f"admission is pausing it for {repeat_remaining}s to "
+                                "protect the lane. Modify the request or start a "
+                                "fresh conversation instead of retrying it unchanged."
+                            ),
+                        },
+                        "upstream_contacted": False,
+                    },
+                    retry_after=repeat_remaining,
+                    admission_reason=reason,
+                )
+                logging.info(
+                    "lane_reject lane=%s model=%s reason=%s retry_after=%s "
+                    "waited_ms=0 %s",
+                    lane_name,
+                    observed_model or "other",
+                    reason,
+                    repeat_remaining,
+                    self._trace_context,
+                )
+                return
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         response_started = False
@@ -5972,8 +6100,13 @@ class Handler(BaseHTTPRequestHandler):
                     # model cooldown would let one stale conversation block
                     # every other session using a healthy credential. Preserve
                     # the upstream 429, but leave retry timing to the caller
-                    # and the provider's credential selector.
+                    # and the provider's credential selector. The request id
+                    # still joins the repeat-reject counter so an unchanged
+                    # resubmission loop pauses before it escalates upstream.
                     capacity_kind = None
+                    record_antigravity_repeat_reject_arm(
+                        getattr(self, "_client_request_hash", None), observed_model
+                    )
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
