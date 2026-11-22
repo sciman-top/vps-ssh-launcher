@@ -2062,7 +2062,7 @@ class StreamErrorProbe:
     def __init__(
         self,
         limit: int,
-        lane: dict[str, Any],
+        lane: dict[str, Any] | None,
         status: int = 200,
         path: str = "",
         retry_after: int | None = None,
@@ -2146,25 +2146,27 @@ class StreamErrorProbe:
         if not self.discard_event and self.data:
             payload = bytes(self.data)
             self._observe_output_text(payload.strip())
-            if protocol_errors(payload, self.lane.get("name")):
+            lane_name = self.lane.get("name") if self.lane is not None else None
+            if protocol_errors(payload, lane_name):
                 self.has_error = True
-                if self.lane.get("name") in DURABLE_OAUTH_LANES:
-                    hold, delay = oauth_risk_signal(
-                        self.lane.get("name"), self.status, payload, self.known_retry
+                if self.lane is not None:
+                    if lane_name in DURABLE_OAUTH_LANES:
+                        hold, delay = oauth_risk_signal(
+                            lane_name, self.status, payload, self.known_retry
+                        )
+                        self.hold_reason = self.hold_reason or hold
+                        if delay is not None:
+                            self.retry_after = max(self.retry_after or 0, delay)
+                    scope = capacity_scope(self.status, payload, None, self.lane)
+                    if scope == "lane" or self.scope is None:
+                        self.scope = scope
+                    model_retry = workbuddy_6004_retry_after(
+                        self.status, payload, self.lane
                     )
-                    self.hold_reason = self.hold_reason or hold
-                    if delay is not None:
-                        self.retry_after = max(self.retry_after or 0, delay)
-                scope = capacity_scope(self.status, payload, None, self.lane)
-                if scope == "lane" or self.scope is None:
-                    self.scope = scope
-                model_retry = workbuddy_6004_retry_after(
-                    self.status, payload, self.lane
-                )
-                if model_retry is not None:
-                    self.model_retry_after = max(
-                        self.model_retry_after or 0, model_retry
-                    )
+                    if model_retry is not None:
+                        self.model_retry_after = max(
+                            self.model_retry_after or 0, model_retry
+                        )
             self._terminal(payload.strip(), allow_terminal)
         self.data.clear()
         self.discard_event = False
@@ -5382,7 +5384,7 @@ class Handler(BaseHTTPRequestHandler):
                     retry_after=retry_after,
                     started_at=upstream_started,
                 )
-                if "text/event-stream" in content_type and lane_config is not None
+                if "text/event-stream" in content_type
                 else None
             )
             latched_risk: tuple[str | None, int | None] = (hold_reason, None)

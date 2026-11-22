@@ -4076,6 +4076,149 @@ def test_only_completed_sse_can_heal_half_open_lane(
             running.join(timeout=2)
 
 
+def test_stream_probe_supports_passthrough_without_lane_config() -> None:
+    """Passthrough SSE probes collect usage/TTFT/errors with zero lane side effects."""
+    probe = StreamErrorProbe(
+        4096,
+        None,
+        status=200,
+        path="/v1/responses",
+        started_at=time.monotonic() - 0.05,
+    )
+    probe.feed(
+        b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],'
+        b'"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},'
+        b'"output_tokens":42}}}\n\n'
+    )
+    probe.finish()
+    assert probe.complete is True
+    assert probe.terminal_success is True
+    assert probe.has_error is False
+    assert probe.output_finish_reason == "stop"
+    assert probe.first_text_ms is not None and probe.first_text_ms >= 0
+    assert (probe.usage_input, probe.usage_cached, probe.usage_output) == (
+        1000,
+        800,
+        42,
+    )
+    assert probe.scope is None
+    assert probe.hold_reason is None
+    assert probe.retry_after is None
+    assert probe.model_retry_after is None
+
+    err_probe = StreamErrorProbe(4096, None, status=200, path="/v1/responses")
+    err_probe.feed(
+        b'data: {"type":"response.failed","response":{"status":"failed",'
+        b'"error":{"message":"rate limit exceeded"}}}\n\n'
+    )
+    err_probe.finish()
+    assert err_probe.has_error is True
+    assert err_probe.terminal_success is False
+    assert err_probe.scope is None
+    assert err_probe.hold_reason is None
+    assert err_probe.retry_after is None
+    assert err_probe.model_retry_after is None
+
+
+def test_passthrough_sse_records_telemetry_and_usage_without_lane_cooldown(
+    caplog: Any,
+) -> None:
+    """Direct API-key passthrough SSE responses must populate TTFT/cache/stream telemetry."""
+    ok_sse = (
+        b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+        b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}],'
+        b'"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},'
+        b'"output_tokens":42}}}\n\n'
+    )
+    fail_sse = (
+        b'data: {"type":"response.failed","response":{"status":"failed",'
+        b'"error":{"message":"upstream overload"}}}\n\n'
+    )
+    request_index = {"count": 0}
+
+    class PassthroughSSEUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            request_index["count"] += 1
+            body = ok_sse if request_index["count"] == 1 else fail_sse
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(PassthroughSSEUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    caplog.set_level(logging.INFO)
+    try:
+        req_body = b'{"model":"gpt-6.2-astra","stream":true}'
+        client.request("POST", "/v1/responses", req_body)
+        resp1 = client.getresponse()
+        assert resp1.status == 200
+        assert resp1.read() == ok_sse
+
+        client.request("POST", "/v1/responses", req_body)
+        resp2 = client.getresponse()
+        assert resp2.status == 200
+        assert resp2.read() == fail_sse
+        client.close()
+
+        deadline = time.monotonic() + 2.0
+        lines: list[str] = []
+        while time.monotonic() < deadline:
+            lines = [
+                rec.getMessage()
+                for rec in caplog.records
+                if "upstream_result lane=passthrough model=gpt-6.2-astra"
+                in rec.getMessage()
+            ]
+            if len(lines) == 2:
+                break
+            time.sleep(0.01)
+        assert len(lines) == 2
+        ok_line, fail_line = lines
+        assert "successful=true protocol_result=completed" in ok_line
+        assert "first_text_ms=na" not in ok_line
+        assert "sse_events=3" in ok_line
+        assert "sse_terminal_seen=true sse_text_finish=stop" in ok_line
+        assert "usage_in=1000 usage_cached=800 usage_out=42" in ok_line
+
+        assert "capacity=false" in fail_line
+        assert "successful=false protocol_result=upstream_error" in fail_line
+        assert "sse_terminal_seen=false" in fail_line
+
+        snap = proxy.telemetry.snapshot()["models"]["gpt-6.2-astra"]
+        assert snap["samples"] == 1
+        assert snap["usage_samples"] == 1
+        assert snap["cached_tokens"] == 800
+        assert snap["uncached_input_tokens"] == 200
+        assert snap["cache_hit_ratio"] == 0.8
+        assert snap["first_text_ms"]["n"] == 1
+        for lane_state in proxy.lanes.values():
+            lane_snap = lane_state.snapshot()
+            assert lane_snap["cooldown_active"] is False
+            assert lane_snap["model_cooldowns"] == {}
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
 def test_strip_antigravity_model_switch_items_removes_mid_session_notices() -> None:
     strip = MODULE["strip_antigravity_model_switch_items"]
     raw = json.dumps(
