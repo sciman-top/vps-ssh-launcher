@@ -146,13 +146,25 @@ argon-high 经 admission 端到端恢复。**验证方法铁律：客户端路�
 8318（过 admission）**——8317 直连探针本次三次造成"已恢复"假阳性
 （18:01 用户在窗内被拒 vs 直连 200 的矛盾即源于此）。
 
-**P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
-`restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
-model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
-A 号铸造的签名注入 B 号请求（#7846：签名密文含 cloud_project_number）。
-设计：①缓存条目记录铸造 authID（写路径有 auth）；②replayScope 已携带
-sessionKey（"responses:"+Session-Id，caller-scope 命名空间化）——写路径建立
-sessionKey→keys 索引；③selector 两处 "bound to new auth"（普通 1839/LCP
-2000）绑定到不同 auth 时按 sessionKey 清刷缓存条目。缺失签名的降级=回到
-特性前形态（缓存本为修复 carriers 被剥的问题），可接受；清刷只影响重绑会话。
-风险=translator 写链需要穿 sessionKey，爆炸半径在 sdk 翻译层，须独立事务。
+**P2（v8.1.1 复核后精化规格，下代 fork 事务实施）**：跨号
+thoughtSignature 泄漏封口——`restoreGeminiResponsesTextSignatures`
+（translator，授权无关阶段，调用点 request.go:85）按 model+messageID 回注缓存
+签名；affinity 重绑（删号/停用/重启）后首个请求会把 A 号铸造的签名注入 B 号
+请求（#7846：签名密文含 cloud_project_number）。
+
+**v8.1.1 复核结论**：原 sessionKey 索引方案（穿 translator 写链）爆炸半径过
+大；精化为**执行器侧签名→凭据索引**（零 translator/cache/selector 改动）：
+①新文件 `internal/runtime/executor/antigravity_signature_auth_isolation.go`
+——进程内 `sha256(sig)[:16] → {authID, seenAt}` 索引（TTL 1h、上限 2 万、带
+锁）；②写点=上游 200 后从响应体递归收集 `thoughtSignature` 值记入索引（非流
+=bodyBytes；流=需先核实 StreamErrorProbe 是否保留聚合 body——**唯一待 recon
+项**，若无则流式退化为 strip-unknown 规则）；③剥离点=发送前对 translated
+Gemini payload 的 `request.contents[].parts[].thoughtSignature` 逐项查索引：
+已知且异号→**替换为 `internalsignature.GeminiSkipThoughtSignatureValidator`**
+（仓内既有降级模式，保留 part 结构）；未知且非 functionCall part→同样替换
+（覆盖重启后 KV 恢复的旧签名）；未知且 functionCall part→保留（客户端回显的
+工具签名，剥离有 400 风险=协议固有面，非代理增量）；④挂钩=execute/stream/
+tokens 四处 `sanitizeAntigravityGeminiRequestSignaturesDoc` 调用点旁（执行器
+go:559 的 sanitize 行走模式可参照）。剥离缺失签名的降级=特性前形态，可接
+受。**未决项仅一个**：流式 body 保留度 recon（30 分钟）；实施+构建+swap 预算
+半天，建议挂 12-01 月维或下一空闲窗。
