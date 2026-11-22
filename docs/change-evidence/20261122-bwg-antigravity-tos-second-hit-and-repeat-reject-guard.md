@@ -49,3 +49,48 @@
 
 **回滚**：部署事务自带 backup-first 回滚；代码回滚 =
 `git revert` 单提交后重跑同模板事务（改 pin 对）。
+
+## 后续 fork 换代：antigravity 单凭据日量帽（同日第二代）
+
+**动机**：affinity 把会话钉在单凭据上，重日会把全部流量（及 Google 的单账号
+启发式）压在少数 G4-capable 号上；#7768 把"单凭据集中"列为关联信号。
+`AntigravityConfig` 原本只有 sensitive-words/connection-pool/tos-pause-window，
+无任何配额旋钮（`antigravity-credits` 是 Claude 模型的兜底路由，非配额帽）。
+
+**P1（本代已实施）**：新增 `oauth.providers.antigravity.per-credential-daily-cap`
+（0=禁用）。executor 在 Execute/ExecuteStream 入口（短冷却检查之后）按
+`auth.ID` 计数当日（UTC）上游尝试，达帽→对该 (auth, model) 落
+`markAntigravityShortCooldownRequired` 至 UTC 日终（复用既有短冷却机制，
+selector 自动换兄弟号）+ 429（带 Retry-After）。计数器进程内存态、重启即清
+（偏向服务可用）、带锁、UTC 日翻轮换零。overlay 五文件：
+`internal/config/config_types.go`、
+`internal/runtime/executor/antigravity_daily_cap.go(+_test.go)`、
+`antigravity_executor_execute.go`、`antigravity_executor_stream.go`。
+构建事务 `outputs/build-cpa-v8080-antigravity-guard-20261122.ps1`
+（三 overlay 叠加：gemini-raw → agy-effort → guard；路径逃逸校验 + 6 文件
+效果 sha + vet/test 覆盖 internal/config 与 internal/runtime/executor）。
+镜像 `cli-proxy-api-fork:v8.0.80-gemini-raw-daily-cap`
+（`outputs/build-fork-image-20261122.ps1`，base digest 不变，fork-binary
+sha 进 OCI 标签）。
+
+**部署记录（同日 15:28Z）**：binary sha `39bc774f`（bwg 容器内 vet+test 全绿）→
+镜像 `cli-proxy-api-fork:v8.0.80-gemini-raw-daily-cap`（id `efd9ef31`，base
+digest 不变）→ swap 事务 `outputs/cpa-v8080-guard-swap-transaction-20261122.ps1`
+（drain 锁 + 回滚武装 + `LANE_STATE_DELTA=none` + auth disabled 集合不变）→
+config 增 `per-credential-daily-cap: 150`（保 inode 热加载实证 15:28:25Z）。
+事务教训两条入账：①post-recreate 健康探针撞 CPA 重启竞态（ConnectionReset），
+脚本需有界重试；②插件注册行版本 pin 必须随插件升级同步（0.21.27→0.21.29 各
+回滚一次）。账面 `scripts/remote/fork-binary.sha256` 已同 commit 更新。
+备份：`/root/cpa-config-backup-before-daily-cap-*.yaml`、
+`/opt/cliproxyapi/backups/20261122T152802*-swap-v8080-to-daily-cap/`。
+
+**P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
+`restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
+model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
+A 号铸造的签名注入 B 号请求（#7846：签名密文含 cloud_project_number）。
+设计：①缓存条目记录铸造 authID（写路径有 auth）；②replayScope 已携带
+sessionKey（"responses:"+Session-Id，caller-scope 命名空间化）——写路径建立
+sessionKey→keys 索引；③selector 两处 "bound to new auth"（普通 1839/LCP
+2000）绑定到不同 auth 时按 sessionKey 清刷缓存条目。缺失签名的降级=回到
+特性前形态（缓存本为修复 carriers 被剥的问题），可接受；清刷只影响重绑会话。
+风险=translator 写链需要穿 sessionKey，爆炸半径在 sdk 翻译层，须独立事务。
