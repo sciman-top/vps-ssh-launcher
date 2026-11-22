@@ -2704,6 +2704,87 @@ _ANTIGRAVITY_STRIPPED_DEVELOPER_TAGS = (
     "skills_instructions",
 )
 
+_ANTIGRAVITY_RETRY_ONLY_USER_TEXTS = frozenset({"continue", "retry", "resume", "继续"})
+
+
+def collapse_antigravity_retry_user_turns(
+    path: str, body: bytes, lane_name: str | None
+) -> tuple[bytes, int]:
+    """Remove duplicate retry-only turns from failed old sessions.
+
+    A failed Codex turn can remain as a user item even when no assistant/tool
+    item was produced. Repeating the same retry action then grows the input
+    with duplicate short user turns. Only that narrow shape is eligible:
+    normal assistant/tool history, images, and arbitrary user text pass through.
+    The latest retry-only turn is retained.
+    """
+    if lane_name != "antigravity-oauth":
+        return body, 0
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return body, 0
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED or not isinstance(payload, dict):
+        return body, 0
+    items = payload.get("input")
+    if not isinstance(items, list):
+        return body, 0
+
+    history_item_types = {
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+    }
+    if any(
+        isinstance(item, dict)
+        and (
+            item.get("role") in {"assistant", "model"}
+            or item.get("type") in history_item_types
+        )
+        for item in items
+    ):
+        return body, 0
+
+    retry_indices: dict[str, list[int]] = {}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict) or item.get("role") != "user":
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list) and content:
+            if any(
+                not isinstance(part, dict)
+                or part.get("type") != "input_text"
+                or not isinstance(part.get("text"), str)
+                for part in content
+            ):
+                continue
+            text = "".join(part["text"] for part in content).strip()
+        else:
+            continue
+        normalized = text.casefold()
+        if normalized in _ANTIGRAVITY_RETRY_ONLY_USER_TEXTS:
+            retry_indices.setdefault(normalized, []).append(index)
+
+    duplicate_indices = {
+        index
+        for indices in retry_indices.values()
+        if len(indices) > 1
+        for index in indices[:-1]
+    }
+    if not duplicate_indices:
+        return body, 0
+
+    payload["input"] = [
+        item for index, item in enumerate(items) if index not in duplicate_indices
+    ]
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        len(duplicate_indices),
+    )
+
 
 def strip_antigravity_model_switch_items(
     path: str, body: bytes, lane_name: str | None
@@ -4827,6 +4908,17 @@ class Handler(BaseHTTPRequestHandler):
                 "protocol_normalized model=%s kind=antigravity_developer_notice %s %s",
                 observed_model,
                 notice_counts,
+                self._trace_context,
+            )
+        body, collapsed_retry_turns = collapse_antigravity_retry_user_turns(
+            self.path, body, lane_name
+        )
+        if collapsed_retry_turns:
+            logging.info(
+                "protocol_normalized model=%s kind=antigravity_retry_history "
+                "duplicate_user_turns=%s %s",
+                observed_model,
+                collapsed_retry_turns,
                 self._trace_context,
             )
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None

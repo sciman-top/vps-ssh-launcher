@@ -4321,6 +4321,59 @@ def test_strip_antigravity_skills_instructions_standalone_and_bundle() -> None:
     )
 
 
+def test_collapse_antigravity_retry_user_turns_keeps_latest_only() -> None:
+    collapse = MODULE["collapse_antigravity_retry_user_turns"]
+    body = json.dumps(
+        {
+            "model": "gemini-4-hydrogen-xhigh",
+            "input": [
+                {"role": "user", "content": "initial task"},
+                {"role": "user", "content": "继续"},
+                {"role": "user", "content": "继续"},
+                {"role": "user", "content": "continue"},
+                {"role": "user", "content": "continue"},
+                {"role": "user", "content": "final task"},
+            ],
+            "stream": True,
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    normalized, removed = collapse("/v1/responses", body, "antigravity-oauth")
+
+    assert removed == 2
+    assert [item["content"] for item in json.loads(normalized)["input"]] == [
+        "initial task",
+        "继续",
+        "continue",
+        "final task",
+    ]
+
+
+def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -> None:
+    collapse = MODULE["collapse_antigravity_retry_user_turns"]
+    body = json.dumps(
+        {
+            "model": "gemini-4-hydrogen-xhigh",
+            "input": [
+                {"role": "user", "content": "继续"},
+                {"role": "assistant", "content": "已完成"},
+                {"role": "user", "content": "继续"},
+                {
+                    "role": "user",
+                    "content": [{"type": "input_image", "image_url": "x"}],
+                },
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    normalized, removed = collapse("/v1/responses", body, "antigravity-oauth")
+
+    assert removed == 0
+    assert normalized == body
+
+
 def test_normalize_antigravity_image_detail_preserves_images_and_tool_results() -> None:
     normalize = MODULE["normalize_antigravity_image_detail"]
     raw = json.dumps(
