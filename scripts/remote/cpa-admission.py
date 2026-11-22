@@ -2710,13 +2710,15 @@ _ANTIGRAVITY_RETRY_ONLY_USER_TEXTS = frozenset({"continue", "retry", "resume", "
 def collapse_antigravity_retry_user_turns(
     path: str, body: bytes, lane_name: str | None
 ) -> tuple[bytes, int]:
-    """Remove duplicate retry-only turns from failed old sessions.
+    """Remove duplicate retry-only turns from old sessions.
 
     A failed Codex turn can remain as a user item even when no assistant/tool
     item was produced. Repeating the same retry action then grows the input
-    with duplicate short user turns. Only that narrow shape is eligible:
-    normal assistant/tool history, images, and arbitrary user text pass through.
-    The latest retry-only turn is retained.
+    with duplicate short user turns, and later failures can continue that
+    pattern after earlier turns have produced history. Exact retry-only user
+    items are therefore collapsed independently of surrounding history, while
+    images, tool results, and arbitrary user text pass through. The latest
+    retry-only turn for each retry text is retained.
     """
     if lane_name != "antigravity-oauth":
         return body, 0
@@ -2727,23 +2729,6 @@ def collapse_antigravity_retry_user_turns(
         return body, 0
     items = payload.get("input")
     if not isinstance(items, list):
-        return body, 0
-
-    history_item_types = {
-        "reasoning",
-        "function_call",
-        "function_call_output",
-        "custom_tool_call",
-        "custom_tool_call_output",
-    }
-    if any(
-        isinstance(item, dict)
-        and (
-            item.get("role") in {"assistant", "model"}
-            or item.get("type") in history_item_types
-        )
-        for item in items
-    ):
         return body, 0
 
     retry_indices: dict[str, list[int]] = {}

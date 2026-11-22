@@ -4350,6 +4350,44 @@ def test_collapse_antigravity_retry_user_turns_keeps_latest_only() -> None:
     ]
 
 
+def test_collapse_antigravity_retry_user_turns_works_after_history() -> None:
+    collapse = MODULE["collapse_antigravity_retry_user_turns"]
+    body = json.dumps(
+        {
+            "model": "claude-sonnet-5-5-high",
+            "input": [
+                {"role": "user", "content": "initial task"},
+                {"role": "assistant", "content": "partial result"},
+                {"type": "function_call", "name": "inspect", "arguments": "{}"},
+                {
+                    "type": "function_call_output",
+                    "call_id": "inspect",
+                    "output": "result",
+                },
+                {"role": "user", "content": "继续"},
+                {"role": "developer", "content": "<collaboration_mode>"},
+                {"role": "user", "content": "继续"},
+                {"role": "user", "content": "继续"},
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    normalized, removed = collapse("/v1/responses", body, "antigravity-oauth")
+    parsed = json.loads(normalized)
+
+    assert removed == 2
+    assert [item.get("role") for item in parsed["input"]] == [
+        "user",
+        "assistant",
+        None,
+        None,
+        "developer",
+        "user",
+    ]
+    assert parsed["input"][-1]["content"] == "继续"
+
+
 def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -> None:
     collapse = MODULE["collapse_antigravity_retry_user_turns"]
     body = json.dumps(
@@ -4369,9 +4407,15 @@ def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -
     ).encode()
 
     normalized, removed = collapse("/v1/responses", body, "antigravity-oauth")
+    parsed = json.loads(normalized)
 
-    assert removed == 0
-    assert normalized == body
+    assert removed == 1
+    assert [item.get("role") for item in parsed["input"]] == [
+        "assistant",
+        "user",
+        "user",
+    ]
+    assert parsed["input"][2]["content"] == [{"type": "input_image", "image_url": "x"}]
 
 
 def test_normalize_antigravity_image_detail_preserves_images_and_tool_results() -> None:
