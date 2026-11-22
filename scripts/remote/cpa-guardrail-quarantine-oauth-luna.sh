@@ -679,6 +679,14 @@ provider_aliases = {
     if isinstance(model, dict)
     and isinstance(model.get("alias", model.get("name")), str)
 }
+provider_aliases.update(
+    model.get("alias", model.get("name"))
+    for models in manifest.get("oauth_settings", {}).values()
+    if isinstance(models, list)
+    for model in models
+    if isinstance(model, dict)
+    and isinstance(model.get("alias", model.get("name")), str)
+)
 optional = {
     model
     for provider in manifest.get("providers", [])
