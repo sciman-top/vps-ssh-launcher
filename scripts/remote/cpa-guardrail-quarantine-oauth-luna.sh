@@ -252,9 +252,11 @@ if ! grep -Eq '^[[:space:]]*force-model-prefix:[[:space:]]*true[[:space:]]*$' "$
   echo "REFUSE unexpected CPA routing policy"
   exit 1
 fi
-# Require exactly one credential for the selected provider: quarantine must stop
-# traffic while leaving a reversible, refreshable slot behind. Anything else is
-# an unexpected topology and is refused before the first mutation.
+# Codex quarantine historically targets one personal OAuth slot, so keep its
+# exact-one topology guard. Antigravity is a pool: the safe provider-level
+# action must be able to quarantine all remaining active credentials together.
+# Refuse an empty pool, but accept multiple Antigravity files without exposing
+# or mutating their contents.
 if ! python3 - "$AUTH_DIR" <<'PY'
 import json
 import os
@@ -277,8 +279,12 @@ for path in sorted(Path(sys.argv[1]).glob("*.json")):
             raise SystemExit("REFUSE unexpected OAuth auth type")
         if auth_type == provider:
             active += 1
-if active != 1:
-    raise SystemExit("REFUSE expected exactly one active credential for selected OAuth provider")
+if provider == "antigravity":
+    if active < 1:
+        raise SystemExit("REFUSE expected at least one active credential for selected OAuth provider")
+else:
+    if active != 1:
+        raise SystemExit("REFUSE expected exactly one active credential for selected OAuth provider")
 print("ACTIVE_OAUTH_FILES=%d" % active)
 PY
 then

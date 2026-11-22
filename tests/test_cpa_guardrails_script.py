@@ -5285,6 +5285,16 @@ foreach ($case in @(
                     ),
                     encoding="utf-8",
                 )
+            (root / "antigravity-second.json").write_text(
+                json.dumps(
+                    {
+                        "type": "antigravity",
+                        "access_token": "fixture-secret-2",
+                        "refresh_token": "fixture-refresh-2",
+                    }
+                ),
+                encoding="utf-8",
+            )
             for provider in ("codex", "antigravity"):
                 with self.subTest(provider=provider):
                     result = subprocess.run(
@@ -5295,7 +5305,12 @@ foreach ($case in @(
                         check=False,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stdout.strip(), b"ACTIVE_OAUTH_FILES=1")
+                    expected = (
+                        b"ACTIVE_OAUTH_FILES=2"
+                        if provider == "antigravity"
+                        else b"ACTIVE_OAUTH_FILES=1"
+                    )
+                    self.assertEqual(result.stdout.strip(), expected)
                     self.assertNotIn(b"fixture-secret", result.stdout + result.stderr)
 
     def test_antigravity_doctor_executes_active_and_quarantined_states(self) -> None:
