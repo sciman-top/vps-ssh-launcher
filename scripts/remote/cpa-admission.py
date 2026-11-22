@@ -2705,6 +2705,11 @@ _ANTIGRAVITY_STRIPPED_DEVELOPER_TAGS = (
     "model_switch",
     "skills_instructions",
 )
+_ANTIGRAVITY_DEDUP_DEVELOPER_PART_TAGS = (
+    "collaboration_mode",
+    "plugins_instructions",
+    "codex_apps_client_time_context",
+)
 
 _ANTIGRAVITY_RETRY_ONLY_USER_TEXTS = frozenset({"continue", "retry", "resume", "继续"})
 _ANTIGRAVITY_HISTORICAL_IMAGE_PLACEHOLDER = (
@@ -2902,6 +2907,201 @@ def strip_antigravity_model_switch_items(
     return (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
         removed,
+    )
+
+
+def _wrapped_xml_tag(text: str, tags: tuple[str, ...]) -> str | None:
+    """Return the matching tag name when stripped *text* is wrapped in ``<tag>...</tag>``."""
+    stripped = text.strip()
+    for tag in tags:
+        if stripped.startswith(f"<{tag}>") and stripped.endswith(f"</{tag}>"):
+            return tag
+    return None
+
+
+def _is_developer_or_system_message(item: Any) -> bool:
+    return (
+        isinstance(item, dict)
+        and item.get("role") in {"developer", "system"}
+        and item.get("type") in (None, "message")
+    )
+
+
+def _is_displaced_app_context_bundle(item: Any) -> bool:
+    if not (
+        isinstance(item, dict)
+        and item.get("role") == "developer"
+        and item.get("type") in (None, "message")
+    ):
+        return False
+    content = item.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    first = content[0]
+    return (
+        isinstance(first, dict)
+        and first.get("type") == "input_text"
+        and isinstance(first.get("text"), str)
+        and _wrapped_xml_tag(first["text"], ("app-context",)) == "app-context"
+    )
+
+
+def normalize_antigravity_developer_context(
+    path: str, body: bytes, lane_name: str | None
+) -> tuple[bytes, dict[str, int]]:
+    """Keep displaced session-start context in systemInstruction and trim mid-session duplicates.
+
+    In warm-forked or compacted Codex Desktop sessions, early compacted user
+    messages can precede the ``<app-context>`` developer bundle, causing
+    CLIProxyAPI to emit that ~52 KiB bundle as a mid-conversation ``contents``
+    user turn instead of ``systemInstruction``. Later turns can also inject
+    multi-part ``developer`` items combining ``<skills_instructions>`` with
+    ``<collaboration_mode>`` / ``<plugins_instructions>``, plus repeated
+    ``<collaboration_mode>`` and ``<codex_apps_client_time_context>`` notices.
+    On Antigravity ``/responses`` requests, this helper:
+      1. Promotes displaced ``<app-context>`` developer bundles into the
+         leading developer prefix (zero information loss, routed to
+         ``systemInstruction``).
+      2. Strips mid-conversation ``<skills_instructions>`` parts even inside
+         multi-part developer items.
+      3. Deduplicates mid-conversation ``<collaboration_mode>``,
+         ``<plugins_instructions>``, and ``<codex_apps_client_time_context>``
+         parts, dropping copies identical to the leading prefix and keeping
+         only the latest changed copy when state actually changed.
+    """
+    if lane_name != "antigravity-oauth":
+        return body, {}
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return body, {}
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED or not isinstance(payload, dict):
+        return body, {}
+    items = payload.get("input")
+    if not isinstance(items, list) or not items:
+        return body, {}
+
+    first_conv_index: int | None = None
+    for idx, item in enumerate(items):
+        if not _is_developer_or_system_message(item):
+            first_conv_index = idx
+            break
+    if first_conv_index is None:
+        return body, {}
+
+    promoted_bundles = 0
+    promoted: list[Any] = []
+    rest: list[Any] = []
+    for item in items[first_conv_index:]:
+        if _is_displaced_app_context_bundle(item):
+            promoted.append(item)
+            promoted_bundles += 1
+        else:
+            rest.append(item)
+    if promoted:
+        items = [*items[:first_conv_index], *promoted, *rest]
+        first_conv_index += len(promoted)
+
+    prefix_tag_texts: dict[str, set[str]] = {}
+    for item in items[:first_conv_index]:
+        if not (isinstance(item, dict) and item.get("role") == "developer"):
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            tag = _wrapped_xml_tag(content, _ANTIGRAVITY_DEDUP_DEVELOPER_PART_TAGS)
+            if tag is not None:
+                prefix_tag_texts.setdefault(tag, set()).add(content.strip())
+        elif isinstance(content, list):
+            for part in content:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "input_text"
+                    and isinstance(part.get("text"), str)
+                ):
+                    tag = _wrapped_xml_tag(
+                        part["text"], _ANTIGRAVITY_DEDUP_DEVELOPER_PART_TAGS
+                    )
+                    if tag is not None:
+                        prefix_tag_texts.setdefault(tag, set()).add(
+                            part["text"].strip()
+                        )
+
+    stripped_skills_parts = 0
+    deduped_parts = 0
+    seen_tags: set[str] = set()
+    kept_tail_rev: list[Any] = []
+
+    for item in reversed(items[first_conv_index:]):
+        if not (
+            isinstance(item, dict)
+            and item.get("role") == "developer"
+            and item.get("type") in (None, "message")
+        ):
+            kept_tail_rev.append(item)
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            if _wrapped_xml_tag(content, ("skills_instructions",)) is not None:
+                stripped_skills_parts += 1
+                continue
+            tag = _wrapped_xml_tag(content, _ANTIGRAVITY_DEDUP_DEVELOPER_PART_TAGS)
+            if tag is not None:
+                norm = content.strip()
+                if tag in seen_tags or norm in prefix_tag_texts.get(tag, ()):
+                    deduped_parts += 1
+                    seen_tags.add(tag)
+                    continue
+                seen_tags.add(tag)
+            kept_tail_rev.append(item)
+            continue
+        if not isinstance(content, list):
+            kept_tail_rev.append(item)
+            continue
+
+        kept_parts_rev: list[Any] = []
+        item_changed = False
+        for part in reversed(content):
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "input_text"
+                and isinstance(part.get("text"), str)
+            ):
+                text = part["text"]
+                if _wrapped_xml_tag(text, ("skills_instructions",)) is not None:
+                    stripped_skills_parts += 1
+                    item_changed = True
+                    continue
+                tag = _wrapped_xml_tag(text, _ANTIGRAVITY_DEDUP_DEVELOPER_PART_TAGS)
+                if tag is not None:
+                    norm = text.strip()
+                    if tag in seen_tags or norm in prefix_tag_texts.get(tag, ()):
+                        deduped_parts += 1
+                        seen_tags.add(tag)
+                        item_changed = True
+                        continue
+                    seen_tags.add(tag)
+            kept_parts_rev.append(part)
+
+        if not kept_parts_rev:
+            continue
+        if item_changed:
+            item = dict(item)
+            item["content"] = list(reversed(kept_parts_rev))
+        kept_tail_rev.append(item)
+
+    stats: dict[str, int] = {}
+    if promoted_bundles:
+        stats["promoted_bundles"] = promoted_bundles
+    if stripped_skills_parts:
+        stats["stripped_skills_parts"] = stripped_skills_parts
+    if deduped_parts:
+        stats["deduped_parts"] = deduped_parts
+    if not stats:
+        return body, {}
+
+    payload["input"] = [*items[:first_conv_index], *reversed(kept_tail_rev)]
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        stats,
     )
 
 
@@ -4982,6 +5182,19 @@ class Handler(BaseHTTPRequestHandler):
                 "protocol_normalized model=%s kind=antigravity_developer_notice %s %s",
                 observed_model,
                 notice_counts,
+                self._trace_context,
+            )
+        body, dev_context_stats = normalize_antigravity_developer_context(
+            self.path, body, lane_name
+        )
+        if dev_context_stats:
+            context_counts = " ".join(
+                f"{key}={count}" for key, count in sorted(dev_context_stats.items())
+            )
+            logging.info(
+                "protocol_normalized model=%s kind=antigravity_developer_context %s %s",
+                observed_model,
+                context_counts,
                 self._trace_context,
             )
         body, collapsed_retry_turns = collapse_antigravity_retry_user_turns(

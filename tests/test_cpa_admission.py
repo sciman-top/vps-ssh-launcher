@@ -4076,6 +4076,261 @@ def test_only_completed_sse_can_heal_half_open_lane(
             running.join(timeout=2)
 
 
+def test_normalize_antigravity_developer_context_promotes_bundle_and_trims_duplicates() -> (
+    None
+):
+    normalize = MODULE["normalize_antigravity_developer_context"]
+    raw = json.dumps(
+        {
+            "model": "gemini-4-hydrogen-xhigh",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "base system prompt"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "early user prompt 1"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<app-context>desktop</app-context>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>host skills</skills_instructions>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<plugins_instructions>plugins</plugins_instructions>",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<codex_apps_client_time_context>t1</codex_apps_client_time_context>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<codex_apps_client_time_context>t2</codex_apps_client_time_context>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>re-injected 1</skills_instructions>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "working on it"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>re-injected 2</skills_instructions>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<plugins_instructions>plugins</plugins_instructions>",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "continue"}],
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+    cleaned, stats = normalize("/v1/responses", raw, "antigravity-oauth")
+    assert stats == {
+        "promoted_bundles": 1,
+        "stripped_skills_parts": 2,
+        "deduped_parts": 5,
+    }
+    parsed = json.loads(cleaned)
+    inp = parsed["input"]
+    # Leading prefix now has base prompt + promoted <app-context> bundle before first user.
+    assert inp[0]["role"] == "developer"
+    assert inp[0]["content"][0]["text"] == "base system prompt"
+    assert inp[1]["role"] == "developer"
+    assert inp[1]["content"][0]["text"] == "<app-context>desktop</app-context>"
+    assert (
+        inp[1]["content"][1]["text"]
+        == "<skills_instructions>host skills</skills_instructions>"
+    )
+    assert inp[2]["role"] == "user"
+    assert inp[2]["content"][0]["text"] == "early user prompt 1"
+    # Only the latest time context survives in the mid-conversation tail.
+    mid_devs = [item for item in inp[2:] if item.get("role") == "developer"]
+    assert len(mid_devs) == 1
+    assert (
+        mid_devs[0]["content"][0]["text"]
+        == "<codex_apps_client_time_context>t2</codex_apps_client_time_context>"
+    )
+
+    # Non-antigravity lane and non-responses path must stay byte-identical.
+    unchanged_lane, stats_lane = normalize("/v1/responses", raw, "chatgpt-oauth")
+    assert unchanged_lane == raw and stats_lane == {}
+    unchanged_path, stats_path = normalize(
+        "/v1/chat/completions", raw, "antigravity-oauth"
+    )
+    assert unchanged_path == raw and stats_path == {}
+
+
+def test_normalize_antigravity_developer_context_keeps_changed_mode_and_spares_normal_sessions() -> (
+    None
+):
+    normalize = MODULE["normalize_antigravity_developer_context"]
+    # Normal session: <app-context> bundle is already in leading prefix -> no-op.
+    normal_raw = json.dumps(
+        {
+            "model": "gemini-4-neon-xhigh",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "base prompt"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<app-context>desktop</app-context>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<skills_instructions>skills</skills_instructions>",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                },
+            ],
+        }
+    ).encode("utf-8")
+    out_normal, stats_normal = normalize(
+        "/v1/responses", normal_raw, "antigravity-oauth"
+    )
+    assert out_normal == normal_raw and stats_normal == {}
+
+    # Mode switch mid-session (Default -> Plan): keep the latest changed mode.
+    switched_raw = json.dumps(
+        {
+            "model": "gemini-4-neon-xhigh",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "enter plan mode"}],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Default</collaboration_mode>",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "<collaboration_mode>Plan</collaboration_mode>",
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode("utf-8")
+    out_switched, stats_switched = normalize(
+        "/v1/responses", switched_raw, "antigravity-oauth"
+    )
+    assert stats_switched == {"deduped_parts": 1}
+    parsed_switched = json.loads(out_switched)
+    mid_devs = [
+        item for item in parsed_switched["input"][2:] if item.get("role") == "developer"
+    ]
+    assert len(mid_devs) == 1
+    assert (
+        mid_devs[0]["content"][0]["text"]
+        == "<collaboration_mode>Plan</collaboration_mode>"
+    )
+
+
 def test_stream_probe_supports_passthrough_without_lane_config() -> None:
     """Passthrough SSE probes collect usage/TTFT/errors with zero lane side effects."""
     probe = StreamErrorProbe(
