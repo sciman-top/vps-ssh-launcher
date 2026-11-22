@@ -900,21 +900,6 @@ def load_config(
                     f"lanes[{index}].requests_per_minute must not exceed "
                     f"{ADMISSION_RPM_MAX_CEILING}"
                 )
-        # Optional bounded recovery probe for a mirrored capacity cooldown.
-        # Absent => 0 (disabled), which keeps the historical blind window for
-        # any older projected JSON. A positive value re-tests recovery one
-        # request at a time on that cadence while the lane cools; holds and
-        # operator review never probe.
-        mirror_probe = raw_lane.get("mirror_probe_interval_seconds")
-        if mirror_probe is not None:
-            mirror_probe = _positive_number(
-                mirror_probe, f"lanes[{index}].mirror_probe_interval_seconds"
-            )
-            if mirror_probe < 30:
-                raise ValueError(
-                    f"lanes[{index}].mirror_probe_interval_seconds must be at "
-                    "least 30 seconds"
-                )
         normalized_lanes.append(
             {
                 "name": name,
@@ -926,7 +911,6 @@ def load_config(
                 "cooldown_cap_seconds": schedule_cap,
                 "retry_after_max_seconds": config["retry_after_max_seconds"],
                 "early_probe_interval_seconds": early_probe_interval,
-                "mirror_probe_interval_seconds": mirror_probe or 0,
                 "capacity_statuses": frozenset(statuses),
                 "capacity_markers": tuple(item.strip().lower() for item in markers),
                 "model_capacity_markers": tuple(
@@ -1408,44 +1392,54 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
     return hold, delay
 
 
-# Google's own per-account buckets are family-level: one "Gemini models" pool,
-# one "Claude and GPT models" pool, each with 5h+weekly windows shared across
-# their models (antigravity.google/docs/models). The GEMINI 4 ARGON weekly
-# bucket rolled out separately (Oct-Nov 2026): same-account panels showed the
-# GEMINI bucket at 83% while ARGON sat at 32% at the same instant
-# (2026-11-21 09:42:16), so an argon 429 says nothing about the gemini pool
-# and vice versa. Keep argon its own group so neither side cools the other.
-ANTIGRAVITY_QUOTA_GROUPS = ("gemini", "claude-gpt", "argon")
+ANTIGRAVITY_QUOTA_GROUPS = (
+    "gemini",
+    "claude",
+    "gpt",
+    "glm",
+    "deepseek",
+)
 
 
 def antigravity_quota_group(model: str | None) -> str | None:
     name = routing_model(model or "").lower()
-    if name.startswith("gemini-4-argon"):
-        return "argon"
     if name.startswith("gemini-"):
         return "gemini"
-    if name.startswith(("claude-", "gpt-oss-")):
-        return "claude-gpt"
+    if name.startswith("claude-"):
+        return "claude"
+    if name.startswith(("gpt-", "gpt_")):
+        return "gpt"
+    if name.startswith("glm-"):
+        return "glm"
+    if name.startswith("deepseek-"):
+        return "deepseek"
     return None
 
 
-def antigravity_envelope(body: bytes) -> dict[str, Any] | None:
-    """Return the parts of a verified Cloud Code error envelope.
+def antigravity_quota_scope_key(model: str | None) -> str | None:
+    """Return the narrowest durable key supported by the observed signal."""
+    name = routing_model(model or "").strip().lower()
+    if not name or antigravity_quota_group(name) is None:
+        return None
+    return f"model:{name}"
 
-    Field data: the quota and capacity verdicts Google sends on this lane
-    carry exactly one error object (HTTP code 429, or the 503 UNAVAILABLE
-    twin pinned by the upstream credits-fallback suite) with exactly one
-    google.rpc ErrorInfo detail on the cloudcode-pa domain.
-    """
+
+def antigravity_individual_quota(body: bytes, model: str | None) -> bool:
+    """Accept only the observed Cloud Code quota envelope and matching model."""
     errors = protocol_errors(body)
     if len(errors) != 1 or not isinstance(errors[0], dict):
-        return None
+        return False
     error = errors[0]
-    if error.get("code") not in (429, 503):
-        return None
+    if (
+        error.get("code") != 429
+        or error.get("status") != "RESOURCE_EXHAUSTED"
+        or not str(error.get("message", "")).startswith("Individual quota reached")
+        or antigravity_quota_group(model) is None
+    ):
+        return False
     details = error.get("details")
     if not isinstance(details, list):
-        return None
+        return False
     error_info = [
         detail
         for detail in details
@@ -1453,70 +1447,15 @@ def antigravity_envelope(body: bytes) -> dict[str, Any] | None:
         and detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo"
     ]
     if len(error_info) != 1:
-        return None
+        return False
     info = error_info[0]
-    domain = info.get("domain")
-    if domain not in (None, "cloudcode-pa.googleapis.com"):
-        return None
-    reason = info.get("reason")
-    if not isinstance(reason, str) or not reason:
-        return None
-    return {"error": error, "info": info, "reason": reason}
-
-
-def antigravity_envelope_scope(body: bytes, model: str | None) -> str | None:
-    """Map a verified Cloud Code envelope to its cooldown scope.
-
-    QUOTA_EXHAUSTED with the "Individual quota reached" message is Google's
-    family-bucket verdict: it cools the quota group. The envelope's own model
-    reference (metadata.model) may name a sibling -- the bucket is shared, so
-    the report is still about the family -- and is accepted while it lands in
-    the same family as the request; a cross-family reference is not a verdict
-    about this request's bucket and stays conservative. The model-capacity
-    reasons park exactly the named model (upstream #7884: observed on
-    gemini-4-hydrogen/neon and claude-opus-5-5, with a 503 UNAVAILABLE twin
-    whose message names the model). Every other reason -- the per-user rate
-    limiters (RATE_LIMIT_EXCEEDED and friends) and anything envelope-shaped
-    but unverified -- is account-level or unattributable and keeps the
-    lane-wide freeze. None means "not a Cloud Code envelope"; the generic
-    capacity_scope verdict stands.
-    """
-    parsed = antigravity_envelope(body)
-    if parsed is None:
-        return None
-    error: dict[str, Any] = parsed["error"]
-    info: dict[str, Any] = parsed["info"]
-    reason: str = parsed["reason"]
     metadata = info.get("metadata")
-    named = metadata.get("model") if isinstance(metadata, dict) else None
-    message = str(error.get("message", ""))
-    requested_group = antigravity_quota_group(model)
-    if reason == "QUOTA_EXHAUSTED":
-        if (
-            error.get("status") != "RESOURCE_EXHAUSTED"
-            or not message.startswith("Individual quota reached")
-            or requested_group is None
-            or not isinstance(named, str)
-            or not named
-            or antigravity_quota_group(named) != requested_group
-        ):
-            return "lane"
-        return "quota_group"
-    if reason in ("MODEL_CAPACITY_EXHAUSTED", "CAPACITY_EXHAUSTED"):
-        if requested_group is None:
-            return None
-        if not isinstance(named, str) or not named:
-            marker = "no capacity available for model "
-            lowered = message.lower()
-            named = (
-                lowered.split(marker, 1)[1].strip().strip("\"'.")
-                if marker in lowered
-                else ""
-            )
-        if named and str(named) != routing_model(model or ""):
-            return None
-        return "model"
-    return "lane"
+    return (
+        info.get("reason") == "QUOTA_EXHAUSTED"
+        and info.get("domain") == "cloudcode-pa.googleapis.com"
+        and isinstance(metadata, dict)
+        and metadata.get("model") == routing_model(model or "")
+    )
 
 
 def capacity_scope(
@@ -1571,18 +1510,10 @@ def capacity_scope(
         marker in raw_text for marker in GEMINI_CAPACITY_MARKERS
     ):
         # RESOURCE_EXHAUSTED is Google's own quota verdict and appears in no
-        # other marker list, so it must stay classified as capacity before
-        # the routing/auth exemptions below can interpret a 400-shaped
-        # wrapper as "not capacity" and forward it. Its scope is the model:
-        # 2026-11-21 17:13Z a single opus 429 (Retry-After 17504) froze the
-        # whole lane for the advertised ~4.9h while sibling requests were
-        # still being served seconds later, and 2026-11-22 00:12Z a flash
-        # RESOURCE_EXHAUSTED landed while neon on the same credential was
-        # 200. Bucket-level verdicts arrive as the "Individual quota
-        # reached" envelope instead and are grouped by
-        # antigravity_quota_group(); this generic shape parks only the
-        # requested model.
-        return "model"
+        # other marker list, so it must reach the ladder before the routing/
+        # auth exemptions below can interpret a 400-shaped wrapper as "not
+        # capacity" and forward it.
+        return "lane"
     # A response that carries both a model-specific marker and a
     # credential/account marker must stay lane-scoped.  Narrowing it to the
     # model would let sibling requests continue against a shared account while
@@ -2825,20 +2756,6 @@ class LaneState:
                 "early_probe_interval_seconds", ADMISSION_EARLY_PROBE_INTERVAL_SECONDS
             )
         )
-        # Optional bounded recovery probe for a mirrored capacity cooldown.
-        # Zero (the default for lanes that omit the key) keeps the historical
-        # blind window: an upstream-advertised Retry-After then parks the lane
-        # with no in-window verification at all. A positive interval re-tests
-        # recovery one request at a time on that cadence, so a credential- or
-        # shed-scoped refusal heals on real demand instead of at the window's
-        # end (2026-11-21: one Antigravity 429 carrying Retry-After 17504 froze
-        # the shared lane for the whole window while sibling traffic was still
-        # being served seconds later). Holds never probe: the operator-review
-        # gate in acquire() returns before this branch is reachable.
-        self._mirror_probe_interval = float(
-            config.get("mirror_probe_interval_seconds") or 0.0
-        )
-        self._mirror_probe_at = 0.0
         self.inflight = 0
         self.pending = 0
         self.failure_streak = 0
@@ -2907,15 +2824,31 @@ class LaneState:
                     "invalid OAuth circuit state; operator review required"
                 )
             group_deadlines = saved.get("quota_group_not_before", {})
+            if not isinstance(group_deadlines, dict):
+                raise ValueError(
+                    "invalid OAuth circuit state; operator review required"
+                )
+            # The first rollout used the upstream's observed Claude/GPT
+            # aggregate. Preserve that deadline while allowing new events to
+            # persist the two families independently.
+            if "claude-gpt" in group_deadlines:
+                legacy_until = group_deadlines.pop("claude-gpt")
+                group_deadlines.setdefault("family:claude", legacy_until)
+                group_deadlines.setdefault("family:gpt", legacy_until)
             allowed_fields = state_fields | (
                 {"quota_group_not_before"} if self._antigravity_models else set()
             )
             if (
                 saved.get("version") != 1
                 or not state_fields <= saved.keys() <= allowed_fields
-                or not isinstance(group_deadlines, dict)
                 or any(
-                    group not in ANTIGRAVITY_QUOTA_GROUPS
+                    (
+                        not (
+                            group in ANTIGRAVITY_QUOTA_GROUPS
+                            or group.startswith("family:")
+                            or group.startswith("model:")
+                        )
+                    )
                     or type(until) not in (int, float)
                     or not math.isfinite(until)
                     or until < 0
@@ -2949,13 +2882,6 @@ class LaneState:
             if remaining:
                 self.open_until = time.monotonic() + remaining
                 self._server_not_before = self.open_until
-                if self._mirror_probe_interval:
-                    # A restart inside an unverified window must not turn the
-                    # first client request into an immediate probe; the next
-                    # recheck waits one full interval instead.
-                    self._mirror_probe_at = (
-                        time.monotonic() + self._mirror_probe_interval
-                    )
         self._persisted_clear = (
             self._manual_hold is None
             and not self.open_until
@@ -3206,11 +3132,7 @@ class LaneState:
                     self.open_until = max(self.open_until, until)
                     self._server_not_before = max(self._server_not_before, until)
                     self._next_probe_at = self.open_until
-                    if self._mirror_probe_interval:
-                        self._mirror_probe_at = (
-                            time.monotonic() + self._mirror_probe_interval
-                        )
-                self._failure_generation += 1
+            self._failure_generation += 1
             self._persist_risk()
             self._condition.notify_all()
 
@@ -3249,8 +3171,6 @@ class LaneState:
         self.open_until = max(self.open_until, until)
         self._server_not_before = max(self._server_not_before, until)
         self._next_probe_at = self.open_until
-        if self._mirror_probe_interval:
-            self._mirror_probe_at = time.monotonic() + self._mirror_probe_interval
         logging.warning(
             "implausible_retry_after_clamped lane=%s seconds=%s cap=%s source=%s",
             self._lane_name or "other",
@@ -3261,21 +3181,6 @@ class LaneState:
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, _ceil_remaining_seconds(self.open_until, now))
-
-    def _cooldown_retry_after(self, now: float) -> int:
-        # The cooldown rejection must point at the moment the lane will
-        # actually re-evaluate recovery. For a mirror-probe lane that is the
-        # next probe slot, so a client retrying on the advertised value rides
-        # the probe; for every other lane this stays the window's end.
-        if self._mirror_probe_interval:
-            return max(
-                1,
-                min(
-                    _ceil_remaining_seconds(self.open_until, now),
-                    _ceil_remaining_seconds(self._mirror_probe_at, now),
-                ),
-            )
-        return self._open_retry_after(now)
 
     def _shed_retry_after(self, now: float) -> int:
         # A shed request that already burned its whole queue budget must not be
@@ -3302,23 +3207,17 @@ class LaneState:
         budget, so the value points at the probe slot or the window's end.
         """
 
-        deadline = max(
-            self._model_open_until.get(model, 0.0),
-            self._model_probe_at.get(model, 0.0),
-            self._model_server_not_before.get(model, 0.0),
+        return max(
+            1,
+            _ceil_remaining_seconds(
+                max(
+                    self._model_open_until.get(model, 0.0),
+                    self._model_probe_at.get(model, 0.0),
+                    self._model_server_not_before.get(model, 0.0),
+                ),
+                now,
+            ),
         )
-        server_not_before = self._model_server_not_before.get(model, 0.0)
-        if self._mirror_probe_interval and server_not_before:
-            # Same recheck-slot contract as `_cooldown_retry_after`: a
-            # Retry-After-armed model window on a mirror-probe lane is
-            # re-verified at the cadence, so the advertised retry points at
-            # the next recheck slot (when it fits inside the window) instead
-            # of the unverified magnitude. Ladder-armed windows (no
-            # server_not_before) keep advertising the window's end.
-            deadline = min(
-                deadline, max(server_not_before, self._model_probe_at.get(model, 0.0))
-            )
-        return max(1, _ceil_remaining_seconds(deadline, now))
 
     def _prune_rpm(self, now: float) -> None:
         """Drop admission timestamps older than the rolling 60s window."""
@@ -3345,22 +3244,9 @@ class LaneState:
         )
         if retry_after is not None:
             delay = min(max(1, retry_after), self._retry_after_max)
-        elif self._strict_backoff or streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
-            # Strict lanes park the model from the first refusal, mirroring
-            # the lane ladder's strict behavior: on the shared OAuth
-            # credential one upstream capacity verdict about a model is
-            # enough evidence to stop spending requests on it, while the
-            # early probe keeps the window short.
+        elif streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
             index = min(
-                max(
-                    0,
-                    streak
-                    - (
-                        1
-                        if self._strict_backoff
-                        else ADMISSION_COOLDOWN_FAILURE_THRESHOLD
-                    ),
-                ),
+                streak - ADMISSION_COOLDOWN_FAILURE_THRESHOLD,
                 len(self._schedule) - 1,
             )
             delay = self._schedule[index]
@@ -3369,29 +3255,17 @@ class LaneState:
         if delay is not None:
             # An upstream-advertised Retry-After is the upstream itself telling
             # us to back off that model, so the probe may not fire before it.
-            # Same contract as the lane-level `_server_not_before` -- except on
-            # a mirror-probe lane, where the advertised magnitude is treated as
-            # unverified: the 2026-11-21 opus window claimed 17504s while the
-            # upstream kept serving the account seconds later, and the
-            # 2026-11-22 flash window recovered in minutes. The model deadline
-            # is re-checked at the lane's mirror cadence instead of
-            # blind-parking the model for the whole advertisement; a hint
-            # shorter than the cadence keeps its own (shorter) deadline.
-            probe_delay = self._early_probe_interval
+            # Same contract as the lane-level `_server_not_before`.
             if retry_after is not None:
-                bound = min(max(1, retry_after), self._retry_after_max)
-                if self._mirror_probe_interval:
-                    bound = min(bound, int(self._mirror_probe_interval))
-                    probe_delay = float(bound)
                 self._model_server_not_before[model] = max(
                     self._model_server_not_before.get(model, 0.0),
-                    now + bound,
+                    now + min(max(1, retry_after), self._retry_after_max),
                 )
             self._model_open_until[model] = max(
                 self._model_open_until.get(model, 0.0),
                 now + min(delay, self._retry_after_max),
             )
-            self._model_probe_at[model] = now + probe_delay
+            self._model_probe_at[model] = now + self._early_probe_interval
 
     def begin_quota_check(self) -> None:
         with self._condition:
@@ -3400,8 +3274,15 @@ class LaneState:
     def _quota_retry_after(self, model: str | None, now: float) -> int:
         if not self._antigravity_models:
             return 0
-        group = antigravity_quota_group(model)
-        until = self._quota_group_until.get(group, 0.0) if group is not None else 0.0
+        group = antigravity_quota_scope_key(model)
+        family = antigravity_quota_group(model)
+        family_key = f"family:{family}" if family is not None else None
+        until = max(
+            self._quota_group_until.get(group, 0.0) if group is not None else 0.0,
+            self._quota_group_until.get(family_key, 0.0)
+            if family_key is not None
+            else 0.0,
+        )
         return max(0, _ceil_remaining_seconds(until, now))
 
     def acquire(
@@ -3416,7 +3297,6 @@ class LaneState:
             retry_after: int,
             probe: bool = False,
             model_probe: bool = False,
-            reset_probe: bool = False,
         ) -> Lease:
             if admitted and self._durable_risk and self._state_path is not None:
                 self._persist_risk()
@@ -3436,7 +3316,6 @@ class LaneState:
                 probe,
                 waited_ms=int((time.monotonic() - started) * 1000),
                 generation=self._failure_generation,
-                reset_probe=reset_probe,
                 model=model,
                 model_probe=model_probe,
                 model_generation=(
@@ -3538,25 +3417,6 @@ class LaneState:
                     free_under_billing_state = model in self._zero_cost_models
                     if self.open_until > now and not free_under_billing_state:
                         if (
-                            self._mirror_probe_interval
-                            and now >= self._mirror_probe_at
-                            and self.inflight < self._max_inflight
-                            and queue_turn
-                        ):
-                            # A mirrored capacity cooldown re-verifies recovery
-                            # one request at a time on the lane's configured
-                            # cadence. The probe is a reset probe: its success
-                            # clears the window immediately, and its failure
-                            # re-mirrors the upstream window and re-arms the
-                            # cadence, so the rate stays bounded no matter how
-                            # long the upstream claims to be busy.
-                            self.probe_inflight = True
-                            self.inflight += 1
-                            self._mirror_probe_at = now + self._mirror_probe_interval
-                            return lease(
-                                True, "mirror_probe", 0, probe=True, reset_probe=True
-                            )
-                        if (
                             not self._strict_backoff
                             and now >= max(self._next_probe_at, self._server_not_before)
                             and self.inflight < self._max_inflight
@@ -3572,11 +3432,6 @@ class LaneState:
                                 next_admission,
                                 max(self._next_probe_at, self._server_not_before),
                             )
-                        if self._mirror_probe_interval:
-                            # A mirror-probe lane queues a fitting arrival for
-                            # the next recheck slot instead of bouncing it for
-                            # the whole window; the queue head rides the probe.
-                            next_admission = min(next_admission, self._mirror_probe_at)
                         if not queued and (next_admission - now <= self._queue_timeout):
                             # A long local cooldown can still have an early
                             # probe inside the queue budget. Wait for that slot
@@ -3600,7 +3455,7 @@ class LaneState:
                                 timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                             )
                             continue
-                        return lease(False, "cooldown", self._cooldown_retry_after(now))
+                        return lease(False, "cooldown", self._open_retry_after(now))
                     if model is not None and (
                         self._model_open_until.get(model, 0.0) > now
                     ):
@@ -3784,10 +3639,20 @@ class LaneState:
                 # antigravity 401s of 01:59 had no attributable latch at all.
                 self._latch_hold(hold_reason, "response_signal")
             quota_group = (
-                antigravity_quota_group(lease.model)
+                antigravity_quota_scope_key(lease.model)
                 if self._antigravity_models and capacity_scope == "quota_group"
                 else None
             )
+            if (
+                capacity_error
+                and self._antigravity_models
+                and lease.model is not None
+                and capacity_scope == "lane"
+            ):
+                # A model-bearing Antigravity refusal must not fall through to
+                # the shared lane breaker when an upstream path omitted its
+                # narrower scope annotation.
+                capacity_scope = "model"
             if capacity_error and quota_group is not None and retry_after is not None:
                 self._quota_group_until[quota_group] = max(
                     self._quota_group_until.get(quota_group, 0.0), now + retry_after
@@ -3804,7 +3669,18 @@ class LaneState:
                 # The upstream named one model, so only that model is parked.
                 # Promoting it to the lane would refuse the healthy siblings
                 # that share the credential (and the concurrency budget).
-                self._record_model_capacity(lease.model, retry_after, now)
+                model_retry_after = retry_after
+                if (
+                    model_retry_after is None
+                    and self._lane_name == "antigravity-oauth"
+                ):
+                    # A generic 429 has no provider reset hint. Apply the
+                    # first local model cooldown immediately so one observed
+                    # refusal cannot be retried in a tight loop, while
+                    # preserving the response's "no upstream retry time"
+                    # wording.
+                    model_retry_after = self._schedule[0]
+                self._record_model_capacity(lease.model, model_retry_after, now)
                 if (
                     lease.probe
                     and not lease.model_probe
@@ -3818,7 +3694,6 @@ class LaneState:
                     self.open_until = 0.0
                     self._next_probe_at = 0.0
                     self._server_not_before = 0.0
-                    self._mirror_probe_at = 0.0
             elif capacity_error:
                 self._failure_generation += 1
                 self.failure_streak += 1
@@ -3878,8 +3753,6 @@ class LaneState:
                         if self._strict_backoff
                         else now + self._early_probe_interval
                     )
-                    if self._mirror_probe_interval:
-                        self._mirror_probe_at = now + self._mirror_probe_interval
                 if lease.model is not None:
                     # A lane-scoped refusal that landed on this model's request
                     # is still evidence about *this model*: upstream sheds are
@@ -3921,7 +3794,6 @@ class LaneState:
                 self.open_until = 0.0
                 self._next_probe_at = 0.0
                 self._server_not_before = 0.0
-                self._mirror_probe_at = 0.0
                 if (
                     lease.model is not None
                     and lease.model_generation
@@ -3992,10 +3864,6 @@ class LaneState:
                 "model_cooldowns": model_cooldowns,
                 "early_probe_in": max(
                     0, _ceil_remaining_seconds(self._next_probe_at, now)
-                ),
-                "mirror_probe_interval": self._mirror_probe_interval,
-                "mirror_probe_in": max(
-                    0, _ceil_remaining_seconds(self._mirror_probe_at, now)
                 ),
                 "half_open_probe": self.probe_inflight,
                 "failure_generation": self._failure_generation,
@@ -4600,6 +4468,12 @@ class Handler(BaseHTTPRequestHandler):
         # and the breaker must keep reading it that way; only the log lines use
         # the wider view, so a pass-through 5xx can be attributed to a model.
         observed_model = model or requested_model(self.path, body)
+        if lane_name == "antigravity-oauth" and model is None:
+            # Some streaming retries arrive through a lane-owned path whose
+            # catalog selection omitted the model even though the request
+            # body still names it. Preserve that model on the lease so a
+            # capacity response cannot fall back to the shared breaker.
+            model = observed_model
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         response_started = False
@@ -4715,6 +4589,11 @@ class Handler(BaseHTTPRequestHandler):
                         f"Antigravity quota group for {model} is cooling down; "
                         f"retry after {lease.retry_after}s."
                     )
+                elif lease.reason == "model_cooldown":
+                    message = (
+                        f"Antigravity model {model} is cooling down; "
+                        f"retry after {lease.retry_after}s."
+                    )
                 elif lease.reason == "rate_limited":
                     message = (
                         f"Shared upstream lane {lane_name} is at its local "
@@ -4724,12 +4603,6 @@ class Handler(BaseHTTPRequestHandler):
                     message = (
                         f"Shared upstream lane {lane_name} has a full queue; "
                         f"retry after {lease.retry_after}s."
-                    )
-                elif lease.reason == "model_cooldown":
-                    message = (
-                        f"Model {model} is cooling down on {lane_name}; "
-                        f"retry after {lease.retry_after}s. Sibling models on "
-                        f"the lane remain available."
                     )
                 else:
                     message = (
@@ -5270,15 +5143,7 @@ class Handler(BaseHTTPRequestHandler):
                     body_delay = stream_probe.retry_after
                 if body_delay is not None:
                     retry_after = max(retry_after or 0, body_delay)
-                    if lane_name != "antigravity-oauth":
-                        capacity_kind = "lane"
-                    # Antigravity keeps capacity_scope's verdict here: a
-                    # parsed delay is evidence about the failing model, and
-                    # widening it to the lane is exactly the 2026-11-21 17:13
-                    # over-cooling (one opus Retry-After of 17504s froze
-                    # never-used siblings for the advertised window). The
-                    # antigravity_quota_check block below owns the final
-                    # scope for this lane.
+                    capacity_kind = "lane"
             if (
                 pooled_lane
                 and lane_config is not None
@@ -5318,41 +5183,23 @@ class Handler(BaseHTTPRequestHandler):
                     response.status, bytes(probe), lane_config
                 )
             if antigravity_quota_check:
-                # Scope hierarchy for an Antigravity 429: a verified Cloud
-                # Code envelope owns the verdict -- the family bucket (quota
-                # group) for "Individual quota reached", the single model for
-                # the capacity reasons, the lane for the per-user rate
-                # limiters and anything envelope-shaped but unverified.
-                # Without an envelope, the generic RESOURCE_EXHAUSTED verdict
-                # parks the requested model (capacity_scope already said so),
-                # while a bare status or a routing-shaped wrapper keeps the
-                # conservative lane-wide freeze: detail-free 429 storms are
-                # documented as potentially content-fingerprint shaped
-                # (upstream #7768), where retries are the harm.
-                envelope_scope = (
-                    antigravity_envelope_scope(bytes(probe), lease.model)
-                    if lease is not None
+                # A generic Antigravity 429 has no trustworthy quota family
+                # or reset deadline. Park only the requested model until its
+                # bounded local cooldown expires. A structured
+                # QUOTA_EXHAUSTED envelope below can widen this to the exact
+                # verified family.
+                capacity_kind = "model" if lease is not None else "lane"
+                if (
+                    lease is not None
                     and stream_probe is None
                     and not client_lost.is_set()
                     and hold_reason is None
-                    else None
-                )
-                if envelope_scope == "quota_group" and not (
-                    body_delay is not None
+                    and body_delay is not None
                     and retry_after == body_delay
                     and 0 < body_delay <= 2147483647
+                    and antigravity_individual_quota(bytes(probe), lease.model)
                 ):
-                    # The bucket verdict is only durable when the group
-                    # window can be armed from the body-advertised reset;
-                    # otherwise fall back to the conservative lane freeze.
-                    envelope_scope = "lane"
-                if envelope_scope is not None:
-                    capacity_kind = envelope_scope
-                    if envelope_scope == "model" and retry_after is None:
-                        if body_delay is not None and 0 < body_delay <= 2147483647:
-                            retry_after = body_delay
-                elif capacity_kind is None:
-                    capacity_kind = "lane"
+                    capacity_kind = "quota_group"
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
