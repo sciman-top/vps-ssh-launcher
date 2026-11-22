@@ -12,8 +12,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $python = Resolve-ProjectPython -ProjectRoot $repoRoot
 $config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot
 
-$expectedOldPin = "28542fc75880c1d5216ac7eaa8bc578cb4ef6e1f7f646d93f25772da9da21069"
-$reviewedNewPin = "e28f4e8173233131e6ce83777f453a6dbee95428b37da4ff9c71cc0fc1ce8db6"
+$expectedOldPin = "e28f4e8173233131e6ce83777f453a6dbee95428b37da4ff9c71cc0fc1ce8db6"
+$reviewedNewPin = "1d7960e1e8a179ef127e743bf27c37fe0dfd8553fddd29594ebf477d963b70d2"
 $expectedConfigSha = "77b5f465e0e9139405e190f868c38229e4f9f378f28d4aac58a075d9c1d19ff7"
 $expectedRoutesSha = "5b7216965d69444ae38b57f73afafbae0d7435252967cf9a8df86029daa72ae2"
 $expectedBootstrapSha = "00f4b7d78384441cf8b42ca89e44e31af26875f9bf5ea8aaffe2f717de08aac4"

@@ -5962,7 +5962,7 @@ class Handler(BaseHTTPRequestHandler):
                     capacity_kind = envelope_scope
                 elif (
                     capacity_kind == "model"
-                    and retry_after is None
+                    and retry_after_header is None
                     and antigravity_bare_resource_exhausted(
                         response.status, bytes(probe)
                     )
