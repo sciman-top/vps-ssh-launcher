@@ -84,7 +84,22 @@ config 增 `per-credential-daily-cap: 150`（保 inode 热加载实证 15:28:25Z
 备份：`/root/cpa-config-backup-before-daily-cap-*.yaml`、
 `/opt/cliproxyapi/backups/20261122T152802*-swap-v8080-to-daily-cap/`。
 
-**P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
+**受控实战验收（同日 15:36–15:44Z）**：日量帽实弹演练——cap 压到 1（写穿容器
+挂载热加载）后对 `gemini-3.8-flash-high` 三发探针：conductor 日志捕获两次
+`429 … err=antigravity daily credential cap reached, 29948/29941 seconds
+remaining`（分别落在 `b7177976`、`gantasalabojes`，距 UTC 午夜秒数数学吻合），
+第二发换到未触帽凭据 200——**记账→触发→按凭据停车→selector 换号→客户端
+有界拒绝**全链实证。恢复 cap=150 热加载 + e2e 200 + doctor
+`DOCTOR_CONTRACT_OK`（lane-hold=OK、projection-drift 全 MATCH、
+runtime-binary=39bc774f 账面吻合）。已知自愈副作用：演练短冷却把
+b7177976/gantasalabojes 对 flash-high 停至 UTC 午夜（模型级冷却，neon/G4
+不受影响，其余 flash 凭据可用）。
+
+**新坑位（入 runbook 陷阱节语境）**：`sed -i`（tmp+rename）对本仓
+`/opt/cliproxyapi/config.yaml` 的单文件 bind-mount **再次实证不可见**——宿主
+与容器 inode 分裂（宿主 524619 vs 容器 525709），宿主后续同 inode 写全部失效；
+修复=docker exec 写穿容器挂载（无停机）+ drain 锁下 force-recreate 重绑归一。
+演练/恢复全程用写穿完成。
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
 model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
 A 号铸造的签名注入 B 号请求（#7846：签名密文含 cloud_project_number）。
