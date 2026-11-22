@@ -4321,6 +4321,74 @@ def test_strip_antigravity_skills_instructions_standalone_and_bundle() -> None:
     )
 
 
+def test_normalize_antigravity_image_detail_preserves_images_and_tool_results() -> None:
+    normalize = MODULE["normalize_antigravity_image_detail"]
+    raw = json.dumps(
+        {
+            "model": "gemini-4-neon-xhigh",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,PRIVATE_IMAGE",
+                            "detail": " ORIGINAL ",
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "image-high",
+                            "detail": "high",
+                        },
+                    ],
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-image",
+                    "output": [
+                        {
+                            "type": "input_image",
+                            "image_url": "tool-result-image",
+                            "detail": "original",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": "assistant-image",
+                            "detail": "original",
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+    cleaned, changed = normalize("/v1/responses", raw, "antigravity-oauth")
+    assert changed == 1
+    parsed = json.loads(cleaned)
+    assert (
+        parsed["input"][0]["content"][0]["image_url"]
+        == "data:image/png;base64,PRIVATE_IMAGE"
+    )
+    assert parsed["input"][0]["content"][0]["detail"] == "high"
+    assert parsed["input"][0]["content"][1]["detail"] == "high"
+    assert parsed["input"][1]["output"][0]["detail"] == "original"
+    assert parsed["input"][2]["content"][0]["detail"] == "original"
+
+    unchanged_lane, unchanged_count = normalize("/v1/responses", raw, "chatgpt-oauth")
+    unchanged_path, unchanged_path_count = normalize(
+        "/v1/chat/completions", raw, "antigravity-oauth"
+    )
+    assert unchanged_lane == raw and unchanged_count == 0
+    assert unchanged_path == raw and unchanged_path_count == 0
+
+
 def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -4378,7 +4446,14 @@ def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
                 {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "next"}],
+                    "content": [
+                        {"type": "input_text", "text": "next"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,PRIVATE_IMAGE",
+                            "detail": "original",
+                        },
+                    ],
                 },
             ],
         }
@@ -4397,7 +4472,9 @@ def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
         assert captured["content_length"] < len(req_body)
         forwarded = json.loads(captured["body"])
         assert len(forwarded["input"]) == 3
+        assert forwarded["input"][2]["content"][1]["detail"] == "high"
         assert "kind=antigravity_developer_notice model_switch=1" in caplog.text
+        assert "kind=antigravity_image_detail original_to_high=1" in caplog.text
     finally:
         client.close()
         for service in (server, upstream):

@@ -2761,6 +2761,57 @@ def strip_antigravity_model_switch_items(
     )
 
 
+def normalize_antigravity_image_detail(
+    path: str, body: bytes, lane_name: str | None
+) -> tuple[bytes, int]:
+    """Map stale Codex ``original`` image detail to Antigravity ``high``.
+
+    Codex sessions can retain image parts created before the model catalog
+    stopped advertising ``supports_image_detail_original`` for non-Codex
+    routes.  Preserve the image and the request history, while using the
+    Responses detail value accepted by the Antigravity translation path.
+    Only direct user message content is normalized.  Images nested in tool
+    results are provider output and must remain untouched.
+    """
+    if lane_name != "antigravity-oauth":
+        return body, 0
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return body, 0
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED or not isinstance(payload, dict):
+        return body, 0
+    items = payload.get("input")
+    if not isinstance(items, list):
+        return body, 0
+
+    changed = 0
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or item.get("role") != "user"
+            or item.get("type", "message") != "message"
+        ):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "input_image"
+                and isinstance(part.get("detail"), str)
+                and part["detail"].strip().lower() == "original"
+            ):
+                part["detail"] = "high"
+                changed += 1
+    if not changed:
+        return body, 0
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        changed,
+    )
+
+
 def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
     """Reject unrecognized encrypted inter-agent shapes before upstream."""
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
@@ -4754,6 +4805,17 @@ class Handler(BaseHTTPRequestHandler):
             # body still names it. Preserve that model on the lease so a
             # capacity response cannot fall back to the shared breaker.
             model = observed_model
+        body, normalized_image_details = normalize_antigravity_image_detail(
+            self.path, body, lane_name
+        )
+        if normalized_image_details:
+            logging.info(
+                "protocol_normalized model=%s kind=antigravity_image_detail "
+                "original_to_high=%s %s",
+                observed_model,
+                normalized_image_details,
+                self._trace_context,
+            )
         body, stripped_notices = strip_antigravity_model_switch_items(
             self.path, body, lane_name
         )
