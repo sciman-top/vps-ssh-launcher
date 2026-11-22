@@ -856,8 +856,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     f"expected request-scoped-errors pin to reject {label}: {issues}",
                 )
 
-        # Verify actual upstream body matching: stop only bare WAF / detail-only
-        # 429s and never intercept real quota/rate-limit bodies.
+        # Verify actual upstream body matching: the bare RESOURCE_EXHAUSTED
+        # 429 shape runs stop-and-cooldown (2026-11-22 field evidence: genuine
+        # per-model bucket exhaustion wears this shape and must cool the
+        # (auth, model) state so rebind-on=quota can move the session), and
+        # details-bearing real quota/rate-limit bodies are never intercepted.
         rules = policy["EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS"]
         agy_pattern = re.compile(rules["antigravity"][0]["match-regexr"][0])
         for bare_waf_body in (

@@ -243,15 +243,22 @@ EXPECTED_QUOTA = {
 # oauth.request-scoped-errors). Managed channels are pinned strictly while any
 # unrelated operator-added channels remain untouched across -Apply.
 EXPECTED_OAUTH_REQUEST_SCOPED_ERRORS: dict[str, list[dict[str, Any]]] = {
-    # CLIProxyAPI #7614 / #7768 / PR #7701: Google's Antigravity WAF/content
-    # filter returns a bare 429 RESOURCE_EXHAUSTED with no `details` array
-    # (real quota/rate-limit 429s carry google.rpc.ErrorInfo / RetryInfo under
-    # `details`). With max-retry-credentials=3 and
-    # session-affinity-rebind-on=quota, CPA would otherwise cool credential #1
-    # and replay the same flagged payload across up to 3 accounts in one turn.
-    # `action: "stop"` stops immediately on the first account without cooling
-    # or unbinding affinity, while cpa-admission still enforces 60s lane
-    # backoff against rapid client retries.
+    # CLIProxyAPI #7614 / #7768 / PR #7701: Google's Antigravity returns a
+    # bare 429 RESOURCE_EXHAUSTED with no `details` array (real quota
+    # 429s with google.rpc ErrorInfo/RetryInfo `details` do not reach this
+    # rule). 2026-11-22 field evidence (bwg) refuted the premise that this
+    # bare shape is WAF/content-flag only: the same payload returned 200 on
+    # healthy accounts while burnt accounts emitted exactly this body, and
+    # the burnt window self-recovered in ~30-60min -- the bare form is
+    # genuine per-(account, model) bucket exhaustion most of the time.
+    # Keeping `stop` pinned sessions to a burnt account for the 6h affinity
+    # TTL and interlocked with admission's 60s model ladder into a session
+    # lockout (no cooldown, no rebind, max-retry-credentials=1 forbids
+    # same-request failover). The bare rule therefore uses
+    # `stop-and-cooldown`: the request still halts on credential #1
+    # (anti-fan-out kept, no payload replay within one request), the
+    # (auth, model) state cools, and session-affinity-rebind-on=quota can
+    # move the session to a healthy account on its next request.
     "antigravity": [
         {
             "status": 429,
