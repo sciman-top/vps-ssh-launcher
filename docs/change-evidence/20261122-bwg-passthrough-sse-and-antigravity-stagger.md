@@ -49,7 +49,7 @@
 | `host_loaded` | `scripts/cpa_bwg_guardrails.ps1 -Profile bwg` strict doctor | `DOCTOR_CONTRACT_OK`、17/17 `projection-drift MATCH`、`admission-integrity=OK`、`admission-health=OK`、`semantic-policy=OK`、`nginx-syntax=OK`；确认 live `routing.strategy=round-robin` |
 | `controlled_live` | 非 OAuth `cpa-health.py cache-canary glm-5.3-flash chat` | `sample=1 hit_ratio=0.0000` -> `sample=2 hit_ratio=0.9956 (4096/4114)`、`HEALTH_OK` |
 | `live_accepted`（passthrough SSE） | 自然流量 `request_id=db988b9d25a8477a82cfe2b84b815a1a`（`2026-11-22T12:28:36Z`，`lane=passthrough model=gpt-6.2-astra`） | `status=200`、`first_text_ms=7318`、`sse_bytes=2860`、`sse_events=9`、`sse_last_event=response.completed`、`sse_inspection_complete=true`、`sse_terminal_seen=true`、`sse_text_finish=stop`、`usage_in=5425`、`usage_cached=4653`；`/healthz` `telemetry.models["gpt-6.2-astra"]` `cache_hit_ratio=0.8577` |
-| `pending_live_window`（Antigravity 错峰） | 首个稳态刷新周期（预计 `2026-11-22T12:50:28Z`–`12:56:59Z`） | 待自然窗口观测验证 10 秒聚类收敛至 1；因 `CLIProxyAPI v8.0.80` `auto_refresh_loop.go` 在 Antigravity JSON 仅存 `timestamp` 无 `last_refresh` 时重启瞬间会触发一次冷启动全量刷新，稳态周期错峰在内存 `LastRefreshedAt` 填充后生效 |
+| `live_accepted`（Antigravity 稳态错峰） | `2026-11-22 20:50:28`–`20:56:59 +08:00`（`12:50:28Z`–`12:56:59Z`）真实自然刷新日志 | 8 个凭据在 6 分 31 秒跨度内按 `1399/1459/1523/1657/1709/1753/1787/1789s` 依次刷新（`20:50:28, 20:51:29, 20:52:32, 20:54:46, 20:55:38, 20:56:22, 20:56:57, 20:56:59`），`max_cluster_10s` 由启动时 `8` 收敛至 `2`（末两项首轮差 `2s`，因互质随周期继续错开），8/8 二次写回后 `refresh_interval_seconds` 全部保留 |
 
 ## 回滚
 
@@ -59,4 +59,4 @@
 ## 边界
 
 - 未发送任何 OAuth 合成生成探针，未轮换账号/IP/UA，未清冷却，未放宽 `request-retry=0` 或并发上限，未触碰 `zz`，未修改本地只读外置仓 `CLIProxyAPI`。
-- `passthrough` SSE 自然流量验证仅证明 API-key 通道流式遥测与完整性采集生效；Antigravity 长期 OAuth 风控安全、429 率、以及首次稳态错峰周期需在后续自然流量窗口中持续观察。
+- `passthrough` SSE 与 Antigravity 首轮稳态错峰均已取得自然运行态证据；但容器重启瞬间的冷启动全量刷新（因 `CLIProxyAPI v8.0.80` `auto_refresh_loop.go` 未读取 Antigravity 的 `timestamp` 作为 `last_refresh`）、长期 OAuth 账号风控安全与上游模型容量 429 率仍需持续观察。
