@@ -1408,6 +1408,22 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
     return hold, delay
 
 
+def antigravity_bare_resource_exhausted(status: int, body: bytes) -> bool:
+    """Identify the bare Cloud Code 429 that carries no usable reset scope."""
+    if status != 429:
+        return False
+    payload = parsed_json_body(body)
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    return (
+        isinstance(error, dict)
+        and str(error.get("status", "")).upper() == "RESOURCE_EXHAUSTED"
+        and not error.get("details")
+        and not error.get("retryDelay")
+    )
+
+
 ANTIGRAVITY_QUOTA_GROUPS = (
     "gemini",
     # The GEMINI 4 ARGON weekly bucket rolled out separately from the shared
@@ -5944,6 +5960,20 @@ class Handler(BaseHTTPRequestHandler):
                     envelope_scope = None
                 if envelope_scope is not None:
                     capacity_kind = envelope_scope
+                elif (
+                    capacity_kind == "model"
+                    and retry_after is None
+                    and antigravity_bare_resource_exhausted(
+                        response.status, bytes(probe)
+                    )
+                ):
+                    # Cloud Code's bare RESOURCE_EXHAUSTED response has no
+                    # credential, model, or reset scope. A process-wide
+                    # model cooldown would let one stale conversation block
+                    # every other session using a healthy credential. Preserve
+                    # the upstream 429, but leave retry timing to the caller
+                    # and the provider's credential selector.
+                    capacity_kind = None
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300

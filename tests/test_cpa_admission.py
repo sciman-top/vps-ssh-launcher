@@ -2880,6 +2880,19 @@ def test_model_cooldown_parks_only_the_named_model(monkeypatch: Any) -> None:
     state.release(plain, capacity_error=False, retry_after=None)
 
 
+def test_antigravity_bare_resource_exhausted_has_no_local_reset_scope() -> None:
+    classify = MODULE["antigravity_bare_resource_exhausted"]
+    assert classify(
+        429,
+        b'{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}',
+    )
+    assert not classify(
+        429,
+        b'{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"retryDelay":"60s"}]}}',
+    )
+    assert not classify(500, b'{"error":{"status":"RESOURCE_EXHAUSTED"}}')
+
+
 def test_model_probe_success_cannot_clear_a_newer_model_failure(
     monkeypatch: Any,
 ) -> None:
@@ -5285,7 +5298,9 @@ def test_antigravity_upstream_429_explains_failure_in_responses_stream(
             if line.startswith(b"data: ") and b'"type":"response.failed"' in line
         )
         error = payload["response"]["error"]
-        assert error["code"] == "capacity"
+        assert error["code"] == (
+            "upstream_error" if retry_after is None else "capacity"
+        )
         assert "Antigravity upstream returned HTTP 429" in error["message"]
         assert error.get("retry_after") == retry_after
         if retry_after is None:
