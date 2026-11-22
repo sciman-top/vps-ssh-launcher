@@ -101,6 +101,16 @@ b7177976/gantasalabojes 对 flash-high 停至 UTC 午夜（模型级冷却，neo
 修复=docker exec 写穿容器挂载（无停机）+ drain 锁下 force-recreate 重绑归一。
 演练/恢复全程用写穿完成。
 
+**演练副作用清除（同日 16:4xZ）**：cap=1 演练的短冷却把 b7177976/gantasalabojes
+对 flash-high 停至 23:59:59Z（KV 持久化，重启不清；admission 侧表现为 600s
+有界模型窗循环，`lane_reject retry_after=597→464`）。kv.db 非 sqlite（homekv
+自有格式，禁止文件手术）；**正确路径=管理 API**：清单
+`GET /v0/management/auth-files`（X-Management-Key，`/root/.cpa-management-key`；
+v0/v8 两前缀路由组不同——auth-files 只在 v0，cooldown/reset 只在 v8）→
+`POST /v8/management/routing/cooldown/reset` `{"auth_index": "<sha8>"}` 逐号
+清除。两号 200 ok 后 flash-high 直连/过 admission 双路 200、neon 200、零
+lane_reject。
+
 **P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
 model+messageID 回注缓存签名；affinity 重绑（删号/停用/重启）后首个请求会把
