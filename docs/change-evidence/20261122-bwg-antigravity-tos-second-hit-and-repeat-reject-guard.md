@@ -135,7 +135,12 @@ jalumuruvenkatarao 于 flash-high=演练探针；距 UTC 午夜秒数吻合）�
 200。恢复 cap=150 后经管理 API 读**运行态** config 确认
 `per-credential-daily-cap=150`（日志窗口屡次漏抓 reload 行，运行态读数才是
 权威判据），演练冷却两号经管理 API reset 清空，flash/neon 双 200。手筋固化：
-**演练/恢复一律写穿+运行态读数验收+收尾清冷却**。
+**演练/恢复一律写穿+运行态读数验收+收尾清冷却**。附加发现（17:54Z）：演练期
+cap=1 的 429（`rate_limit_error` + Retry-After 21955s）被 admission 镜像成
+**600s 有界模型窗**（`lane_reject retry_after=597→346`，579KB argon turn 的
+dump=CPA 自产 cap 拒绝非上游判定）——有界复检设计按预期工作，但意味着演练
+期间目标模型对全体客户端 600s 循环不可用，**演练协议追加：恢复 cap 后须等
+admission 窗过期（≤600s）或明示用户窗到期时刻**。
 
 **P2（已定规格，下代实施）**：跨号 thoughtSignature 泄漏封口——
 `restoreGeminiResponsesTextSignatures`（translator，授权无关阶段）按
