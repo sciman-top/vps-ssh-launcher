@@ -4418,6 +4418,135 @@ def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -
     assert parsed["input"][2]["content"] == [{"type": "input_image", "image_url": "x"}]
 
 
+def test_omit_antigravity_historical_user_images_replaces_answered_images_only() -> (
+    None
+):
+    omit = MODULE["omit_antigravity_historical_user_images"]
+    raw = json.dumps(
+        {
+            "model": "claude-sonnet-5-5-high",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "older prompt"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,OLD_SCREENSHOT",
+                            "detail": "original",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "analyzed"}],
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-tool-img",
+                    "output": [
+                        {
+                            "type": "input_image",
+                            "image_url": "tool-result-image",
+                            "detail": "high",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "new prompt"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,NEW_SCREENSHOT",
+                            "detail": "high",
+                        },
+                    ],
+                },
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    normalized, omitted = omit("/v1/responses", raw, "antigravity-oauth")
+    parsed = json.loads(normalized)
+
+    assert omitted == 1
+    assert b"OLD_SCREENSHOT" not in normalized
+    assert parsed["input"][0]["content"][0] == {
+        "type": "input_text",
+        "text": "older prompt",
+    }
+    assert parsed["input"][0]["content"][1]["type"] == "input_text"
+    assert "Historical image omitted" in parsed["input"][0]["content"][1]["text"]
+    assert parsed["input"][2]["output"][0]["image_url"] == "tool-result-image"
+    assert parsed["input"][3]["content"][1]["image_url"] == (
+        "data:image/png;base64,NEW_SCREENSHOT"
+    )
+
+
+def test_omit_antigravity_historical_user_images_keeps_unanswered_and_other_lanes() -> (
+    None
+):
+    omit = MODULE["omit_antigravity_historical_user_images"]
+    unanswered = json.dumps(
+        {
+            "model": "claude-sonnet-5-5-high",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "first turn"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,FIRST_SHOT",
+                        },
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    out, omitted = omit("/v1/responses", unanswered, "antigravity-oauth")
+    assert omitted == 0
+    assert out == unanswered
+
+    answered = json.dumps(
+        {
+            "model": "gpt-6.2-sol",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_image", "image_url": "data:image/png;base64,X"}
+                    ],
+                },
+                {"type": "message", "role": "assistant", "content": "done"},
+                {"type": "message", "role": "user", "content": "continue"},
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    out_other_lane, omitted_other_lane = omit(
+        "/v1/responses", answered, "chatgpt-oauth"
+    )
+    assert omitted_other_lane == 0
+    assert out_other_lane == answered
+
+    out_other_path, omitted_other_path = omit(
+        "/v1/chat/completions", answered, "antigravity-oauth"
+    )
+    assert omitted_other_path == 0
+    assert out_other_path == answered
+
+
 def test_normalize_antigravity_image_detail_preserves_images_and_tool_results() -> None:
     normalize = MODULE["normalize_antigravity_image_detail"]
     raw = json.dumps(

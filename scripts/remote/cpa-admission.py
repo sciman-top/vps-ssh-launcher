@@ -2705,6 +2705,82 @@ _ANTIGRAVITY_STRIPPED_DEVELOPER_TAGS = (
 )
 
 _ANTIGRAVITY_RETRY_ONLY_USER_TEXTS = frozenset({"continue", "retry", "resume", "继续"})
+_ANTIGRAVITY_HISTORICAL_IMAGE_PLACEHOLDER = (
+    "[Historical image omitted after earlier assistant response; "
+    "ask the user to re-attach it if visual details are still needed.]"
+)
+_ANTIGRAVITY_MODEL_RESPONSE_ITEM_TYPES = frozenset(
+    {"reasoning", "function_call", "custom_tool_call"}
+)
+
+
+def omit_antigravity_historical_user_images(
+    path: str, body: bytes, lane_name: str | None
+) -> tuple[bytes, int]:
+    """Replace historical user images already answered by earlier model turns.
+
+    Images in the latest unanswered user turn(s) remain intact so the model
+    always sees newly attached screenshots. Earlier user images that precede
+    an assistant/model/reasoning/tool-call item are replaced with a concise
+    text placeholder on Antigravity Responses requests to avoid resending
+    large base64 screenshots on every subsequent turn. Images nested inside
+    tool results are left untouched.
+    """
+    if lane_name != "antigravity-oauth":
+        return body, 0
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return body, 0
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED or not isinstance(payload, dict):
+        return body, 0
+    items = payload.get("input")
+    if not isinstance(items, list):
+        return body, 0
+
+    last_model_response_index: int | None = None
+    for index, item in enumerate(items):
+        if isinstance(item, dict) and (
+            item.get("role") in {"assistant", "model"}
+            or item.get("type") in _ANTIGRAVITY_MODEL_RESPONSE_ITEM_TYPES
+        ):
+            last_model_response_index = index
+    if last_model_response_index is None:
+        return body, 0
+
+    omitted = 0
+    for item in items[:last_model_response_index]:
+        if (
+            not isinstance(item, dict)
+            or item.get("role") != "user"
+            or item.get("type", "message") != "message"
+        ):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        new_content = []
+        item_changed = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "input_image":
+                new_content.append(
+                    {
+                        "type": "input_text",
+                        "text": _ANTIGRAVITY_HISTORICAL_IMAGE_PLACEHOLDER,
+                    }
+                )
+                omitted += 1
+                item_changed = True
+            else:
+                new_content.append(part)
+        if item_changed:
+            item["content"] = new_content
+
+    if not omitted:
+        return body, 0
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        omitted,
+    )
 
 
 def collapse_antigravity_retry_user_turns(
@@ -4871,6 +4947,17 @@ class Handler(BaseHTTPRequestHandler):
             # body still names it. Preserve that model on the lease so a
             # capacity response cannot fall back to the shared breaker.
             model = observed_model
+        body, omitted_historical_images = omit_antigravity_historical_user_images(
+            self.path, body, lane_name
+        )
+        if omitted_historical_images:
+            logging.info(
+                "protocol_normalized model=%s kind=antigravity_historical_image "
+                "omitted=%s %s",
+                observed_model,
+                omitted_historical_images,
+                self._trace_context,
+            )
         body, normalized_image_details = normalize_antigravity_image_detail(
             self.path, body, lane_name
         )
