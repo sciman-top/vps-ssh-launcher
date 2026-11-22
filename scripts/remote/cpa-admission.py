@@ -2702,17 +2702,21 @@ def _model_switch_developer_text(item: Any) -> str | None:
 def strip_antigravity_model_switch_items(
     path: str, body: bytes, lane_name: str | None
 ) -> tuple[bytes, int]:
-    """Strip mid-conversation Codex ``<model_switch>`` developer notices on Antigravity.
+    """Strip Codex ``<model_switch>`` developer notices on Antigravity.
 
     When Codex Desktop switches models mid-session, it injects a ~20 KiB
     ``role="developer"`` message wrapped in ``<model_switch>...</model_switch>``
-    after prior assistant turns (duplicating the initial system prompt) and
-    retains it permanently in ``input``. CLIProxyAPI folds mid-conversation
-    developer items into ``contents`` user turns for Antigravity, which causes
-    Google's Cloud Code gateway to reject subsequent requests across all models
-    and accounts with a bare 429 ``RESOURCE_EXHAUSTED``. Removing only those
-    mid-conversation ``<model_switch>`` developer items preserves conversation
-    history, initial system instructions, and ``<collaboration_mode>`` notices.
+    (duplicating the initial system prompt) and retains it permanently in
+    ``input``. CLIProxyAPI folds mid-conversation developer items into
+    ``contents`` user turns for Antigravity, which causes Google's Cloud Code
+    gateway to reject subsequent requests across all models and accounts with
+    a bare 429 ``RESOURCE_EXHAUSTED``. 2026-11-22 live evidence showed the
+    notices can also accumulate before the first assistant turn -- aborted
+    turns produce no assistant output, so every later switch notice stays in
+    the prompt prefix and still trips the fingerprint. The strip therefore
+    matches by tag at any position: the initial system prompt and
+    ``<collaboration_mode>`` notices never start with the tag, so they pass
+    through untouched, as does user-quoted or non-``developer`` text.
     """
     if lane_name != "antigravity-oauth":
         return body, 0
@@ -2724,26 +2728,17 @@ def strip_antigravity_model_switch_items(
     items = payload.get("input")
     if not isinstance(items, list):
         return body, 0
-    seen_assistant = False
     filtered: list[Any] = []
     removed = 0
     for item in items:
-        if isinstance(item, dict) and (
-            item.get("role") == "assistant"
-            or item.get("type") in ("function_call", "reasoning")
+        text = _model_switch_developer_text(item)
+        if (
+            text is not None
+            and text.startswith("<model_switch>")
+            and text.endswith("</model_switch>")
         ):
-            seen_assistant = True
-            filtered.append(item)
+            removed += 1
             continue
-        if seen_assistant:
-            text = _model_switch_developer_text(item)
-            if (
-                text is not None
-                and text.startswith("<model_switch>")
-                and text.endswith("</model_switch>")
-            ):
-                removed += 1
-                continue
         filtered.append(item)
     if not removed:
         return body, 0

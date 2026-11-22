@@ -4076,9 +4076,7 @@ def test_only_completed_sse_can_heal_half_open_lane(
             running.join(timeout=2)
 
 
-def test_strip_antigravity_model_switch_items_removes_mid_session_notices_only() -> (
-    None
-):
+def test_strip_antigravity_model_switch_items_removes_mid_session_notices() -> None:
     strip = MODULE["strip_antigravity_model_switch_items"]
     raw = json.dumps(
         {
@@ -4154,9 +4152,11 @@ def test_strip_antigravity_model_switch_items_removes_mid_session_notices_only()
     assert unchanged_path == raw and removed_path == 0
 
 
-def test_strip_antigravity_model_switch_items_keeps_pre_assistant_and_non_matching() -> (
-    None
-):
+def test_strip_antigravity_model_switch_items_removes_prefix_notices_too() -> None:
+    # Aborted-turn sessions accumulate <model_switch> developer notices before
+    # the first assistant output; the strip must reach them (2026-11-22 live
+    # 429 evidence) while still sparing user-quoted, unclosed, and multi-part
+    # developer items.
     strip = MODULE["strip_antigravity_model_switch_items"]
     raw = json.dumps(
         {
@@ -4166,16 +4166,18 @@ def test_strip_antigravity_model_switch_items_keeps_pre_assistant_and_non_matchi
                     "type": "message",
                     "role": "developer",
                     "content": [
+                        {"type": "input_text", "text": "initial system prompt"}
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
                         {
                             "type": "input_text",
                             "text": "<model_switch>turn 1</model_switch>",
                         }
                     ],
-                },
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "ok"}],
                 },
                 {
                     "type": "message",
@@ -4191,18 +4193,52 @@ def test_strip_antigravity_model_switch_items_keeps_pre_assistant_and_non_matchi
                     "type": "message",
                     "role": "developer",
                     "content": [
+                        {"type": "input_text", "text": "<collaboration_mode>x"},
                         {
                             "type": "input_text",
-                            "text": "<model_switch>unclosed",
-                        }
+                            "text": "<model_switch>multipart</model_switch>",
+                        },
                     ],
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {"type": "input_text", "text": "<model_switch>unclosed"}
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "go"}],
+                },
+                {
+                    "type": "reasoning",
+                    "encrypted_content": "enc",
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
                 },
             ],
         }
     ).encode("utf-8")
 
     cleaned, removed = strip("/v1/responses", raw, "antigravity-oauth")
-    assert cleaned == raw and removed == 0
+    assert removed == 1
+    parsed = json.loads(cleaned)
+    assert len(parsed["input"]) == 7
+    assert parsed["input"][0]["content"][0]["text"] == "initial system prompt"
+    assert (
+        parsed["input"][1]["content"][0]["text"]
+        == "<model_switch>user quoted</model_switch>"
+    )
+    assert (
+        parsed["input"][2]["content"][1]["text"]
+        == "<model_switch>multipart</model_switch>"
+    )
+    assert parsed["input"][3]["content"][0]["text"] == "<model_switch>unclosed"
 
 
 def test_proxy_strips_antigravity_model_switch_and_updates_content_length(
