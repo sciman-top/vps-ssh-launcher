@@ -56,6 +56,33 @@ healthz 1s 内 ok、五车道 OPEN。
 39 字符、内嵌 `agt_gw_` 子串格式，整文件 grep 只摘出 17 字符子串 → 401。正确提取 =
 `config.yaml` `access.api-keys` 第一列表项（当前 line 65），sha8 核对 22bd415f。
 
+## 投影与 doctor 复核（三问补账，19:2xZ）
+
+严格 doctor（`cpa_bwg_guardrails.ps1` 默认模式，锚 HEAD blob）：EXIT=0，
+**DOCTOR_CONTRACT_OK**；`==projection-drift==` 17 项全 MATCH（含 cpa-admission.py 与
+cpa-admission.sha256，即远端字节==HEAD 提交字节）；`runtime_binary_hash=MATCH`、
+`POLICY_OK`；`==lane-hold==` 五车道全 OPEN；`antigravity_lane=OK allowed=6 名`
+（argon-high 在列）、`MODEL_IDS_UNKNOWN=none`；`model_substitution=WARN_SUBSTITUTION_
+REVIEWED_PAIR`（已知已裁决对）。`oauth_antigravity_files=5`（11-23 第三例 TOS 号出池
+后口径，与已知删号一致，非本次变更影响面）。
+
+另一条非计划内的 live 载入验证：19:15Z 事务重启时新代 binary 装载了仍含 argon 旧键
+的 risk 文件（`quota_group_not_before` 非空）——载入干净、五车道 OPEN（healthz 实测
+后 19:16Z 才手工解除），即新代对遗留键的 load/gate 路径经真机重启验证。
+
+## 三问状态
+
+- **投影** ✓：事务 byte-verify（staged/live/pin 三方 sha）+ integrity-check ×2 +
+  doctor projection-drift 17 MATCH。
+- **模拟** ✓：Full gates 1878 passed（含重写的 argon e2e——以本地 HTTP 复刻 18:44Z
+  真实信封形状，钉住零持久污染/600s recheck-slot/sibling 200/重启重探四断言）。
+- **受控实战** ✓：8318 全链 argon-high/flash-high 单发双 200（journal
+  `lane_admit→upstream_result 200`），argon 放行即证明 core 冷却感知选号导流活号。
+- 边界（诚实声明）：**"桶信封不再武装持久键"的武装面移除**属 e2e 模拟验证；其真机
+  确认只能等下次自然周桶烧尽——判据=risk 文件无新 `quota_group_not_before` 键 +
+  journal 出 `model_cooldown`（600s 窗）而非 `quota_group_cooldown`。伪造上游 429
+  做实弹属锤击违禁，不做。legacy 键 load/gate 路径已由 19:15Z 重启真机覆盖。
+
 ## 回滚
 
 远端：从备份目录 `20261123T191535…-admission-bucket-clamp-20261124` 重放四文件并
