@@ -146,11 +146,19 @@ argon-high 经 admission 端到端恢复。**验证方法铁律：客户端路�
 8318（过 admission）**——8317 直连探针本次三次造成"已恢复"假阳性
 （18:01 用户在窗内被拒 vs 直连 200 的矛盾即源于此）。
 
-**P2（v8.1.1 复核后精化规格，下代 fork 事务实施）**：跨号
+**P2（已被上游社区方案取代——自研路线判废，改为盯采纳）**：跨号
 thoughtSignature 泄漏封口——`restoreGeminiResponsesTextSignatures`
 （translator，授权无关阶段，调用点 request.go:85）按 model+messageID 回注缓存
 签名；affinity 重绑（删号/停用/重启）后首个请求会把 A 号铸造的签名注入 B 号
 请求（#7846：签名密文含 cloud_project_number）。
+**2026-11-22 23:28Z 判废修正**：社区成员 photobrand 在
+[#7846](https://github.com/router-for-me/CLIProxyAPI/issues/7846) 贴出 hermetic
+`go test -race` 复现器 + 基于 `SelectedAuthMetadataKey`（conductor 已发布至
+opts.Metadata）的 **21 行最小修复**——sessionKey 加 `auth:<hash8>:` 前缀使缓存
+键天然按凭据隔离，比执行器签名索引方案更小且上游惯用（origin/dev f911b453
+验证零回归）。**我方执行器索引设计判废勿再实施**；挂账改为：盯 #7846 修复被
+maintainer 采纳 → 随下一代 fork 构建吸收（#7515 同款 watch 模式）。原精化规格
+保留在 git 历史（5badeb4）备查。
 
 **v8.1.1 复核结论**：原 sessionKey 索引方案（穿 translator 写链）爆炸半径过
 大；精化为**执行器侧签名→凭据索引**（零 translator/cache/selector 改动）：
