@@ -285,6 +285,41 @@ retry_after=300` 循环 = 真 hold（人工复核锁，不自动恢复）。部�
 请求的熔断诉求；可执行增量仅一条——**新号入池前几小时保持低量**（补 carbon
 档新号时适用）。
 
+### 执行器侧 thoughtSignature 凭据隔离（sig-iso fork 车道，2026-11-23 起）
+
+#7846 的跨账号签名重放面有两层：reasoning replay 账本面已由 crossauth 车道
+（sessionKey `auth:<hash8>:` 前缀）封口；**translator trailing-signature 缓存
+（`cacheGeminiResponsesTextSignatures`，按 model+msgID 键、TTL 1h、无凭据维度）
+与客户端会话历史回带**两个 rebind 面由本车道封口。机制（fork overlay
+`sig-iso`，五叠层最上）：
+
+- **收集**：上游 200 响应里的 `thoughtSignature` 按**首发凭据**入索引
+  （进程内 `sha256(sig)[:16] → {authID, seenAt}`，TTL 1h、上限 2 万、带锁，
+  首源优先不覆盖）。三个响应面都挂：非流式 body、claude 非流式 SSE 循环、
+  流式逐事件（紧邻 `replayAccumulator.ObserveSSELine`）。
+- **剥离**：发送前对 `request.contents[].parts[].thoughtSignature`（及
+  countTokens 的顶层 `contents`）逐项查索引：**已知且异凭据→替换为
+  `internalsignature.GeminiSkipThoughtSignatureValidator`**（"skip" 旁路哨兵，
+  保留 part 结构）；**未知且非 functionCall part→同样替换**（覆盖重启后 KV/
+  缓存恢复的旧签名）；**未知且 functionCall part→保留**（客户端回显的工具
+  签名，剥离有 400 风险=协议固有残余面）；已知同凭据与哨兵值→不动。四个
+  挂钩点=既有 `sanitizeAntigravityGeminiRequestSignaturesDoc` 调用点旁
+  （execute ×2、stream、countTokens），**无条件运行**（上游 sanitize 自身被
+  `antigravityUsesReasoningReplayCache` 门控，非 replay 模型原本无任何签名
+  消毒）。debug 日志行 `isolated %d request thought signature(s)`。
+- **边界与判读**：哨兵替换的降级=特性前形态，只损 thinking 连续性不致 400；
+  重启清索引（进程态），重启后首批同账号请求也会出现哨兵替换=预期非故障；
+  replay 账本恢复的签名不经过剥离点，但其键已按凭据隔离（crossauth），
+  本车道不重复覆盖。不改 translator/缓存/selector，不做任何身份伪装。
+- **裁决记录（同日）**：扩 sensitive-words/patterns 重写覆盖面=拒绝
+  （2026-10-22 边界"不扩展混淆"不变）；`request-scoped-errors` 裸 429
+  `action: stop` 规则=不加（`max-retry-credentials=1` + repeat-reject guard
+  已实现同语义，叠加规则可能与 fork bare-429 语义互扰）；上游 dev `b8e3bc6`
+  序列化对齐=只跟踪不采纳（未发布、无 A/B 证据）；#7701 prompt-guard 插件=
+  拒绝（未合并第三方件，供应链面）；换出口/IP 分散=拒绝（置顶纪律）。
+  官方申诉表单 `forms.gle/hGzM9MEUv2azZsrb9`；条款底线不变：第三方 OAuth
+  接入本身即违约面，技术缓解只降检出概率，不构成合规。
+
 ### 降智检测锚（served-model 观测）
 
 - 服务侧已有：doctor `==model-substitution==`（`upstream served model` warn +
