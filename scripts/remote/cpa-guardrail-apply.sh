@@ -1802,6 +1802,10 @@ antigravity_provider_after["sensitive-words"] = ["gpt", "openai", "codex"]
 # ban-response posture explicit in the file cpa_policy.py pins and the doctor
 # reads, instead of depending on a CPA default that a later version could move.
 antigravity_provider_after["tos-pause-window"] = "2h"
+# Fork overlay daily-cap (deployed 2026-11-22): bound per-credential UTC daily
+# attempts so heavy days spread across the pool instead of concentrating on one
+# account. Pinned in cpa_policy.py so -Apply preserves it and doctor catches drift.
+antigravity_provider_after["per-credential-daily-cap"] = 150
 # Per-credential isolated HTTP/1.1 connection pool for Antigravity
 # (v8.0.79 antigravity_executor.go scopes transports by auth.ID). Enabling
 # avoids paying a fresh cross-ocean TCP+TLS handshake on every turn without

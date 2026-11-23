@@ -370,6 +370,7 @@ class ScriptValidationMixin:
                         "antigravity": {
                             "antigravity-credits": False,
                             "tos-pause-window": "2h",
+                            "per-credential-daily-cap": 150,
                             "connection-pool": {
                                 "enabled": True,
                                 "idle-conn-timeout": "30s",

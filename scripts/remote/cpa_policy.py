@@ -115,6 +115,12 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Deliberately not zero: see the runbook's early-release procedure, which
     # flips the value in place under incident control instead of editing it.
     ("oauth", "providers", "antigravity", "tos-pause-window"): "2h",
+    # Per-credential UTC daily attempt cap (fork overlay daily-cap, deployed
+    # 2026-11-22). Bounds single-account concentration on heavy days before
+    # selector rotates to a sibling credential. Pinning it here ensures
+    # -Apply preserves the cap and doctor fails closed if it drifts to 0 or
+    # disappears during management-UI reserialization.
+    ("oauth", "providers", "antigravity", "per-credential-daily-cap"): 150,
     # Per-credential isolated HTTP/1.1 connection pool for Antigravity
     # (internal/runtime/executor/antigravity_executor.go). Upstream defaults
     # `enabled` to false (fresh TCP+TLS handshake per request); enabling with

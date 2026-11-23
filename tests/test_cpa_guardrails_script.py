@@ -1794,6 +1794,11 @@ docker() {{
                 ]
                 expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
                     "antigravity", {}
+                )["per-credential-daily-cap"] = policy["EXPECTED_CONFIG_PATHS"][
+                    ("oauth", "providers", "antigravity", "per-credential-daily-cap")
+                ]
+                expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
+                    "antigravity", {}
                 )["connection-pool"] = {
                     "enabled": policy["EXPECTED_CONFIG_PATHS"][
                         (

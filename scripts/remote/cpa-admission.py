@@ -1499,52 +1499,87 @@ def _prune_repeat_reject_state(now: float) -> None:
 
 
 def antigravity_repeat_reject_remaining(
-    client_hash: str | None, now: float | None = None
+    client_hash: str | None,
+    now: float | None = None,
+    *,
+    body: bytes | None = None,
 ) -> int | None:
-    """Return seconds left on a request id's repeat-reject pause, if armed."""
-    if not client_hash:
+    """Return seconds left on a request's repeat-reject pause, if armed."""
+    keys = antigravity_repeat_reject_keys(client_hash, body=body)
+    if not keys:
         return None
     current = time.monotonic() if now is None else now
+    max_remaining: int | None = None
     with _repeat_reject_lock:
-        not_before = _repeat_reject_pauses.get(client_hash)
-        if not_before is None:
-            return None
-        remaining = int(not_before - current)
-        if remaining <= 0:
-            _repeat_reject_pauses.pop(client_hash, None)
-            return None
-        return remaining
+        for key in keys:
+            not_before = _repeat_reject_pauses.get(key)
+            if not_before is None:
+                continue
+            remaining = int(not_before - current)
+            if remaining <= 0:
+                _repeat_reject_pauses.pop(key, None)
+                continue
+            if max_remaining is None or remaining > max_remaining:
+                max_remaining = remaining
+    return max_remaining
+
+
+def antigravity_repeat_reject_keys(
+    client_hash: str | None, *, body: bytes | None = None
+) -> tuple[str, ...]:
+    """Build repeat-reject tracking key while ignoring placeholder hashes.
+
+    `diagnostic_hash(None)` returns `"-"` for log readability. Treating `"-"`
+    as a real key would pool every headerless request into one shared bucket;
+    when an explicit request-id hash is present use it directly, and otherwise
+    fall back to the redacted payload digest so headerless retries of the same
+    rejected body still pause without cross-contaminating unrelated requests.
+    """
+    if client_hash and client_hash != "-":
+        return (client_hash,)
+    if body:
+        body_digest = hashlib.sha256(body).hexdigest()[:12]
+        return (f"body:{body_digest}",)
+    return ()
 
 
 def record_antigravity_repeat_reject_arm(
-    client_hash: str | None, model: str | None, now: float | None = None
+    client_hash: str | None,
+    model: str | None,
+    now: float | None = None,
+    *,
+    body: bytes | None = None,
 ) -> None:
-    """Count a bare-429 arm for one client request id and pause repeats."""
-    if not client_hash:
+    """Count a bare-429 arm for one client request and pause unchanged repeats."""
+    keys = antigravity_repeat_reject_keys(client_hash, body=body)
+    if not keys:
         return
     now = time.monotonic() if now is None else now
+    armed_keys: list[str] = []
     with _repeat_reject_lock:
         window_start = now - ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS
-        arms = _repeat_reject_arms.setdefault(client_hash, deque())
-        while arms and arms[0] <= window_start:
-            arms.popleft()
-        arms.append(now)
+        for key in keys:
+            arms = _repeat_reject_arms.setdefault(key, deque())
+            while arms and arms[0] <= window_start:
+                arms.popleft()
+            arms.append(now)
+            if len(arms) >= ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD:
+                _repeat_reject_pauses[key] = (
+                    now + ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS
+                )
+                _repeat_reject_arms.pop(key, None)
+                armed_keys.append(key)
         _prune_repeat_reject_state(now)
-        if len(arms) < ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD:
-            return
-        _repeat_reject_pauses[client_hash] = (
-            now + ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS
+    for key in armed_keys:
+        logging.info(
+            "repeat_reject_pause_armed hash=%s model=%s threshold=%s window_s=%s "
+            "cooldown_s=%s",
+            key,
+            model or "other",
+            ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD,
+            ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS,
+            ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS,
         )
-        _repeat_reject_arms.pop(client_hash, None)
-    logging.info(
-        "repeat_reject_pause_armed hash=%s model=%s threshold=%s window_s=%s "
-        "cooldown_s=%s",
-        client_hash,
-        model or "other",
-        ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD,
-        ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS,
-        ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS,
-    )
 
 
 ANTIGRAVITY_QUOTA_GROUPS = (
@@ -5356,7 +5391,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         if lane_name == "antigravity-oauth":
             repeat_remaining = antigravity_repeat_reject_remaining(
-                getattr(self, "_client_request_hash", None)
+                getattr(self, "_client_request_hash", None),
+                body=body,
             )
             if repeat_remaining is not None:
                 reason = "repeat_rejected_cooldown"
@@ -6160,7 +6196,9 @@ class Handler(BaseHTTPRequestHandler):
                     # resubmission loop pauses before it escalates upstream.
                     capacity_kind = None
                     record_antigravity_repeat_reject_arm(
-                        getattr(self, "_client_request_hash", None), observed_model
+                        getattr(self, "_client_request_hash", None),
+                        observed_model,
+                        body=body,
                     )
             capacity_error = capacity_kind is not None
             successful = (

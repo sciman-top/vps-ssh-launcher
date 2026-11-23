@@ -701,6 +701,26 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 f"expected tos-pause-window pin to reject {bad!r}",
             )
 
+    def test_cpa_policy_pins_antigravity_per_credential_daily_cap(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        for bad in (None, 0, -1, 100, "150", True):
+            mutated = json.loads(json.dumps(config))
+            antigravity = mutated["oauth"]["providers"]["antigravity"]
+            if bad is None:
+                antigravity.pop("per-credential-daily-cap", None)
+            else:
+                antigravity["per-credential-daily-cap"] = bad
+            issues = policy["validate_config"](mutated)
+            self.assertTrue(
+                any("per-credential-daily-cap" in issue for issue in issues),
+                f"expected per-credential-daily-cap pin to reject {bad!r}",
+            )
+
     def test_cpa_policy_pins_antigravity_connection_pool(self) -> None:
         import runpy
 

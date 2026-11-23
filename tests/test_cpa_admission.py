@@ -9617,6 +9617,24 @@ def test_antigravity_repeat_reject_pause_semantics() -> None:
         # Sibling request ids and header-less requests are never paused.
         assert remaining("case-2", now=base + 61) is None
         assert remaining(None, now=base + 61) is None
+        assert remaining("-", now=base + 61) is None
+        # Placeholder "-" from diagnostic_hash(None) must never pool unrelated
+        # headerless requests into a shared pause bucket.
+        record("-", "gemini-4-neon-xhigh", now=base)
+        record("-", "gemini-4-neon-xhigh", now=base + 10)
+        record("-", "gemini-4-neon-xhigh", now=base + 20)
+        assert remaining("-", now=base + 21) is None
+        # Headerless retries of the exact same rejected payload are paused via
+        # the payload digest without affecting sibling bodies or explicit ids.
+        same_body = b'{"model":"gemini-4-neon-xhigh","input":"stuck turn"}'
+        other_body = b'{"model":"gemini-4-neon-xhigh","input":"fresh turn"}'
+        record("-", "gemini-4-neon-xhigh", now=base, body=same_body)
+        record("-", "gemini-4-neon-xhigh", now=base + 5, body=same_body)
+        record(None, "gemini-4-neon-xhigh", now=base + 10, body=same_body)
+        assert remaining("-", now=base + 11, body=same_body) is not None
+        assert remaining(None, now=base + 11, body=same_body) is not None
+        assert remaining("-", now=base + 11, body=other_body) is None
+        assert remaining("explicit-id", now=base + 11, body=same_body) is None
         # The pause holds for its full window and expires on its own.
         assert remaining("case-1", now=base + 1859) == 1
         assert remaining("case-1", now=base + 1861) is None
