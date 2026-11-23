@@ -125,6 +125,61 @@ agent 身份句裸 429（多人 A/B 复现）、裸 429=滥用早期信号（两
   `isolated %d request thought signature(s)` debug 行与上游 4xx 形状是否
   回归特性前形态。
 
+## 投影闭环与受控实战验收（同日晚间补充，用户追问"投影/受控实战"后授权执行）
+
+### 投影（guardrails -Apply 全覆盖）
+
+- 首跑 `REFUSE env BASE_URL_6 must match the approved slot 6 route`，fail-closed
+  回滚干净（ROLLBACK_VERIFIED）：本地 `providers.env`（mtime 11-19）缺 slot 6
+  两行——zcode-start-plan 是 11-21 `91983f3` 并仓的新槽，本地 env 落后于投影契约。
+  **修复=从生产 config 读取 slot 6 权威 key 经 base64 捕获回写本地 env，全程不落
+  transcript**（`outputs/sync-slot6-env-20261123.ps1`；备份
+  `providers.env.bak-sigiso-slot6-20261123`；生产条目字段名是 `keys` 非 `api-keys`）。
+- 复跑两次 `GUARDRAILS_APPLIED`（第一次后台跑完但输出缓冲到退出才落盘，曾误判
+  "静默死"；第二次前台超时转后台跑完），远端净效果：`auto-update.sh`=ff2cf5b9、
+  `cpa_provider_routes.json`=55c05f4d、`cpa_policy.py`/`cpa-admission.py`
+  全部 MATCH，**两项投影债清零**；config.yaml 重写为 7075297b，antigravity 节
+  `per-credential-daily-cap: 150`、`sensitive-words: [gpt,openai,codex]` +
+  `sensitive-words-replace` 映射、`tos-pause-window: 2h` 全部健在（文件为权威源）。
+  `payload.replace` 旧规则随本次 -Apply 清除（并行会话计划内）。
+- **运维坑位两条**：①后台（重定向+无窗）pwsh 跑 guardrails 两度在 ~52-70s 静默
+  退出，形状与 SSH "Authentication timeout" 吻合（前台同命令稳定）；后续 guardrails
+  长事务一律前台跑。②`/v0/management/config` 读视图在 -Apply 后对
+  `per-credential-daily-cap`/`sensitive-words`/`signature-cache-enabled` 三键返回
+  absent（文件与 policy 语义校验均确认在位）——管理读视图序列化怪癖，观察项，
+  判读一律以文件 + cpa_policy 为准。
+- **updater 心跳清零**：doctor 曾报 `heartbeat=cpa-update result=failed
+  exit_code=1 age_hours=5`——04:02Z 旧版 updater 在 fork 标签上解析失败（`9e6d53c`
+  的修复动因），失败先于本切片。投影后手动触发一次
+  `cliproxyapi-update.service`：新脚本跑通（disk hygiene + HEALTH_OK +
+  "no newer mature release; current=v8.1.1 readiness verified"，容器未动），
+  心跳转 `result=success exit_code=0`。
+- **strict doctor 终态：`DOCTOR_CONTRACT_OK`**（runtime-binary MATCH、全部心跳
+  success、投影零漂移、`semantic-policy=OK`、`antigravity_lane=OK`、
+  `credential_ban_signals_7d=0`）。
+
+### sig-iso 受控实战验收（8318 客户端路径，Gemini 原生格式）
+
+| 探针 | 载荷 | 结果 |
+| --- | --- | --- |
+| A（控制组） | 纯文本 generateContent | 200 / 2.8s / 非空 |
+| B（实弹组） | 同载荷 + model 轮 unknown `thoughtSignature`（非 functionCall part） | 200 / 4.9s / 非空 |
+
+- `signature-cache-enabled` 走默认 true（管理视图 absent=默认值生效），前置签名
+  校验跳过，bogus 签名可达消毒层；Gemini→antigravity 对称路径不进 replay 账本，
+  消毒层为该签名的唯一处置点。
+- 部署以来全量日志签名族上游错误
+  （`thinking_signature_invalid|thought_signature_invalid` 家族）= **0**；探后
+  六 lane 全部归位 idle。
+- **断言强度如实声明**：`isolated %d request thought signature(s)` debug 行在
+  info 日志级不可见，B 的 200 与"哨兵替换已发生"是强一致而非直证（直证=单测 +
+  二进制 sha 链）；已知异凭据分支（rebind E2E）由 `-race` 单测覆盖，生产多凭据
+  换乘演练（cap=1 / 管理 API 停用换乘）留月维窗口可选执行——日间执行会镜像
+  ≤600s flash 模型窗，不值得为边际保障打断在产流量。
+- 挂钩点在真实生产路径的活性由三重证据支撑：7 处挂钩源码核验 → 容器 binary
+  sha=8b593f38（Commit 串含 `+sig-iso`）→ 全量真实流量（含当日 workbuddy/
+  chatgpt/antigravity 在产请求）零签名族错误。
+
 ## 后续
 
 - 11-22 台账"12-01 窗口"待办中的 translator 残余面已由本代执行器侧过滤
@@ -132,3 +187,7 @@ agent 身份句裸 429（多人 A/B 复现）、裸 429=滥用早期信号（两
 - `request-scoped-errors` 裸 429 stop 语义如未来实测显示 repeat-reject
   阈值不足，再按 reviewed deploy 评估。
 - #7920 CountTokens in-band 错误体吞错：挂上游跟进，出现真实诊断损失再开案。
+- 可选（月维窗口）：sig-iso 多凭据换乘 E2E 演练（cap=1 或管理 API 停用换乘），
+  覆盖"已知异凭据→替换"分支的生产直证。
+- 管理读视图对 fork 旋钮键的序列化怪癖：下次上游/fork 换代时复核是否为
+  v8 schema 迁移行为，届时决定是否向 fork 报 issue。
