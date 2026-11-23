@@ -320,6 +320,25 @@ retry_after=300` 循环 = 真 hold（人工复核锁，不自动恢复）。部�
   官方申诉表单 `forms.gle/hGzM9MEUv2azZsrb9`；条款底线不变：第三方 OAuth
   接入本身即违约面，技术缓解只降检出概率，不构成合规。
 
+### 上游签名缓存缺口与重登后的连接纪律（2026-11-23 增补，v8.1.1 源码+上游 issue 核证）
+
+- **上游全局 signatureCache 无凭据维度**（[#7960](https://github.com/router-for-me/CLIProxyAPI/issues/7960)，
+  open；`internal/cache/signature_cache.go` 按 model-group+text-hash 键、TTL 3h）：
+  一个账号的 thoughtSignature 可经该缓存注入另一账号的上游请求。**本栈判定：
+  sig-iso 车道已把该面封口**——注入发生在请求构建期，剥离点无条件运行，
+  thinking-part 命中"未知"或"已知异凭据"分支均替换为哨兵（functionCall part
+  保留=协议固有残余面，与上文一致）。下代 fork 换代时仍建议给上游缓存加
+  auth 维度，把保障从"剥离顺序"改为"结构隔离"；在那之前不要因为该 issue
+  单独换代。
+- **同槽重登后 keep-alive 连接跨号复用**（[#7961](https://github.com/router-for-me/CLIProxyAPI/issues/7961)，
+  open；transport scope=`id:<authID>`，不含 grant 代）：antigravity 凭据
+  原地重登（同 auth 文件刷新 token）后，新账号的首批请求可能骑在旧账号的
+  keep-alive TCP 连接上。v8.1.1 已有缓解（auth 更新回调会关闭该 scope 的
+  **idle** transports，`antigravity_executor_auth.go`），残余=仍在活跃使用中
+  的连接不受 close-idle 影响。**纪律：对 antigravity 凭据做手工重登后，
+  顺手 `docker restart cli-proxy-api`**（与换代 swap 事务的习惯一致；重启
+  同时清 sig-iso 进程内签名索引，属预期非故障）。
+
 ### 降智检测锚（served-model 观测）
 
 - 服务侧已有：doctor `==model-substitution==`（`upstream served model` warn +

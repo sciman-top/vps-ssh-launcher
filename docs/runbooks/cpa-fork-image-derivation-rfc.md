@@ -58,6 +58,34 @@ bind-mount 已移除，`CLIProxyAPI-patched` 保留为只读留档。实施偏�
 2. 构建目录**不要**放 `/root`：2026-11-16 实测该机 overlayfs 上，连续两步编译会对尚未出现的
    文件报 `no such file or directory`；构建脚本改用 `/var/tmp/cpa-fork-build-<tag>` 并在成功后删除。
 
+## 2026-11-23 更新：构建车道内存护栏（2 GB 主机硬边界）
+
+bwg 主机只有 **2 GB RAM + 1 GB swap**，常态已用 ~630 MB（MemAvailable ~1.4 GB），
+而本仓 `cpa_fork_rebuild.ps1` 曾给构建容器固定 `--memory=1900m`——**容器上限高于
+主机可供量**，深编译阶段溢出容器 memcg 后由内核**全局** OOM 收编：2026-11-22 16:56
+实测被杀的是构建自己的 `compile` 进程（945 MB RSS），但下一个受害者可能是 nginx/CPA。
+现护栏（脚本内，dry-run 不经过）：
+
+- 构建容器上限 = `min(1900m, MemAvailable − 256m)`（`/proc/meminfo` 读数，已计入
+  可回收页缓存；两个 docker run 同用一值）；
+- 折算后 `< 1500m` 直接拒跑（`BUILD_MEM_REFUSED`，exit 20）——实测编译+链接需求
+  ≥1.4 GB anon，强行缩限只会在容器内 OOM 失败，拒跑给出
+  "本地构建或先腾主机内存"的指引；
+- 爆炸半径语义：cap 低于主机可供量后，内存不足只会杀构建容器自身（干净失败），
+  不再可能误杀伤主进程。
+
+**纪律**：fork 构建尽量在本地做（v8.1.1 代已实测"本地 git archive + overlay +
+vet/test 预验证"可行），bwg 上构建仅在主机空闲窗进行；`outputs/` 里的逐代
+overlay 构建脚本属历史记录，下代 fork 若再生成，必须继承本护栏（动态 cap + 1500m
+下限），不得回退固定上限。
+
+**运行时对照（同一内存面）**：CPA 容器 `mem_limit=512MB`（当前水位 ~33 MB）是
+把潜在尖峰转成"容器 OOM 重启（杀流）"而非主机 OOM 的有意设计。上游
+[#7946](https://github.com/router-for-me/CLIProxyAPI/issues/7946)（open）报 v8.1.1
+大上下文流式内存尖峰 ~2.3 GB：**并发大上下文（320K 试用形状）+ 容器无解释重启
+时首查此因**；上游修复落地并随 fork 换代收编前，不要为"防重启"上调 512MB 限制
+（那会把爆炸半径还给主机）。
+
 ## 问题
 
 现役 CPA 不是“镜像说了算”，而是 `<image tag> + /opt/cliproxyapi/CLIProxyAPI-patched`

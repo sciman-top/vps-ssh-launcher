@@ -99,3 +99,34 @@
 修复都没有第二对象；`stream-bootstrap-buffering` 保持 `false`（理由见
 `scripts/remote/cpa_policy.py` 的 `EXPECTED_CODEX`）。单凭据下的正确处置是等窗口或切
 非 OAuth lane，不是加账号、清冷却或开重试。
+
+## 五、上游 CLIProxyAPI post-v8.1.1 watch 台账（2026-11-23 实拉）
+
+生产 fork upstream 锚 = `6eb8554f`（v8.1.1）。2026-11-21 起 `gh` 只读实拉的
+open 缺陷 watch 清单（处置详见各 runbook，索引如下）：
+
+| 编号 | 一句话 | 本栈处置 |
+|---|---|---|
+| [#7960](https://github.com/router-for-me/CLIProxyAPI/issues/7960) | 全局 signatureCache 无凭据维度→跨号签名注入 | sig-iso 车道已封口；下代 fork 给上游缓存加 auth 维度，见封号 runbook"上游签名缓存缺口"节 |
+| [#7961](https://github.com/router-for-me/CLIProxyAPI/issues/7961) | transport scope 不含 grant 代→重登后跨号 keep-alive 复用 | 重登后 restart 容器的纪律，见封号 runbook 同节 |
+| [#7946](https://github.com/router-for-me/CLIProxyAPI/issues/7946) | v8.1.1 大上下文流式内存尖峰 ~2.3 GB | 并发 320K+ 容器无解释重启时首查；512MB 限制勿上调，见衍生 RFC"构建车道内存护栏"节 |
+| [#7934](https://github.com/router-for-me/CLIProxyAPI/issues/7934) | compaction 把 MAX_TOKENS 截断摘要密封为 completed+清零计数 | 320K 试用（200000/256000 阈值）期间"变笨"类投诉先核此项 |
+| [#7952](https://github.com/router-for-me/CLIProxyAPI/issues/7952) | forked session 失败逐出父会话 affinity 绑定 | 小概率缓存损失，仅 watch |
+| [#7924](https://github.com/router-for-me/CLIProxyAPI/issues/7924) | disableCooling=true 时 TOS_VIOLATION 重置 Unavailable | N/A：本栈 cooling 在役 |
+
+**换代指引**：上游 main 在 v8.1.1 后已积累 ~20 commits（未发版）＝已闭缺陷修复波
+（#7914/#7915/#7916/#7917/#7918/#7919/#7920：相邻 user turns、filter-block 双面、
+budget clamp、schema keywords、grounding、count-tokens in-band）+ `b8e3bc66`
+（请求对齐/最小化，WAF 相关需细读）+ `2f86992c`（分组模型按
+thinking-level 路由）+ Copilot provider（与本车道无关）。**等 v8.1.2 tag 落地
+再整批 sync**，不直追 dev；换代事务按既有 swap 流程，并核对该批改动与
+daily-cap / sig-iso overlay 的冲突面。
+
+**归因能力缺口（luna 缓存 0.27 watch 的边界）**：2026-11-23 起 24h 审计中
+`chatgpt-oauth/gpt-6-luna` cache_hit=0.27（11-21 重登后"冷缓存 24-48h 回判"
+未兑现）。按客户端归因暂不可行：CPA 侧无持久请求日志（`logs/` 目录空、usage
+队列仅 1h 保留），admission journal 的 `upstream_result` 不携带任何客户端标识
+（末位是 `_trace_context`）。可行路径＝维护窗短暂开启 CPA request-log，或
+admission 给 `upstream_result` 加脱敏 client sha8 字段（两者均属 reviewed
+变更，未裁决前不做）；小样本下客户端构成（单发首问+前缀不稳客户端）仍是首选
+假说，非服务端回归证据。
