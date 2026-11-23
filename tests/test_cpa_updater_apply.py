@@ -337,7 +337,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         Serving requests from cli-proxy-api-fork:v<upstream>-gemini-raw leaves
         the official-only parser refusing every compose read, which the daily
         run would misreport as a metadata outage instead of the named fork
-        refusal the canary exists to give.
+        refusal the canary exists to give. Build-generation suffixes may
+        accumulate after -gemini-raw (v8.1.1-gemini-raw-daily-cap-authiso,
+        measured 2026-11-23) and must keep parsing to their upstream version.
         """
 
         source = (
@@ -346,18 +348,29 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         parser_start = source.index("compose_cpa_version() {")
         parser = source[parser_start:].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
         self.assertIn("cli-proxy-api-fork", parser)
-        with tempfile.TemporaryDirectory() as directory:
-            compose = Path(directory) / "compose.yml"
-            compose.write_text("image: cli-proxy-api-fork:v8.0.61-gemini-raw\n")
-            result = subprocess.run(
-                [sys.executable, "-c", parser, str(compose)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "v8.0.61")
+        cases = (
+            ("cli-proxy-api-fork:v8.0.61-gemini-raw", "v8.0.61"),
+            ("cli-proxy-api-fork:v8.1.1-gemini-raw-daily-cap-authiso", "v8.1.1"),
+            (
+                "cli-proxy-api-fork:v8.1.1-gemini-raw-daily-cap-authiso@sha256:"
+                + "d" * 64,
+                "v8.1.1",
+            ),
+        )
+        for declaration, expected in cases:
+            with self.subTest(declaration=declaration):
+                with tempfile.TemporaryDirectory() as directory:
+                    compose = Path(directory) / "compose.yml"
+                    compose.write_text(f"image: {declaration}\n")
+                    result = subprocess.run(
+                        [sys.executable, "-c", parser, str(compose)],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
 
     def test_updater_compose_replacement_is_exact_and_metadata_preserving(
         self,

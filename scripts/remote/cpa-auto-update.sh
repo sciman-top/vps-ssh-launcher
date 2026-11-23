@@ -499,12 +499,15 @@ from pathlib import Path
 # requests from cli-proxy-api-fork:v<upstream>-gemini-raw instead of the
 # official tag, so the version reader must understand both declarations or
 # every daily run would misreport a plain parse failure as a metadata outage.
-# A fork tag that drifts from the v<upstream>-gemini-raw convention still
-# refuses here: the rebuild transaction that changes the convention must
-# update this parser, the canary and the ledger together.
+# Build-generation suffixes may accumulate after -gemini-raw (measured
+# 2026-11-23: v8.1.1-gemini-raw-daily-cap-authiso); the reader extracts the
+# upstream version prefix and tolerates additional -[a-z0-9]+ segments. A
+# fork tag that drifts from the v<upstream> prefix convention itself still
+# refuses here: the rebuild transaction that changes that base convention
+# must update this parser, the canary and the ledger together.
 text = Path(sys.argv[1]).read_text()
 matches = re.findall(
-    r'image:\s*(?:eceasy/cli-proxy-api|cli-proxy-api-fork):(v\d+\.\d+\.\d+)(?:-gemini-raw)?(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)',
+    r'image:\s*(?:eceasy/cli-proxy-api|cli-proxy-api-fork):(v\d+\.\d+\.\d+)(?:-[a-z0-9]+)*(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)',
     text,
 )
 if len(matches) != 1:
@@ -563,7 +566,7 @@ def mature(timestamp):
     return (dt.datetime.now(dt.timezone.utc) - when).total_seconds() >= 259200
 
 text = Path(sys.argv[1]).read_text()
-matches = re.findall(r'image:\s*(?:eceasy/cli-proxy-api|cli-proxy-api-fork):(v\d+\.\d+\.\d+)(?:-gemini-raw)?(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)', text)
+matches = re.findall(r'image:\s*(?:eceasy/cli-proxy-api|cli-proxy-api-fork):(v\d+\.\d+\.\d+)(?:-[a-z0-9]+)*(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)', text)
 if len(matches) != 1:
     raise SystemExit('REFUSE unexpected image declaration')
 current = matches[0]

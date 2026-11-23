@@ -110,6 +110,7 @@ class UpdaterSelectionTests(unittest.TestCase):
         for declaration in (
             "cli-proxy-api-fork:v8.0.61-gemini-raw",
             "cli-proxy-api-fork:v8.0.61-gemini-raw@sha256:" + "d" * 64,
+            "cli-proxy-api-fork:v8.0.61-gemini-raw-daily-cap-authiso",
         ):
             with self.subTest(declaration=declaration):
                 out = run_selection("image: " + declaration + "\n", releases, tags)
