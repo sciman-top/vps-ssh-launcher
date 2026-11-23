@@ -988,9 +988,13 @@ desktop 原样 165KB 请求体 200/completed。这是把一次上游过滤症状
 词表应保留或扩展的证据。残余暴露面：model 历史轮次文本
 （payload.replace 引擎只处理 role=user，2026-11-17 前从未触发，列为观察项）。
 词表不能随探测结果不断扩张；普通自然文本、代码与工具输出不应被无证据改写。
-2026-11-21 本地策略已停止 `requests.payload.replace` 的 user 文本改写；其 system
-替换仍待单独复核。旧远端规则尚未据此清除，部署前须完成备份、投影与读回，且不能
-以“规则还在运行”推定其应保留。
+2026-11-21 本地策略已停止 `requests.payload.replace` 的 user 文本改写。
+2026-11-23 复核收口（用户授权按推荐自动执行）：**systemInstruction 替换保留**——假 429
+根因是上游对指纹词的字面量过滤，systemInstruction 是主要泄漏面，`sensitive-words` /
+`sensitive-words-replace` 钉扎维持不变；user 改写维持停用（会改坏自然讨论、代码与复合
+标识符，且收益未隔离证明）。旧远端 `requests.payload.replace` 规则按备份→投影→读回
+随本次事务清除，台账见
+[20261123-bwg-antigravity-hardening-review.md](../change-evidence/20261123-bwg-antigravity-hardening-review.md)。
 `flash-high→flash-n` 替换与本修复无关，继续按 substitution warn 观察。
 同日 -Apply 期间 readiness fail-closed 拦截上游新增未声明模型
 `gemini-4-carbon-high`（池内凭据目录扩张，`ids-allowed` 非空两次拒跑
@@ -1010,6 +1014,7 @@ doctor 读到 `claude-opus-5-5-high`，上下文为 `1000000`，`MODEL_IDS_UNKNO
 运行中 v8.0.77 的二进制台账，但还包含未随本次投影部署的其他改动；本次验收结论仅
 对应实际投影源 `1287209`。
 2026-11-19 Google 发布 `gemini-4-neon`（上游以 `gemini-4-neon-xhigh` 注册，1M 统一窗口）；按用户指令将 `gemini-4-neon-xhigh` 纳入 `antigravity-oauth` 路由与准入车道，历史版本的 user 文本身份词替换曾作为一次假 429 的临时兼容措施；配置 1,048,576 上下文窗口，加入 `codex_api_key_exclusions` 防抢注，并同步 apply/doctor 与预言机契约。
+2026-11-23 钉扎复核修正：官方模型文档明示 `gemini-4-neon` 上下文上限 512K（`gemini-4-hydrogen`/`gemini-4-argon`/`gemini-3.8-flash` 三行未标数值，钉扎不变），且上游 CPA 对 antigravity 模型列表为 live fetch、不逐模型硬编码上下文——11-19 的 1,048,576 属车道内 gemini-4 家族统一取值而非上游注册值。`gemini-4-neon-xhigh` 上下文钉扎由 1,048,576 下调至 524,288（路由、排除、思考级契约不变），随本次授权事务投影 BWG 并复验。
 同日按用户指令完成 `v8.0.77-gemini-raw → v8.0.78-gemini-raw` 换芯（binary `bf1e8fb5…`、
 image_id `7bb4b400…`、base index digest `9ee2d808…` 钉定；`AUTH_BYTES_UNCHANGED`、
 `LANE_HOLD_DELTA=none`、strict doctor `DOCTOR_CONTRACT_OK` + `runtime_binary_hash=MATCH`；

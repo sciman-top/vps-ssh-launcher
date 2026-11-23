@@ -75,8 +75,8 @@
     },
     {
       "slug": "gemini-4-neon-xhigh",
-      "context_window": 1048576,
-      "max_context_window": 1048576,
+      "context_window": 524288,
+      "max_context_window": 524288,
       "auto_compact_token_limit": 320000
     },
     {

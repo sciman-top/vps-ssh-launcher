@@ -1079,9 +1079,10 @@ def audit_contract(
                     SEVERITY_INFO,
                     f"alias {alias!r} is intentionally pooled across "
                     f"{', '.join(holders)}; the admission lane still owns the "
-                    "shared-account budget; max-retry-credentials=3 permits "
-                    "at most three upstream credentials within one failed "
-                    "request, while request-retry=0 forbids extra retry rounds",
+                    "shared-account budget; max-retry-credentials=1 forbids "
+                    "rotating to another upstream credential within one "
+                    "failed request, while request-retry=0 forbids extra "
+                    "retry rounds",
                 )
             )
             continue

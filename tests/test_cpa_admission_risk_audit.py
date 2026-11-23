@@ -317,9 +317,11 @@ class AdvertisedAliasesTests(unittest.TestCase):
             finding for finding in findings if finding.code == "alias-multi-slot-pooled"
         ]
         self.assertEqual(len(pooled), 1)
-        self.assertIn("max-retry-credentials=3", pooled[0].message)
+        self.assertIn("max-retry-credentials=1", pooled[0].message)
         self.assertIn("request-retry=0", pooled[0].message)
-        self.assertIn("at most three upstream credentials", pooled[0].message)
+        self.assertIn(
+            "forbids rotating to another upstream credential", pooled[0].message
+        )
         self.assertNotIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
 
     def test_stale_pooled_alias_declaration_fails(self) -> None:

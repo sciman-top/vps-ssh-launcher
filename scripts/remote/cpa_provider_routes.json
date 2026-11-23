@@ -190,7 +190,7 @@
       },
       {
         "name": "gemini-4-neon-xhigh",
-        "max-context-length": 1048576
+        "max-context-length": 524288
       },
       {
         "name": "claude-opus-5-5-high",
