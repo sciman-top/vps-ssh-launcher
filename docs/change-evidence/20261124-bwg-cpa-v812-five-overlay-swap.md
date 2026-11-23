@@ -126,3 +126,20 @@ tag 归属判定（"fail on main"≠tag 干净，本案 tag 即含回归）。
 **重上路径**：上游修复落地（v8.1.3 或 #7966 修复 commit）后，重放本台账
 配方（merge 树在 HG03-work，基座换新 tag，全量测试门），40 分钟内完成。
 "重登后 restart"纪律在重回 v8.1.2 系前**恢复执行**。
+
+## 三问验收补账（同夜，用户终验提问后执行）
+
+- **投影**：`-AuditProjection` 回执 `CPA_PROJECTION_AUDIT=PASS`（模板/源就绪）；
+  回滚后 strict doctor `DOCTOR_CONTRACT_OK` 已含远端 projection-drift 腿。
+- **模拟**：b288eec 触及 `scripts/` 路径按 Auto 规则补跑 Full——receipt
+  `test.json status=PASS profile=Full`。
+- **受控实战**：回滚后四车道族全覆盖探针 200（agy flash-high/neon 早前 +
+  wb deepseek 1.65s + chatgpt terra 1.62s）；**回归干净实证**：TestIssue6825
+  全族+interrupted-message 配对测试在 v8.1.1 生产代树 PASS、在 v8.1.2 合并树
+  FAIL（同机同环境对照），回滚决策实证成立。
+
+**merge 树锚点（重放时勿踩分支名陷阱）**：merge 过程在
+`fork-v811-plus-overlays` 分支上提交，**分支名已不代表 v8.1.1 代**——
+`04b1e452` = v8.1.1+五叠层（生产代等价树，测试全绿锚）；
+`55594068` = v8.1.2 合并树（含 #7966 回归，未部署的候选）。
+重放换代应从 `04b1e452` 重开分支 merge 新 tag。
