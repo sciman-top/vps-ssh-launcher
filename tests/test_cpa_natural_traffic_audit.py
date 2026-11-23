@@ -658,6 +658,116 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             )
         )
 
+    def test_distinguishes_cross_model_switch_from_same_model_cache_hit(
+        self,
+    ) -> None:
+        lines = [
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO upstream_result "
+            "lane=antigravity-oauth model=gemini-4-neon-xhigh status=200 "
+            "capacity=false successful=true protocol_result=completed "
+            "upstream_header_ms=100 upstream_first_byte_ms=101 "
+            "usage_in=200000 usage_cached=190000 usage_out=100 "
+            "request_id=p0 client_request_hash=parent123456",
+        ]
+        for index in range(7):
+            lines.append(
+                f"2026-10-31T00:00:{index + 2:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=250000 usage_cached=6000 usage_out=100 "
+                f"request_id=sw{index} client_request_hash=parent123456"
+            )
+            lines.append(
+                f"2026-10-31T00:00:{index + 20:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=antigravity-oauth "
+                f"model=gemini-4-neon-xhigh status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=250000 usage_cached=240000 usage_out=100 "
+                f"request_id=gm{index} client_request_hash=parent123456"
+            )
+        for index in range(3):
+            lines.append(
+                f"2026-10-31T00:01:{index:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=100000 usage_cached={0 if index == 0 else 95000} "
+                f"usage_out=100 request_id=lu{index} "
+                f"client_request_hash=lunasess1234"
+            )
+        summary = summarize(parse_journal(lines)[0], 24)
+        luna = next(
+            item
+            for item in summary["lanes"]
+            if item["lane_model"] == "chatgpt-oauth/gpt-6-luna"
+        )
+        self.assertEqual(luna["cache_model_switch_candidate_reports"], 7)
+        self.assertEqual(luna["cache_same_model_candidate_reports"], 2)
+        self.assertAlmostEqual(luna["cache_same_model_candidate_hit_ratio"], 0.95)
+        self.assertTrue(
+            any(
+                "same_model_continuation_hit_ratio=0.95 across 2 same-model turns "
+                "(cross_model_switch_turns=7)" in warning
+                for warning in summary["warnings"]
+            )
+        )
+
+    def test_distinguishes_mixed_model_conv_parallel_subagents_from_single_model_conv(
+        self,
+    ) -> None:
+        lines = [
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO upstream_result "
+            "lane=antigravity-oauth model=gemini-4-neon-xhigh status=200 "
+            "capacity=false successful=true protocol_result=completed "
+            "upstream_header_ms=100 upstream_first_byte_ms=101 "
+            "usage_in=200000 usage_cached=190000 usage_out=100 "
+            "request_id=p0 client_request_hash=mixedconv123",
+        ]
+        for index in range(7):
+            lines.append(
+                f"2026-10-31T00:00:{index + 2:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=250000 usage_cached=6000 usage_out=100 "
+                f"request_id=mx{index} client_request_hash=mixedconv123"
+            )
+        for index in range(3):
+            lines.append(
+                f"2026-10-31T00:01:{index:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=100000 usage_cached={0 if index == 0 else 95000} "
+                f"usage_out=100 request_id=ded{index} "
+                f"client_request_hash=pureluna1234"
+            )
+        summary = summarize(parse_journal(lines)[0], 24)
+        luna = next(
+            item
+            for item in summary["lanes"]
+            if item["lane_model"] == "chatgpt-oauth/gpt-6-luna"
+        )
+        self.assertEqual(luna["cache_single_model_conv_candidate_reports"], 3)
+        self.assertEqual(luna["cache_mixed_model_conv_candidate_reports"], 7)
+        self.assertAlmostEqual(
+            luna["cache_single_model_conv_candidate_hit_ratio"],
+            190000 / 300000,
+        )
+        self.assertTrue(
+            any(
+                "single_model_conversation_hit_ratio=0.63 across 3 "
+                "dedicated-session turns (mixed_model_conversation_turns=7)" in warning
+                for warning in summary["warnings"]
+            )
+        )
+
     def test_does_not_flag_low_cache_from_small_sample(self) -> None:
         lines = []
         for index in range(9):

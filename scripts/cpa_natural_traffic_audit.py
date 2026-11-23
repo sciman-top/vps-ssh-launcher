@@ -179,6 +179,7 @@ def parse_journal(
     header_logs: dict[str, datetime] = {}
     admission_logs: dict[str, datetime] = {}
     probe_ids: set[str] = set()
+    last_client_model: dict[str, str] = {}
     records: list[dict[str, Any]] = []
     header_lines = 0
     for raw in lines:
@@ -270,10 +271,34 @@ def parse_journal(
             and sse_events > 1
             else None
         )
+        lane_name = fields.get("lane") or "unknown"
+        model_name = fields.get("model") or "unknown"
+        is_probe = request_id in probe_ids if request_id else False
+        usage_in = _parse_int(fields.get("usage_in"))
+        client_hash = fields.get("client_request_hash")
+        has_client_hash = bool(client_hash and client_hash not in ("-", "na", "none"))
+        prev_model = (
+            last_client_model.get(str(client_hash))
+            if has_client_hash and not is_probe
+            else None
+        )
+        model_switch_from_other = bool(
+            prev_model is not None and prev_model != model_name
+        )
+        same_model_continuation = bool(
+            prev_model is not None and prev_model == model_name
+        )
+        if (
+            has_client_hash
+            and not is_probe
+            and usage_in is not None
+            and (fields.get("protocol_result") or "unknown") == "completed"
+        ):
+            last_client_model[str(client_hash)] = model_name
         records.append(
             {
-                "lane": fields.get("lane") or "unknown",
-                "model": fields.get("model") or "unknown",
+                "lane": lane_name,
+                "model": model_name,
                 "protocol_result": fields.get("protocol_result") or "unknown",
                 "waited_ms": waited_ms,
                 "header_ms": header_ms,
@@ -289,11 +314,14 @@ def parse_journal(
                 "first_output_ms": first_output_ms,
                 "total_duration_ms": total_duration_ms,
                 "decode_ms": decode_ms,
-                "usage_in": _parse_int(fields.get("usage_in")),
+                "usage_in": usage_in,
                 "usage_cached": _parse_int(fields.get("usage_cached")),
                 "usage_out": _parse_int(fields.get("usage_out")),
                 "usage_cost_usd": _parse_cost(fields.get("usage_cost_usd")),
-                "probe": request_id in probe_ids if request_id else False,
+                "probe": is_probe,
+                "client_hash": str(client_hash) if has_client_hash else None,
+                "model_switch_from_other": model_switch_from_other,
+                "same_model_continuation": same_model_continuation,
                 "admission_ts": admission_ts,
                 "result_ts": timestamp,
                 "stream_duration_s": stream_duration_s,
@@ -434,6 +462,16 @@ def summarize(
 ) -> dict[str, Any]:
     """Aggregate by lane/model without retaining request-level identifiers."""
 
+    models_by_client_hash: dict[str, set[str]] = {}
+    for record in records:
+        if record.get("probe"):
+            continue
+        client_hash = record.get("client_hash")
+        if client_hash and record.get("usage_in") is not None:
+            models_by_client_hash.setdefault(str(client_hash), set()).add(
+                str(record["model"])
+            )
+
     groups: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         groups.setdefault(f"{record['lane']}/{record['model']}", []).append(record)
@@ -567,6 +605,12 @@ def summarize(
         cached_parts = []
         candidate_uncached_parts = []
         candidate_cached_parts = []
+        same_model_candidate_uncached_parts = []
+        same_model_candidate_cached_parts = []
+        single_model_conv_uncached_parts = []
+        single_model_conv_cached_parts = []
+        mixed_model_conv_reports = 0
+        model_switch_candidate_reports = 0
         additive_cache_shape = False
         for record in token_reports:
             reported_input = record["usage_in"]
@@ -585,10 +629,44 @@ def summarize(
             if cached + uncached >= _CACHE_CANDIDATE_MIN_TOKENS:
                 candidate_uncached_parts.append(uncached)
                 candidate_cached_parts.append(cached)
+                client_hash = record.get("client_hash")
+                conv_models = (
+                    models_by_client_hash.get(str(client_hash), set())
+                    if client_hash
+                    else set()
+                )
+                if len(conv_models) > 1:
+                    mixed_model_conv_reports += 1
+                elif len(conv_models) == 1:
+                    single_model_conv_uncached_parts.append(uncached)
+                    single_model_conv_cached_parts.append(cached)
+                if record.get("model_switch_from_other"):
+                    model_switch_candidate_reports += 1
+                elif record.get("same_model_continuation"):
+                    same_model_candidate_uncached_parts.append(uncached)
+                    same_model_candidate_cached_parts.append(cached)
         tokens_uncached = sum(uncached_parts)
         tokens_cached = sum(cached_parts)
         candidate_uncached = sum(candidate_uncached_parts)
         candidate_cached = sum(candidate_cached_parts)
+        same_model_candidate_uncached = sum(same_model_candidate_uncached_parts)
+        same_model_candidate_cached = sum(same_model_candidate_cached_parts)
+        same_model_candidate_denom = (
+            same_model_candidate_cached + same_model_candidate_uncached
+        )
+        same_model_candidate_hit_ratio = (
+            same_model_candidate_cached / same_model_candidate_denom
+            if same_model_candidate_denom > 0
+            else None
+        )
+        single_model_conv_uncached = sum(single_model_conv_uncached_parts)
+        single_model_conv_cached = sum(single_model_conv_cached_parts)
+        single_model_conv_denom = single_model_conv_cached + single_model_conv_uncached
+        single_model_conv_hit_ratio = (
+            single_model_conv_cached / single_model_conv_denom
+            if single_model_conv_denom > 0
+            else None
+        )
         cache_shape_by_model: dict[str, set[str]] = {}
         for record in token_reports:
             reported_input = record["usage_in"]
@@ -733,6 +811,22 @@ def summarize(
                     candidate_uncached if candidate_cached_parts else None
                 ),
                 "cache_candidate_hit_ratio": candidate_cache_hit_ratio,
+                "cache_same_model_candidate_reports": len(
+                    same_model_candidate_cached_parts
+                ),
+                "cache_same_model_candidate_hit_ratio": (
+                    same_model_candidate_hit_ratio
+                ),
+                "cache_model_switch_candidate_reports": (
+                    model_switch_candidate_reports
+                ),
+                "cache_single_model_conv_candidate_reports": len(
+                    single_model_conv_cached_parts
+                ),
+                "cache_single_model_conv_candidate_hit_ratio": (
+                    single_model_conv_hit_ratio
+                ),
+                "cache_mixed_model_conv_candidate_reports": (mixed_model_conv_reports),
                 "cache_accounting": (
                     "cached_plus_reported_input"
                     if additive_cache_shape
@@ -829,14 +923,51 @@ def summarize(
             and cache_ratio is not None
             and cache_ratio < _CACHE_HEALTH_WARN_RATIO
         ):
-            warnings.append(
-                f"{name} cache_candidate_hit_ratio={cache_ratio:.2f} across "
-                f"{lane['cache_candidate_reports']} requests with >= "
-                f"{_CACHE_CANDIDATE_MIN_TOKENS}-token prompts "
-                f"(review threshold {_CACHE_HEALTH_WARN_RATIO:.2f}); inspect "
-                "prompt-prefix stability and session affinity before changing "
-                "cache keys"
-            )
+            same_model_ratio = lane.get("cache_same_model_candidate_hit_ratio")
+            switch_reports = lane.get("cache_model_switch_candidate_reports", 0)
+            single_conv_ratio = lane.get("cache_single_model_conv_candidate_hit_ratio")
+            mixed_conv_reports = lane.get("cache_mixed_model_conv_candidate_reports", 0)
+            if (
+                same_model_ratio is not None
+                and same_model_ratio >= _CACHE_HEALTH_WARN_RATIO
+                and switch_reports > 0
+            ):
+                warnings.append(
+                    f"{name} cache_candidate_hit_ratio={cache_ratio:.2f} across "
+                    f"{lane['cache_candidate_reports']} requests with >= "
+                    f"{_CACHE_CANDIDATE_MIN_TOKENS}-token prompts "
+                    f"(review threshold {_CACHE_HEALTH_WARN_RATIO:.2f}), but "
+                    f"same_model_continuation_hit_ratio={same_model_ratio:.2f} "
+                    f"across {lane['cache_same_model_candidate_reports']} "
+                    f"same-model turns (cross_model_switch_turns={switch_reports}); "
+                    "low aggregate ratio is driven by cross-model one-shot/subagent "
+                    "switches rather than session-affinity loss"
+                )
+            elif (
+                single_conv_ratio is not None
+                and single_conv_ratio >= _CACHE_HEALTH_WARN_RATIO
+                and mixed_conv_reports > 0
+            ):
+                warnings.append(
+                    f"{name} cache_candidate_hit_ratio={cache_ratio:.2f} across "
+                    f"{lane['cache_candidate_reports']} requests with >= "
+                    f"{_CACHE_CANDIDATE_MIN_TOKENS}-token prompts "
+                    f"(review threshold {_CACHE_HEALTH_WARN_RATIO:.2f}), but "
+                    f"single_model_conversation_hit_ratio={single_conv_ratio:.2f} "
+                    f"across {lane['cache_single_model_conv_candidate_reports']} "
+                    f"dedicated-session turns (mixed_model_conversation_turns={mixed_conv_reports}); "
+                    "low aggregate ratio is driven by cross-model subagent/review "
+                    "calls sharing a parent client_request_hash"
+                )
+            else:
+                warnings.append(
+                    f"{name} cache_candidate_hit_ratio={cache_ratio:.2f} across "
+                    f"{lane['cache_candidate_reports']} requests with >= "
+                    f"{_CACHE_CANDIDATE_MIN_TOKENS}-token prompts "
+                    f"(review threshold {_CACHE_HEALTH_WARN_RATIO:.2f}); inspect "
+                    "prompt-prefix stability and session affinity before changing "
+                    "cache keys"
+                )
     return {
         "window_hours": window_hours,
         "records": len(records),
@@ -970,6 +1101,12 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"cached={_optional_int(lane['cache_candidate_cached'])} "
             f"uncached={_optional_int(lane['cache_candidate_uncached'])} "
             f"cache_hit_ratio={_format_metric(lane['cache_candidate_hit_ratio'])} "
+            f"same_model_reports={lane['cache_same_model_candidate_reports']} "
+            f"same_model_hit_ratio={_format_metric(lane['cache_same_model_candidate_hit_ratio'])} "
+            f"model_switch_reports={lane['cache_model_switch_candidate_reports']} "
+            f"single_model_conv_reports={lane['cache_single_model_conv_candidate_reports']} "
+            f"single_model_conv_hit_ratio={_format_metric(lane['cache_single_model_conv_candidate_hit_ratio'])} "
+            f"mixed_model_conv_reports={lane['cache_mixed_model_conv_candidate_reports']} "
             f"min_prompt_tokens={_CACHE_CANDIDATE_MIN_TOKENS}"
         )
         if lane["cost_reports"]:
