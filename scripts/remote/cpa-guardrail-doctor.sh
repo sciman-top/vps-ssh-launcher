@@ -573,9 +573,9 @@ expected_rpm = {
     "chatgpt-oauth": 24,
     "zhipu-coding-plan": 30,
     "zcode-start-plan": 20,
-    "antigravity-oauth": 18,
-    "workbuddy-oauth": 18,
-    "workbuddy-intl-oauth": 18,
+    "antigravity-oauth": 12,
+    "workbuddy-oauth": 12,
+    "workbuddy-intl-oauth": 12,
 }
 if set(lanes) != set(expected):
     raise SystemExit(1)

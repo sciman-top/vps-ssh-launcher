@@ -9609,47 +9609,42 @@ def test_antigravity_repeat_reject_pause_semantics() -> None:
     try:
         base = 1000.0
         record("case-1", "gemini-4-neon-xhigh", now=base)
+        assert remaining("case-1", now=base + 30) is None
         record("case-1", "gemini-4-neon-xhigh", now=base + 30)
-        assert remaining("case-1", now=base + 60) is None
-        record("case-1", "gemini-4-neon-xhigh", now=base + 60)
-        armed = remaining("case-1", now=base + 61)
+        armed = remaining("case-1", now=base + 31)
         assert armed is not None and 1700 <= armed <= 1800
         # Sibling request ids and header-less requests are never paused.
-        assert remaining("case-2", now=base + 61) is None
-        assert remaining(None, now=base + 61) is None
-        assert remaining("-", now=base + 61) is None
+        assert remaining("case-2", now=base + 31) is None
+        assert remaining(None, now=base + 31) is None
+        assert remaining("-", now=base + 31) is None
         # Placeholder "-" from diagnostic_hash(None) must never pool unrelated
         # headerless requests into a shared pause bucket.
         record("-", "gemini-4-neon-xhigh", now=base)
         record("-", "gemini-4-neon-xhigh", now=base + 10)
-        record("-", "gemini-4-neon-xhigh", now=base + 20)
         assert remaining("-", now=base + 21) is None
         # Headerless retries of the exact same rejected payload are paused via
         # the payload digest without affecting sibling bodies or explicit ids.
         same_body = b'{"model":"gemini-4-neon-xhigh","input":"stuck turn"}'
         other_body = b'{"model":"gemini-4-neon-xhigh","input":"fresh turn"}'
         record("-", "gemini-4-neon-xhigh", now=base, body=same_body)
-        record("-", "gemini-4-neon-xhigh", now=base + 5, body=same_body)
-        record(None, "gemini-4-neon-xhigh", now=base + 10, body=same_body)
+        record(None, "gemini-4-neon-xhigh", now=base + 5, body=same_body)
         assert remaining("-", now=base + 11, body=same_body) is not None
         assert remaining(None, now=base + 11, body=same_body) is not None
         assert remaining("-", now=base + 11, body=other_body) is None
         assert remaining("explicit-id", now=base + 11, body=same_body) is None
         # The pause holds for its full window and expires on its own.
-        assert remaining("case-1", now=base + 1859) == 1
-        assert remaining("case-1", now=base + 1861) is None
+        assert remaining("case-1", now=base + 1829) == 1
+        assert remaining("case-1", now=base + 1831) is None
         # Arming clears the counter, so a fresh resubmission loop re-escalates.
-        record("case-1", "gemini-4-neon-xhigh", now=base + 1862)
-        record("case-1", "gemini-4-neon-xhigh", now=base + 1875)
-        assert remaining("case-1", now=base + 1876) is None
-        record("case-1", "gemini-4-neon-xhigh", now=base + 1880)
-        assert remaining("case-1", now=base + 1881) is not None
+        record("case-1", "gemini-4-neon-xhigh", now=base + 1832)
+        assert remaining("case-1", now=base + 1845) is None
+        record("case-1", "gemini-4-neon-xhigh", now=base + 1850)
+        assert remaining("case-1", now=base + 1851) is not None
         # Arms outside the counting window do not accumulate toward the limit.
         MODULE["reset_antigravity_repeat_reject_state"]()
         record("case-3", "gemini-4-neon-xhigh", now=base)
-        record("case-3", "gemini-4-neon-xhigh", now=base + 1700)
-        record("case-3", "gemini-4-neon-xhigh", now=base + 3400)
-        assert remaining("case-3", now=base + 3401) is None
+        record("case-3", "gemini-4-neon-xhigh", now=base + 1805)
+        assert remaining("case-3", now=base + 1806) is None
     finally:
         MODULE["reset_antigravity_repeat_reject_state"]()
 
@@ -9700,7 +9695,7 @@ def test_antigravity_repeat_reject_pauses_unchanged_payload_before_upstream(
                     time.sleep(0.005)
 
             try:
-                for _ in range(3):
+                for _ in range(2):
                     client.request(
                         "POST",
                         "/v1/messages",
@@ -9712,8 +9707,8 @@ def test_antigravity_repeat_reject_pauses_unchanged_payload_before_upstream(
                     response.read()
                     wait_lane_idle()
                     time.sleep(1.1)
-                assert len(received) == 3
-                # The third upstream rejection armed the request-id pause; the
+                assert len(received) == 2
+                # The second upstream rejection armed the request-id pause; the
                 # model window has expired, so the next unchanged retry must be
                 # refused locally with the repeat-reject reason.
                 client.request(
@@ -9731,7 +9726,7 @@ def test_antigravity_repeat_reject_pauses_unchanged_payload_before_upstream(
                 retry_after = response.getheader("Retry-After")
                 assert retry_after is not None and int(retry_after) > 1700
                 assert json.loads(response.read())["upstream_contacted"] is False
-                assert len(received) == 3
+                assert len(received) == 2
                 client.request(
                     "POST",
                     "/v1/messages",
@@ -9745,7 +9740,7 @@ def test_antigravity_repeat_reject_pauses_unchanged_payload_before_upstream(
                     != "repeat_rejected_cooldown"
                 )
                 response.read()
-                assert len(received) == 4
+                assert len(received) == 3
             finally:
                 client.close()
     finally:

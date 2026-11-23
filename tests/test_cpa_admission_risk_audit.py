@@ -389,7 +389,7 @@ class ContractTests(unittest.TestCase):
                     },
                 },
                 "antigravity-oauth": {
-                    "requests_per_minute": 18,
+                    "requests_per_minute": 12,
                     "state": {
                         "inflight": 0,
                         "pending": 0,
@@ -401,7 +401,7 @@ class ContractTests(unittest.TestCase):
                     },
                 },
                 "workbuddy-oauth": {
-                    "requests_per_minute": 18,
+                    "requests_per_minute": 12,
                     "state": {
                         "inflight": 0,
                         "pending": 0,
@@ -413,7 +413,7 @@ class ContractTests(unittest.TestCase):
                     },
                 },
                 "workbuddy-intl-oauth": {
-                    "requests_per_minute": 18,
+                    "requests_per_minute": 12,
                     "state": {
                         "inflight": 0,
                         "pending": 0,

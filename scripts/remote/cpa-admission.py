@@ -1464,7 +1464,7 @@ def antigravity_credential_switch_429(status: int, body: bytes) -> bool:
 # locally before any upstream contact. Other request ids and sibling models on
 # the lane are untouched, and the pause is in-memory only so a restart always
 # clears it.
-ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD = 3
+ANTIGRAVITY_REPEAT_REJECT_ARM_THRESHOLD = 2
 ANTIGRAVITY_REPEAT_REJECT_ARM_WINDOW_SECONDS = 1800
 ANTIGRAVITY_REPEAT_REJECT_COOLDOWN_SECONDS = 1800
 ANTIGRAVITY_REPEAT_REJECT_MAX_TRACKED = 512

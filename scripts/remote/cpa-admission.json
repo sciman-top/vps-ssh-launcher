@@ -124,7 +124,7 @@
       "max_inflight": 2,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
-      "requests_per_minute": 18,
+      "requests_per_minute": 12,
       "mirror_probe_interval_seconds": 600,
       "cooldown_schedule_seconds": [
         60,
@@ -159,7 +159,7 @@
       "max_inflight": 1,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
-      "requests_per_minute": 18,
+      "requests_per_minute": 12,
       "cooldown_schedule_seconds": [
         60,
         120,
@@ -195,7 +195,7 @@
       "max_inflight": 1,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
-      "requests_per_minute": 18,
+      "requests_per_minute": 12,
       "cooldown_schedule_seconds": [
         60,
         120,
