@@ -994,7 +994,7 @@ desktop 原样 165KB 请求体 200/completed。这是把一次上游过滤症状
 `sensitive-words-replace` 钉扎维持不变；user 改写维持停用（会改坏自然讨论、代码与复合
 标识符，且收益未隔离证明）。旧远端 `requests.payload.replace` 规则按备份→投影→读回
 随本次事务清除，台账见
-[20261123-bwg-antigravity-hardening-review.md](../change-evidence/20261123-bwg-antigravity-hardening-review.md)。
+[20261123-bwg-antigravity-sigiso-hardening.md](../change-evidence/20261123-bwg-antigravity-sigiso-hardening.md)。
 `flash-high→flash-n` 替换与本修复无关，继续按 substitution warn 观察。
 同日 -Apply 期间 readiness fail-closed 拦截上游新增未声明模型
 `gemini-4-carbon-high`（池内凭据目录扩张，`ids-allowed` 非空两次拒跑
