@@ -114,7 +114,7 @@ open 缺陷 watch 清单（处置详见各 runbook，索引如下）：
 | [#7952](https://github.com/router-for-me/CLIProxyAPI/issues/7952) | forked session 失败逐出父会话 affinity 绑定 | 小概率缓存损失，仅 watch |
 | [#7924](https://github.com/router-for-me/CLIProxyAPI/issues/7924) | disableCooling=true 时 TOS_VIOLATION 重置 Unavailable | N/A：本栈 cooling 在役 |
 
-**换代指引**：上游 main 在 v8.1.1 后已积累 ~20 commits（未发版）＝已闭缺陷修复波
+**换代指引**：上游 main（外置参考仓已于 2026-11-23 快进核对至 `0d251842`）在 v8.1.1 后已积累 20 commits（未发版）＝已闭缺陷修复波
 （#7914/#7915/#7916/#7917/#7918/#7919/#7920：相邻 user turns、filter-block 双面、
 budget clamp、schema keywords、grounding、count-tokens in-band）+ `b8e3bc66`
 （请求对齐/最小化，WAF 相关需细读）+ `2f86992c`（分组模型按
@@ -122,11 +122,25 @@ thinking-level 路由）+ Copilot provider（与本车道无关）。**等 v8.1.
 再整批 sync**，不直追 dev；换代事务按既有 swap 流程，并核对该批改动与
 daily-cap / sig-iso overlay 的冲突面。
 
-**归因能力缺口（luna 缓存 0.27 watch 的边界）**：2026-11-23 起 24h 审计中
-`chatgpt-oauth/gpt-6-luna` cache_hit=0.27（11-21 重登后"冷缓存 24-48h 回判"
-未兑现）。按客户端归因暂不可行：CPA 侧无持久请求日志（`logs/` 目录空、usage
-队列仅 1h 保留），admission journal 的 `upstream_result` 不携带任何客户端标识
-（末位是 `_trace_context`）。可行路径＝维护窗短暂开启 CPA request-log，或
-admission 给 `upstream_result` 加脱敏 client sha8 字段（两者均属 reviewed
-变更，未裁决前不做）；小样本下客户端构成（单发首问+前缀不稳客户端）仍是首选
-假说，非服务端回归证据。
+**已闭合：`chatgpt-oauth/gpt-6-luna` 低表观缓存命中率（0.25–0.27）的会话级归因（2026-11-23 修正）**：
+
+- **日志字段事实修正**：`cpa-admission.py` 的 `_trace_context` 已在每条 `upstream_result`
+  末尾输出 `client_request_hash=<12-hex>`（来自 `X-Client-Request-Id`）与
+  `instance_hash=<12-hex>`（来自 `X-Cockpit-Instance-Id`），并由
+  `scripts/cpa_cache_reset_probe.py` 直接消费；无需开启 CPA `request-log` 或新增日志字段。
+- **24h 实测归因（`cpa_cache_reset_probe.py --ssh-profile bwg --hours 24`）**：
+  1. **原生多轮会话命中正常**：`gpt-6-luna` 作为主对话模型连续多轮运行时（如会话
+     `6a21bb035db8` 7 轮 95.3%、`4c2c35e05e1b` 5 轮 96.5%、`9cb5bd1fd351` 4 轮 90.4%、
+     `806c7701c05f` 4 轮 90.3%），缓存命中率达 **90%–97%**，与同凭据下的
+     `gpt-6.1-sol`（0.94）、`gpt-6.1-terra`（0.94）、`gpt-6.2-sol`（0.95）完全一致。
+  2. **跨模型单发（one-shot）委派稀释**：本机 `~/.codex/config.toml` 配置了
+     `review_model = "gpt-6-luna"` 且多个只读/快速子代理（`quick_triage`、
+     `documentation_review`、`luna_max`）绑定 `gpt-6-luna`。当主线程在
+     `gemini-4-neon-xhigh`、`gemini-4-argon-high` 或 `gpt-6.1-sol` 上累积 140k–419k
+     上下文后派生单发 review/子代理到 `gpt-6-luna` 时，请求复用父会话
+     `client_request_hash`，但因 OpenAI Prompt Cache 按模型隔离，该单发大上下文请求在
+     `gpt-6-luna` 上只能命中 ~6,016 tokens 的静态系统前缀（或 0），单次产生 200k–419k
+     uncached tokens；同时同一秒并发派生的 2–3 个子代理在 `chatgpt-oauth`
+     （`max_inflight=2`）上还会制造 `waited_ms` p90≈22.1s 的本地排队尖峰。
+  3. **结论**：`gpt-6-luna` 的 0.25–0.27 是**跨模型 one-shot 派生流量在聚合分母上的统计稀释**，
+     而非服务端 session/prompt_cache_key 退化或账号降智。
