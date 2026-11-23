@@ -138,6 +138,13 @@ overlay tarball 不可复用**（叠层是整文件替换形态）：
 重生成+`go vet`+`go test -race`+swap 事务（drain/备份/`IMAGE_ID_READBACK`/
 `AUTH_BYTES_UNCHANGED`/8318 验收）全流程见 11-23 sig-iso 台账先例。
 
+**2026-11-23/24 已执行**：v8.1.2 五叠层代上产（镜像
+`v8.1.2-gemini-raw-daily-cap-authiso-sigiso` id `ceb72412`、binary `19789412`、
+SWAP_OK 16:07:30Z、8318 双探针 200），配方=golang 三方合并 + WSL 本地构建
+（bwg 内存护栏拒跑的合规替代，bookworm glibc 门内建）+ SFTP 上传；台账见
+[20261124-bwg-cpa-v812-five-overlay-swap.md](../change-evidence/20261124-bwg-cpa-v812-five-overlay-swap.md)。
+"重登后 restart 容器"纪律随 #7961 正式修复可退役。
+
 **已闭合：`chatgpt-oauth/gpt-6-luna` 低表观缓存命中率（0.25–0.27）的会话级归因（2026-11-23 修正）**：
 
 - **日志字段事实修正**：`cpa-admission.py` 的 `_trace_context` 已在每条 `upstream_result`
