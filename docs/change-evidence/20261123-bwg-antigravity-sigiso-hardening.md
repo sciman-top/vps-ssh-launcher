@@ -189,5 +189,15 @@ agent 身份句裸 429（多人 A/B 复现）、裸 429=滥用早期信号（两
 - #7920 CountTokens in-band 错误体吞错：挂上游跟进，出现真实诊断损失再开案。
 - 可选（月维窗口）：sig-iso 多凭据换乘 E2E 演练（cap=1 或管理 API 停用换乘），
   覆盖"已知异凭据→替换"分支的生产直证。
-- 管理读视图对 fork 旋钮键的序列化怪癖：下次上游/fork 换代时复核是否为
-  v8 schema 迁移行为，届时决定是否向 fork 报 issue。
+- 管理读视图对 fork 旋钮键的序列化怪癖：**已闭环（2026-11-24，v8.1.2-7966fix
+  代复核）**——现役代读视图与文件全同（antigravity 节五键齐，daily-cap=150、
+  sensitive-words/replace、tos-pause-window 全在）；`signature-cache` 键
+  absent 属设计内（真名 `antigravity-signature-cache-enabled`，指针字段
+  omitempty，文件未显式设置=默认 true 生效）。源码归因：GET handler 直接
+  序列化内存态 config（config_basic.go GetConfig，omitempty）；管理序列化
+  v8.1.1→v8.1.2 零变更（排除"换代修复"）。11-23 的三键 absent 判定为
+  **一次性瞬态**（当晚多事务窗口的陈旧内存视图），纯净 v8.1.2 隔离复现
+  （scratch 容器）初始视图正确、写路径丢键未复现（PATCH/PUT 被信封校验
+  400 拒）→ 不报上游 issue（无现存可复现缺陷）。判读纪律不变：以文件
+  + cpa_policy 为准；若未来再现，先抓新鲜复现（含当时内存/文件/视图三方
+  快照）再评估报 issue。
