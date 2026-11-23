@@ -5192,97 +5192,6 @@ def test_chatgpt_prose_wrapped_upstream_error_surfaces_risk_signal() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("error_reason", "metadata_model", "expected_scope"),
-    [
-        ("QUOTA_EXHAUSTED", "claude-opus-5-5-high", "model"),
-    ],
-)
-def test_antigravity_provider_quota_window_survives_restart(
-    tmp_path: Path, error_reason: str, metadata_model: str, expected_scope: str
-) -> None:
-    opus = "claude-opus-5-5-high"
-    sonnet = "claude-sonnet-5-5-high"
-    flash = "gemini-3.8-flash-high"
-    delay = 17505
-    error = {
-        "code": 429,
-        "status": "RESOURCE_EXHAUSTED",
-        "message": "Individual quota reached. Resets in 4h51m44s.",
-        "details": [
-            {
-                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "reason": error_reason,
-                "domain": "cloudcode-pa.googleapis.com",
-                "metadata": {"model": metadata_model, "quotaResetDelay": "17504.62s"},
-            },
-            {
-                "@type": "type.googleapis.com/google.rpc.RetryInfo",
-                "retryDelay": "17504.62s",
-            },
-        ],
-    }
-    received: list[str] = []
-
-    class Upstream(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            model = json.loads(self.rfile.read(int(self.headers["Content-Length"])))[
-                "model"
-            ]
-            received.append(model)
-            payload = json.dumps({"error": error} if model == opus else {"ok": True})
-            body = payload.encode()
-            self.send_response(429 if model == opus else 200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *args: Any) -> None:
-            pass
-
-    upstream, worker = _serve_local(Upstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    path = risk_state_path(tmp_path)
-    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
-    server.proxy = AdmissionProxy(loaded, state_path=path)
-
-    def call(model: str) -> tuple[int, str | None]:
-        client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-        try:
-            client.request("POST", "/v1/responses", json.dumps({"model": model}))
-            response = client.getresponse()
-            response.read()
-            return response.status, response.getheader("Retry-After")
-        finally:
-            client.close()
-
-    try:
-        assert call(opus)[0] == 429
-        state = server.proxy.lanes["antigravity-oauth"]
-        with state._condition:
-            assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
-        disk = json.loads(path.read_text(encoding="utf-8"))
-        # Replace the proxy from the same durable state as a process restart.
-        server.proxy = AdmissionProxy(loaded, state_path=path)
-        lane_state = server.proxy.lanes["antigravity-oauth"].snapshot()
-        assert lane_state["cooldown_scope"] == expected_scope
-        assert disk["not_before"] == 0
-        assert set(disk["quota_group_not_before"]) == {"model:claude-opus-5-5-high"}
-        status, retry_after = call(opus)
-        assert status == 429 and delay - 3 <= int(retry_after or 0) <= delay
-        assert call(sonnet)[0] == 200
-        assert call(flash)[0] == 200
-        assert received == [opus, sonnet, flash]
-    finally:
-        for service in (server, upstream):
-            service.shutdown()
-            service.server_close()
-        for running in (thread, worker):
-            running.join(timeout=2)
-
-
 @pytest.mark.parametrize("retry_after", [None, 125])
 def test_antigravity_upstream_429_explains_failure_in_responses_stream(
     retry_after: int | None,
@@ -5443,10 +5352,11 @@ def test_antigravity_quota_group_splits_the_argon_bucket() -> None:
 
 
 def test_antigravity_envelope_scope_maps_verdicts() -> None:
-    """The verified Cloud Code envelope owns the scope: the bucket verdict
-    (QUOTA_EXHAUSTED + "Individual quota reached") arms the durable per-model
-    key even when the envelope names a same-family sibling; the model-capacity
-    reasons (#7884) arm it only when the envelope carries a reset; the
+    """The verified Cloud Code envelope owns the scope: a model-capacity
+    reason (#7884) arms the durable per-model key only when the envelope
+    carries a reset; the per-account bucket verdict (QUOTA_EXHAUSTED with
+    "Individual quota reached") defers to the model-first default because
+    the bucket belongs to one credential and core owns that cooldown; the
     per-user rate limiters are account-level and keep the shared lane
     breaker; everything else defers to the model-first default."""
 
@@ -5489,6 +5399,9 @@ def test_antigravity_envelope_scope_maps_verdicts() -> None:
         ).encode()
 
     scope = MODULE["antigravity_envelope_scope"]
+    # The per-account bucket verdict defers to the model-first default: one
+    # credential's bucket must never freeze the model lane-wide (2026-11-24
+    # live firing), regardless of which same-family sibling it names.
     assert (
         scope(
             envelope(
@@ -5496,9 +5409,8 @@ def test_antigravity_envelope_scope_maps_verdicts() -> None:
             ),
             "claude-opus-5-5-high",
         )
-        == "quota_group"
+        is None
     )
-    # A same-family sibling name is still the shared bucket's verdict.
     assert (
         scope(
             envelope(
@@ -5506,7 +5418,7 @@ def test_antigravity_envelope_scope_maps_verdicts() -> None:
             ),
             "claude-opus-5-5-high",
         )
-        == "quota_group"
+        is None
     )
     # A cross-family reference is not a verdict about this request's bucket.
     assert (
@@ -5690,9 +5602,13 @@ def test_antigravity_rate_limit_envelope_stays_lane_scoped(tmp_path: Path) -> No
             running.join(timeout=2)
 
 
-def test_argon_quota_key_isolates_and_survives_restart(tmp_path: Path) -> None:
-    """An argon bucket verdict arms only the argon durable key: the gemini
-    sibling rides free, and the window survives a restart."""
+def test_argon_bucket_envelope_parks_model_at_recheck_slot(tmp_path: Path) -> None:
+    """The 2026-11-24 live shape: one credential's argon weekly bucket dies
+    ("Individual quota reached. Resets in 111h21m59s"). The durable lane key
+    must stay clean -- the model parks in the mirror-cadence window instead,
+    siblings ride free, and the window is intentionally not durable: CPA
+    core owns the per-account cooldown, so a restart re-probes upstream
+    rather than re-freezing the model for the advertised days."""
     argon = "gemini-4-argon-high"
     flash = "gemini-3.8-flash-high"
     error = {
@@ -5738,13 +5654,17 @@ def test_argon_quota_key_isolates_and_survives_restart(tmp_path: Path) -> None:
     server, thread = _serve_local(cast(Any, MODULE["Handler"]))
     server.proxy = AdmissionProxy(loaded, state_path=path)
 
-    def call(model: str) -> tuple[int, str | None]:
+    def call(model: str) -> tuple[int, str | None, str | None]:
         client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
         try:
             client.request("POST", "/v1/responses", json.dumps({"model": model}))
             response = client.getresponse()
             response.read()
-            return response.status, response.getheader("Retry-After")
+            return (
+                response.status,
+                response.getheader("Retry-After"),
+                response.getheader("X-CPA-Admission-Reason"),
+            )
         finally:
             client.close()
 
@@ -5754,15 +5674,29 @@ def test_argon_quota_key_isolates_and_survives_restart(tmp_path: Path) -> None:
         with state._condition:
             assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
         disk = json.loads(path.read_text(encoding="utf-8"))
+        # The per-account bucket verdict never arms the durable lane key.
         assert disk["not_before"] == 0
-        assert set(disk["quota_group_not_before"]) == {"model:gemini-4-argon-high"}
-        # Replace the proxy from the same durable state as a process restart.
-        server.proxy = AdmissionProxy(loaded, state_path=path)
-        assert call(flash)[0] == 200
-        status, retry_after = call(argon)
+        assert "quota_group_not_before" not in disk
+        # The immediate retry is refused locally at the mirror recheck slot,
+        # not the advertised end, and never reaches upstream.
+        status, retry_after, reason = call(argon)
         assert status == 429
-        assert 3597 <= int(retry_after or 0) <= 3600
-        assert received == [argon, flash]
+        assert reason == "model_cooldown"
+        assert int(retry_after or 0) == 600
+        assert call(flash)[0] == 200
+        # release() (and its persist) may land after the response reaches the
+        # client; drain proxy #1 before rebuilding from the durable state or
+        # its final write races the restart's identity check.
+        with state._condition:
+            assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
+        # Replace the proxy from the same durable state as a process restart:
+        # the in-memory window is deliberately forgotten, so the next argon
+        # request re-probes upstream (bounded again on release) instead of
+        # trusting a stale multi-day freeze.
+        server.proxy = AdmissionProxy(loaded, state_path=path)
+        status, retry_after = call(argon)[:2]
+        assert status == 429
+        assert received == [argon, flash, argon]
     finally:
         for service in (server, upstream):
             service.shutdown()

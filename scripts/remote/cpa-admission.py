@@ -1659,14 +1659,17 @@ def antigravity_envelope(body: bytes) -> dict[str, Any] | None:
 def antigravity_envelope_scope(body: bytes, model: str | None) -> str | None:
     """Map a verified Cloud Code envelope onto the quota-key taxonomy.
 
-    "quota_group": the family-bucket verdict (QUOTA_EXHAUSTED with the
-    "Individual quota reached" message) or a model-capacity reason
-    (upstream #7884) whose body carries a reset delay -- both arm the
-    durable per-model key via antigravity_quota_scope_key, so no sibling
-    ever shares the cooldown. The envelope's own model reference may name a
-    sibling in the same family (the bucket is shared); a cross-family
-    reference is not a verdict about this request and defers to the
-    caller's default. "account": the per-user rate limiter reasons
+    "quota_group": a model-capacity reason (upstream #7884) whose body
+    carries a reset delay arms the durable per-model key via
+    antigravity_quota_scope_key, so no sibling ever shares the cooldown;
+    without a reset it defers to the caller's in-memory model window. The
+    per-account bucket verdict (QUOTA_EXHAUSTED with the "Individual quota
+    reached" message) also defers there since the 2026-11-24 live firing:
+    the bucket belongs to one credential, CPA core cools that credential
+    per-model with its own kv-persisted quota cooldown, and a durable
+    lane-wide key only froze healthy siblings for the whole advertised
+    reset (argon parked 400920s while two Pro accounts still had argon
+    headroom). "account": the per-user rate limiter reasons
     (RATE_LIMIT_EXCEEDED / USER_RATE_LIMIT_EXCEEDED) are explicitly
     account-level signals, so they keep the shared lane breaker and are
     exempt from the lane-to-model narrowing in release(). None: anything
@@ -1683,16 +1686,12 @@ def antigravity_envelope_scope(body: bytes, model: str | None) -> str | None:
     message = str(error.get("message", ""))
     requested_group = antigravity_quota_group(model)
     if reason == "QUOTA_EXHAUSTED":
-        if (
-            error.get("status") != "RESOURCE_EXHAUSTED"
-            or not message.startswith("Individual quota reached")
-            or requested_group is None
-            or not isinstance(named, str)
-            or not named
-            or antigravity_quota_group(named) != requested_group
-        ):
-            return None
-        return "quota_group"
+        # One credential's family bucket, not the lane's. The envelope may
+        # name a same-family sibling (the bucket is shared), but per-account
+        # scoping is core's job now: defer unconditionally to the
+        # model-first default so the mirror-cadence window keeps one bounded
+        # probe per recheck slot instead of freezing the model for days.
+        return None
     if reason in ("MODEL_CAPACITY_EXHAUSTED", "CAPACITY_EXHAUSTED"):
         if requested_group is None:
             return None
@@ -6139,11 +6138,12 @@ class Handler(BaseHTTPRequestHandler):
             if antigravity_quota_check:
                 # Default: a model-bearing Antigravity 429 parks only that
                 # model (the user-directed no-collective-cooldown contract).
-                # A verified Cloud Code envelope upgrades the verdict: the
-                # bucket/capacity reasons arm the durable per-model quota key,
-                # and the per-user rate limiter reasons stay account-level
-                # ("account" scopes the shared lane breaker and is exempt
-                # from the lane-to-model narrowing in release()).
+                # A verified Cloud Code envelope upgrades the verdict: a
+                # model-capacity reason with a body reset arms the durable
+                # per-model quota key, and the per-user rate limiter reasons
+                # stay account-level ("account" scopes the shared lane
+                # breaker and is exempt from the lane-to-model narrowing in
+                # release()).
                 capacity_kind = "model" if lease is not None else "lane"
                 envelope_scope = (
                     antigravity_envelope_scope(bytes(probe), lease.model)
