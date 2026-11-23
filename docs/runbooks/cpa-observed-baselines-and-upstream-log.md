@@ -107,20 +107,36 @@ open 缺陷 watch 清单（处置详见各 runbook，索引如下）：
 
 | 编号 | 一句话 | 本栈处置 |
 |---|---|---|
-| [#7960](https://github.com/router-for-me/CLIProxyAPI/issues/7960) | 全局 signatureCache 无凭据维度→跨号签名注入 | sig-iso 车道已封口；下代 fork 给上游缓存加 auth 维度，见封号 runbook"上游签名缓存缺口"节 |
-| [#7961](https://github.com/router-for-me/CLIProxyAPI/issues/7961) | transport scope 不含 grant 代→重登后跨号 keep-alive 复用 | 重登后 restart 容器的纪律，见封号 runbook 同节 |
+| [#7960](https://github.com/router-for-me/CLIProxyAPI/issues/7960) | 全局 signatureCache 无凭据维度→跨号签名注入 | **v8.1.2 已修（85225381）**：缓存按凭据域+unscoped 恢复 fail-closed；sig-iso 请求侧剥离仍独有（客户端回带面），见封号 runbook"上游签名缓存缺口"节 |
+| [#7961](https://github.com/router-for-me/CLIProxyAPI/issues/7961) | transport scope 不含 grant 代→重登后跨号 keep-alive 复用 | **v8.1.2 已修（bffe6e7e）**：transport 按 auth 身份+refresh grant digest 分池；升级前维持重登后 restart 容器纪律 |
 | [#7946](https://github.com/router-for-me/CLIProxyAPI/issues/7946) | v8.1.1 大上下文流式内存尖峰 ~2.3 GB | 并发 320K+ 容器无解释重启时首查；512MB 限制勿上调，见衍生 RFC"构建车道内存护栏"节 |
-| [#7934](https://github.com/router-for-me/CLIProxyAPI/issues/7934) | compaction 把 MAX_TOKENS 截断摘要密封为 completed+清零计数 | 320K 试用（200000/256000 阈值）期间"变笨"类投诉先核此项 |
-| [#7952](https://github.com/router-for-me/CLIProxyAPI/issues/7952) | forked session 失败逐出父会话 affinity 绑定 | 小概率缓存损失，仅 watch |
-| [#7924](https://github.com/router-for-me/CLIProxyAPI/issues/7924) | disableCooling=true 时 TOS_VIOLATION 重置 Unavailable | N/A：本栈 cooling 在役 |
+| [#7934](https://github.com/router-for-me/CLIProxyAPI/issues/7934) | compaction 把 MAX_TOKENS 截断摘要密封为 completed+清零计数 | **v8.1.2 已修（dc2455d9）**：升级前 320K 试用期间"变笨"类投诉先核此项 |
+| [#7952](https://github.com/router-for-me/CLIProxyAPI/issues/7952) | forked session 失败逐出父会话 affinity 绑定 | **v8.1.2 已修（ee5225e1）** |
+| [#7924](https://github.com/router-for-me/CLIProxyAPI/issues/7924) | disableCooling=true 时 TOS_VIOLATION 重置 Unavailable | **v8.1.2 已修（14cc6ad1）**：TOS 终态在 skip-cooldown 分支也保持 |
+| [#7957](https://github.com/router-for-me/CLIProxyAPI/issues/7957) | 503 MODEL_CAPACITY_EXHAUSTED 忽略 RetryInfo/Retry-After | **v8.1.2 已修（ae3d80f7）**；admission 镜像层此前已兜住 |
+| [#7964](https://github.com/router-for-me/CLIProxyAPI/issues/7964) | Claude→Gemini 翻译器丢 stop_sequences/output_config.format | 新 watch：本栈 desktop 流量不带 stop_sequences，低影响 |
+| [#7963](https://github.com/router-for-me/CLIProxyAPI/issues/7963) | 无 init PID 1 时插件孙进程僵尸堆积 | 新 watch：2026-11-23 实测容器 defunct=0；若出现堆积再评估 compose `init: true` |
 
-**换代指引**：上游 main（外置参考仓已于 2026-11-23 快进核对至 `0d251842`）在 v8.1.1 后已积累 20 commits（未发版）＝已闭缺陷修复波
-（#7914/#7915/#7916/#7917/#7918/#7919/#7920：相邻 user turns、filter-block 双面、
-budget clamp、schema keywords、grounding、count-tokens in-band）+ `b8e3bc66`
-（请求对齐/最小化，WAF 相关需细读）+ `2f86992c`（分组模型按
-thinking-level 路由）+ Copilot provider（与本车道无关）。**等 v8.1.2 tag 落地
-再整批 sync**，不直追 dev；换代事务按既有 swap 流程，并核对该批改动与
-daily-cap / sig-iso overlay 的冲突面。
+**换代指引（2026-11-23 晚更新：v8.1.2 已发布）**：上游 **v8.1.2 tag =
+`85225381`（2026-11-23 14:49Z，51 commits）**整批收编了上表已修项与
+#7914–#7920 修复波、`b8e3bc66`（请求对齐/最小化）、`2f86992c`
+（thinking-level 原生路由+意图读取）、大批 Claude/Gemini 翻译质量修复
+（空工具参数/提前终止/finish reason/grounding/compaction 校验）。
+"整批 sync"判定成立，但**五叠层与 v8.1.2 改写面全部相交，v8.1.1 版
+overlay tarball 不可复用**（叠层是整文件替换形态）：
+
+| 叠层 | 替换文件 | v8.1.2 冲突面 |
+|---|---|---|
+| gemini-raw | `internal/translator/gemini/openai/responses/*` | v8.1.2 gemini 翻译修复波触及同域，需 diff 重生成 |
+| agy-effort | `internal/thinking/apply.go`、`helps/model_capabilities.go`+2 测试 | apply.go +64/−6 直改；**先判超代**：上游原生已按 reasoning_effort/thinking_level 选档（`helps/antigravity_thinking.go`、`thinking/antigravity_intent.go`），叠层测试全过后才决定保留/收缩/退役 |
+| guard | `config_types.go`、`antigravity_daily_cap.go(+test)`、`execute.go`、`stream.go` | execute +65/−106、stream +34/−62 重写；daily-cap 挂钩需重打 |
+| crossauth | `antigravity_reasoning_replay.go` | **保留**：上游 replay KV 有意不按凭据分域（`antigravity_reasoning_replay_cache.go:564` 注释明言保 failover 连续性），#7846 仍为 open PR 未合并，本叠层仍是独有保护 |
+| sig-iso | `antigravity_signature_auth_isolation.go(+test)` 新文件 + request/execute/stream/tokens 挂钩版 | request +205/−22、execute/stream/tokens 重写；v8.1.2 的缓存级隔离（85225381）与请求侧剥离互补，**保留并 rebase** |
+
+换代走人工事务（updater 对 fork 镜像 `FORK_IMAGE_REBUILD_REQUIRED` 防呆
+照旧），构建必须继承 `scripts/cpa_fork_rebuild.ps1` 内存护栏，overlay 逐层
+重生成+`go vet`+`go test -race`+swap 事务（drain/备份/`IMAGE_ID_READBACK`/
+`AUTH_BYTES_UNCHANGED`/8318 验收）全流程见 11-23 sig-iso 台账先例。
 
 **已闭合：`chatgpt-oauth/gpt-6-luna` 低表观缓存命中率（0.25–0.27）的会话级归因（2026-11-23 修正）**：
 
