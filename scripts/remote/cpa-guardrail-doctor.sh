@@ -3556,12 +3556,13 @@ if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" |
   echo "model_substitution_distinct_pairs=$SUBST_PAIRS"
   awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "model_substitution_pair=%s%s\n", count, $0 }'
   # These pairs match _PROVIDER_MODEL_ALIASES in scripts/cpa_cache_reset_probe.py:
-  # Antigravity splits the requested -high/-xhigh suffix into thinkingLevel and
+  # Antigravity splits the requested thinking suffix (-low/-medium/-high/-xhigh,
+  # including v8.1.2 ThinkingGroups routing via SetAttemptModel) into thinkingLevel and
   # echoes the upstream base modelVersion (or -n / -control / -trial suffix;
   # v8.0.80 renamed the flash echo slug from -n to -control). Keep
   # recognizing the reviewed pairs for attribution while still surfacing
   # WARN_SUBSTITUTION_REVIEWED_PAIR for operator awareness.
-  KNOWN_NAME_VARIANT_PATTERN='gemini-3\.8-flash(-n|-control)? <== gemini-3\.8-flash-high|gemini-4-hydrogen <== gemini-4-hydrogen-xhigh|gemini-4-carbon <== gemini-4-carbon-high|gemini-4-argon(-trial)? <== gemini-4-argon-high|gemini-4-neon <== gemini-4-neon-xhigh'
+  KNOWN_NAME_VARIANT_PATTERN='gemini-3\.8-flash(-n|-control)? <== gemini-3\.8-flash-(minimal|low|medium|high)|gemini-4-hydrogen <== gemini-4-hydrogen-(low|medium|high|xhigh)|gemini-4-carbon <== gemini-4-carbon-(low|medium|high)|gemini-4-argon(-trial)? <== gemini-4-argon-(low|medium|high)|gemini-4-neon <== gemini-4-neon-(low|medium|high|xhigh)'
   KNOWN_SUBST_PAIRS=$(grep -E -x -c "$KNOWN_NAME_VARIANT_PATTERN" "$SUBST_PAIRS_TMP" 2>/dev/null || true)
   UNKNOWN_SUBST_PAIRS=$((SUBST_PAIRS - KNOWN_SUBST_PAIRS))
   echo "model_substitution_known_name_variant_pairs=$KNOWN_SUBST_PAIRS"
