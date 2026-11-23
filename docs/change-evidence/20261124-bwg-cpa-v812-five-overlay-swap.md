@@ -97,3 +97,32 @@ merge 仓 `fork-v811-plus-overlays` 分支即原态）。
   watch（见 runbook 五节）。
 - 上游 v8.1.2 发布仅 ~8h 即上产（用户裁决即时执行）；若上游出 v8.1.3 回归修复，
   按常规 soak 纪律评估。
+
+## 回滚（同夜 16:19:59Z，SWAP_OK 后 12.5 分钟）
+
+上游 issue **#7966**（15:43Z 开）指认 v8.1.2 tag 自带两个行为回归，在我们
+构建树上实锤复现（`go test -run TestIssue6825` / interrupted-message 配对测试
+均 FAIL）：
+
+- `4df055de`：**并行工具调用流索引重复**（`[0 1 2 0 1 2]`，参数被拆裂到重复
+  索引上）——OpenAI 格式客户端的并行 tool call 形状直击桌面代理日常；
+- `ae88b00c`：中断消息与真实输出配对错乱（空 text part 入 contents）。
+
+两提交均在 v8.1.1..v8.1.2 区间 → v8.1.1-sigiso 代干净。**决策（比例原则）**：
+v8.1.2 增量为非急性加固（sig-iso/crossauth/daily-cap/repeat-reject 四层在
+v8.1.1 代已全在），回归是功能性破坏 → 立即回滚。
+`outputs/cpa-v812-rollback-transaction-20261124.ps1`（DryRun+Apply 一次过，
+备份 `20261123T161955Z-swap-v812-to-v8111-rollback`），v8.1.2 暴露窗口
+16:07:30→16:19:59Z（12.5 分钟，期间 1h 审计零异常、无并行工具调用受害
+流量实证）。回滚后 8318 探针 200 PONG；账本
+`scripts/remote/fork-binary.sha256` 回写 `8b593f38`。
+
+**教训（固化为换代纪律）**：①fork 构建的测试腿必须跑**全量**
+`./internal/...`（本代 -run 白名单漏掉 TestIssue6825 族，~3 分钟成本换掉
+一次 12.5 分钟暴露）；②发布 <24h 的 tag 即使"收编 watch 清单"也要先跑
+全量测试再 swap（8h 新鲜度风险本次实弹兑现）；③上游 main 破损要按
+tag 归属判定（"fail on main"≠tag 干净，本案 tag 即含回归）。
+
+**重上路径**：上游修复落地（v8.1.3 或 #7966 修复 commit）后，重放本台账
+配方（merge 树在 HG03-work，基座换新 tag，全量测试门），40 分钟内完成。
+"重登后 restart"纪律在重回 v8.1.2 系前**恢复执行**。

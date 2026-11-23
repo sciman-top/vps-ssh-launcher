@@ -116,6 +116,7 @@ open 缺陷 watch 清单（处置详见各 runbook，索引如下）：
 | [#7957](https://github.com/router-for-me/CLIProxyAPI/issues/7957) | 503 MODEL_CAPACITY_EXHAUSTED 忽略 RetryInfo/Retry-After | **v8.1.2 已修（ae3d80f7）**；admission 镜像层此前已兜住 |
 | [#7964](https://github.com/router-for-me/CLIProxyAPI/issues/7964) | Claude→Gemini 翻译器丢 stop_sequences/output_config.format | 新 watch：本栈 desktop 流量不带 stop_sequences，低影响 |
 | [#7963](https://github.com/router-for-me/CLIProxyAPI/issues/7963) | 无 init PID 1 时插件孙进程僵尸堆积 | 新 watch：2026-11-23 实测容器 defunct=0；若出现堆积再评估 compose `init: true` |
+| [#7966](https://github.com/router-for-me/CLIProxyAPI/issues/7966) | **v8.1.2 tag 自带回归**：并行工具调用流索引重复+参数拆裂（`4df055de`）、中断消息配对错乱（`ae88b00c`）；本栈已实证 FAIL | **已触发回滚**（v8.1.1-sigiso 复役）；上游修复落地后重放换代配方（全量测试门） |
 
 **换代指引（2026-11-23 晚更新：v8.1.2 已发布）**：上游 **v8.1.2 tag =
 `85225381`（2026-11-23 14:49Z，51 commits）**整批收编了上表已修项与
@@ -143,7 +144,7 @@ overlay tarball 不可复用**（叠层是整文件替换形态）：
 SWAP_OK 16:07:30Z、8318 双探针 200），配方=golang 三方合并 + WSL 本地构建
 （bwg 内存护栏拒跑的合规替代，bookworm glibc 门内建）+ SFTP 上传；台账见
 [20261124-bwg-cpa-v812-five-overlay-swap.md](../change-evidence/20261124-bwg-cpa-v812-five-overlay-swap.md)。
-"重登后 restart 容器"纪律随 #7961 正式修复可退役。
+"重登后 restart 容器"纪律随 #7961 正式修复可退役（**#7966 回滚后恢复执行**，重回 v8.1.2 系时再退役）。**同夜因 #7966 tag 回归已回滚 v8.1.1-sigiso**（暴露 12.5 分钟，教训=fork 构建测试腿必须全量 `./internal/...`），见同台账回滚节。
 
 **已闭合：`chatgpt-oauth/gpt-6-luna` 低表观缓存命中率（0.25–0.27）的会话级归因（2026-11-23 修正）**：
 
