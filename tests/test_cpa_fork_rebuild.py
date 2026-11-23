@@ -42,6 +42,58 @@ def test_builder_digest_selector_checks_failure_by_one_or_zero_status() -> None:
     assert '"$BUILD_DIGEST_MATCHED" -ne 1' not in source
 
 
+def test_builder_memory_is_sized_from_host_availability() -> None:
+    """The build container must never carry a fixed cap above host supply.
+
+    A fixed --memory=1900m on the 2 GB bwg host let a compile phase trigger a
+    kernel global OOM (2026-11-22) whose victim could have been any host
+    process. The cap must come from MemAvailable minus a host headroom, be
+    clamped to the historical maximum, and refuse a build below the floor.
+    """
+
+    source = (Path(__file__).parents[1] / "scripts/cpa_fork_rebuild.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "HOST_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)" in source
+    assert "BUILD_MEM_FLOOR_MB=1500" in source
+    assert "BUILD_MEM_HEADROOM_MB=256" in source
+    assert "BUILD_MEM_REFUSED" in source
+    assert "BUILD_MEM_CAP_OK" in source
+    assert source.count("--memory=${BUILD_MEM_CAP}m") == 2
+    assert "--memory=1900m" not in source
+
+
+def test_builder_memory_floor_refuses_oversubscribed_host_on_real_bash() -> None:
+    """Replay the sizing arithmetic for the observed 2 GB host steady state."""
+
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        raise unittest.SkipTest("Git Bash is unavailable")
+    template = (
+        "HOST_AVAIL_MB={avail}\n"
+        "BUILD_MEM_FLOOR_MB=1500\n"
+        "BUILD_MEM_HEADROOM_MB=256\n"
+        "BUILD_MEM_CAP=$((HOST_AVAIL_MB - BUILD_MEM_HEADROOM_MB))\n"
+        'if [ "$BUILD_MEM_CAP" -gt 1900 ]; then BUILD_MEM_CAP=1900; fi\n'
+        'if [ "$BUILD_MEM_CAP" -lt "$BUILD_MEM_FLOOR_MB" ]; then echo refuse; '
+        'else echo "cap=$BUILD_MEM_CAP"; fi\n'
+    )
+    for avail, expected in (
+        (1419, "refuse"),  # 2026-11-22 steady state: global OOM territory
+        (1756, "cap=1500"),  # just enough: clamped from 1500 up to the floor
+        (2156, "cap=1900"),  # headroom-rich host: clamped at historical max
+    ):
+        result = subprocess.run(
+            [bash.as_posix(), "-c", template.format(avail=avail)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+
+
 def test_builder_digest_selector_rejects_mismatch_on_real_bash() -> None:
     """Prove the exact selector does not pass merely because a command failed."""
     bash = Path(r"C:\Program Files\Git\bin\bash.exe")

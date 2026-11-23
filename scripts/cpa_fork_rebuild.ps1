@@ -177,7 +177,29 @@ if [ "$MODE" = dry-run ]; then
   exit 0
 fi
 
-docker run --rm --cpus=2 --memory=1900m -v "$SRC":/src -w /src \
+# The builder once ran with a fixed 1900 MB memory cap. On this 2 GB host that
+# cap exceeds what the host can supply alongside its resident services, so a
+# deep compile phase escaped the container's own memcg and the KERNEL global OOM
+# killed the build's compile process (945 MB RSS, 2026-11-22) with nginx and
+# CPA live -- the next global-OOM victim could have been either of those.
+# Size the container from MemAvailable instead (it already counts reclaimable
+# page cache), keep a host headroom, and refuse a build the host cannot hold:
+# an undersized cap would only move the kill inside the builder's memcg, but
+# the observed compile+link demand (~1.4 GB+ anon) says such a build would
+# fail anyway. Building locally remains the alternative for a busy host.
+HOST_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+HOST_AVAIL_MB=$((HOST_AVAIL_KB / 1024))
+BUILD_MEM_FLOOR_MB=1500
+BUILD_MEM_HEADROOM_MB=256
+BUILD_MEM_CAP=$((HOST_AVAIL_MB - BUILD_MEM_HEADROOM_MB))
+if [ "$BUILD_MEM_CAP" -gt 1900 ]; then BUILD_MEM_CAP=1900; fi
+if [ "$BUILD_MEM_CAP" -lt "$BUILD_MEM_FLOOR_MB" ]; then
+  log "BUILD_MEM_REFUSED avail_mb=$HOST_AVAIL_MB cap_mb=$BUILD_MEM_CAP floor_mb=$BUILD_MEM_FLOOR_MB hint='build locally or free host memory first'"
+  exit 20
+fi
+log "BUILD_MEM_CAP_OK cap_mb=$BUILD_MEM_CAP avail_mb=$HOST_AVAIL_MB floor_mb=$BUILD_MEM_FLOOR_MB"
+
+docker run --rm --cpus=2 --memory=${BUILD_MEM_CAP}m -v "$SRC":/src -w /src \
   -e CGO_ENABLED=1 -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local "$BUILD_IMAGE" bash -c '
 set -Eeuo pipefail
 go version
@@ -186,7 +208,7 @@ go test -count=1 ./internal/translator/gemini/openai/responses/
 ' 2>&1 | tail -20
 log 'TRANSLATOR_TESTS_OK'
 
-docker run --rm --cpus=2 --memory=1900m -v "$SRC":/src -w /src \
+docker run --rm --cpus=2 --memory=${BUILD_MEM_CAP}m -v "$SRC":/src -w /src \
   -e CGO_ENABLED=1 -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local "$BUILD_IMAGE" bash -c '
 set -Eeuo pipefail
 go build -buildvcs=false -trimpath \
