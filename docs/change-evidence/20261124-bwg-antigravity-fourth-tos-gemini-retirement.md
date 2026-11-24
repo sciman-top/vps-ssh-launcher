@@ -55,6 +55,20 @@ claude id；test_cpa_admission 合成 loader 钉历史模型集（lane models+mo
 - 严格 doctor：`DOCTOR_CONTRACT_OK` EXIT=0，`lane-hold-antigravity-oauth=OPEN`，
   `antigravity_lane=OK allowed=claude-2名 excluded=15项`，投影零漂移。
 
+## 同日修正：flash-high 复名（用户指令，33738d0 已推）
+
+用户澄清退役面=G4（烧灼全发生在 G4-capable 账号），三个 flash-only 免费号应继续
+服务。`gemini-3.8-flash-high`（车道唯一 flash 档；上游无裸名 gemini-3.8-flash）
+复名：routes/lane/expected/allowed/桌面 overrides/两 runbook 恢复，同名墓碑从
+`antigravity_oauth_exclusions` 撤除；gemini-4 三名墓碑保持。开名手术照 11-16 手筋：
+备份 `/root/cpa-config-backup-before-flash-reopen-20261124T041619Z.yaml` → python
+按 excluded-models.antigravity 键精确截块摘单行（同 inode 写回热加载，不单独重启）
+→ -Apply 收编（`flash=allowed claude=allowed gemini-4=retired-and-excluded`）。
+Full gates EXIT=0。验收：union `flash_high_in_union=True`（gemini_ids 仅 flash-high，
+10 models）、8318 flash 正向单发 **200 PONG**（lane_admit→upstream 200，上游回显
+flash-n 变体）、argon 负向仍 400 本地拒（2ms 零上游）、严格 doctor
+`DOCTOR_CONTRACT_OK` EXIT=0、`allowed=flash-high+claude×2`、排除表 14 项、lane OPEN。
+
 ## 回滚
 
 仓库 `git revert 4e83742`；远端按 /opt/cliproxyapi/backups 当日备份目录重放。
