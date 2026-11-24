@@ -113,6 +113,8 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   `codex/gpt` 提及保持原样，11-21 摘除的全量 user 改写不恢复。排查序：先看
   journal 是否有 `kind=antigravity_identity_user_text`，再按维护者方法二分，
   **不得用在役账号做触发二分**。清洗只针对内容过滤这条路径，不是封号的充分条件。
+  定位过程、回放与回滚见
+  [20261125 台账](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)。
 - WorkBuddy 官方客户端与网关的结果差异只能缩小排查范围；两侧同拒仍可能
   是共享模型故障或网络问题，不能直接确认账号受限。11158 等社区分类也不是
   永久模型封锁的证明，不主动诱发错误做 A/B。
