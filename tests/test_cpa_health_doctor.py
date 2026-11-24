@@ -1492,3 +1492,50 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                             "oauth_refresh_unattributed_container_signals_7d=1", text
                         )
                     self.assertNotIn("SECRET", text)
+
+    def test_cpa_health_cli_rejects_bare_and_unknown_modes(self) -> None:
+        """Bare/unknown argv modes fail closed before any config read or probe.
+
+        2026-11-24: a bare run raised a class-only IndexError and `--help`
+        silently ran the baseline generation probe and printed HEALTH_OK --
+        both read as a healthy gateway without checking what the caller
+        intended. The rejection must happen before the /opt config open so
+        this test stays cross-platform.
+        """
+        script = Path(__file__).parents[1] / "scripts/remote/cpa-health.py"
+        cases: tuple[tuple[list[str], str], ...] = (
+            ([], "CPA_HEALTH_MODE_REQUIRED"),
+            (["--help"], "CPA_HEALTH_MODE_UNSUPPORTED mode=--help"),
+            (["generaton-all"], "CPA_HEALTH_MODE_UNSUPPORTED mode=generaton-all"),
+        )
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                result = subprocess.run(
+                    [sys.executable, str(script), *argv],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 20, result.stderr)
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn("HEALTH_OK", result.stdout)
+
+    def test_cpa_health_cli_modes_are_the_documented_surface(self) -> None:
+        import runpy
+
+        modes = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        )["CLI_MODES"]
+        self.assertEqual(
+            modes,
+            {
+                "readiness",
+                "generation",
+                "generation-all",
+                "quality-canary",
+                "quality-eval",
+                "relay-soft",
+                "cache-canary",
+            },
+        )
+        self.assertIn("readiness", modes)

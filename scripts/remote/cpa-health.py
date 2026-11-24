@@ -37,6 +37,12 @@ PROBE_LOCK_MODES = frozenset(
         "relay-soft",
     }
 )
+# The complete CLI surface: every production caller (updater readiness and
+# generation, acceptance harnesses, runbook canaries) passes one explicit
+# mode. A bare run used to die as a class-only IndexError and an unknown mode
+# used to fall into the baseline generation probe and print HEALTH_OK for a
+# check nobody asked for; both must fail closed instead of spending quota.
+CLI_MODES = PROBE_LOCK_MODES | {"readiness"}
 
 
 class UpstreamProtocolError(ValueError):
@@ -1889,11 +1895,24 @@ def _release_probe_lock(lock):
 if __name__ == "__main__":
     import yaml
 
+    if len(sys.argv) < 2 or sys.argv[1] not in CLI_MODES:
+        # Same discipline as CACHE_CANARY_MODEL_UNSUPPORTED: name the argv
+        # problem before any config read or probe, so a typo cannot spend a
+        # generation or exit with a bare class-only dead end. Exit 20 keeps
+        # every caller fail-closed.
+        if len(sys.argv) < 2:
+            print("CPA_HEALTH_MODE_REQUIRED", file=sys.stderr)
+        else:
+            print(
+                f"CPA_HEALTH_MODE_UNSUPPORTED mode={sys.argv[1]}",
+                file=sys.stderr,
+            )
+        raise SystemExit(20)
+    mode = sys.argv[1]
     lock = None
     try:
         with open("/opt/cliproxyapi/config.yaml", encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
-        mode = sys.argv[1]
         lock, lock_failure = _acquire_probe_lock(mode)
         if lock_failure == "PROBE_LOCK_NOT_REQUIRED":
             if mode == "cache-canary":
