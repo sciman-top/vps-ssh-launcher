@@ -684,6 +684,17 @@ def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> 
     assert antigravity_risk_signal(403, lower) == ("account_restricted", None)
 
 
+@pytest.mark.parametrize("code", [401, 403])
+def test_antigravity_account_restriction_survives_later_sse_auth_error(
+    code: int,
+) -> None:
+    body = (
+        'data: {"error":{"code":403,"reason":"TOS_VIOLATION"}}\n\n'
+        f'data: {{"error":{{"code":{code}}}}}\n\n'
+    ).encode()
+    assert antigravity_risk_signal(200, body) == ("account_restricted", None)
+
+
 def test_gemini_resource_exhausted_cools_the_lane() -> None:
     """Google's own quota verdict must reach the ladder before the exemptions.
 

@@ -1315,7 +1315,7 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
         if not isinstance(error, dict):
             continue
         if error.get("code") in (401, 403):
-            hold = "authentication_required"
+            hold = hold or "authentication_required"
         # 2026-11-06/07 wave: Antigravity 403 denials carry
         # status=PERMISSION_DENIED plus reason=TOS_VIOLATION (or
         # SERVICE_DISABLED) in the ErrorInfo detail, and need not say anything
