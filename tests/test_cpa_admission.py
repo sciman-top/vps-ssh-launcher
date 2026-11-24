@@ -4918,14 +4918,55 @@ def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -
     assert parsed["input"][2]["content"] == [{"type": "input_image", "image_url": "x"}]
 
 
-def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_parts() -> (
-    None
-):
-    sanitize = MODULE["sanitize_antigravity_identity_user_text"]
+def test_neutralize_agent_identity_sentences_keeps_paths_and_product_mentions() -> None:
+    neutralize_sentences = MODULE["neutralize_agent_identity_sentences"]
+
+    assert (
+        neutralize_sentences(
+            "You are Claude Code, Anthropic\u2019s official CLI for Claude."
+        )
+        == "You are a coding assistant."
+    )
+    assert (
+        neutralize_sentences(
+            "You are Claude Code, Anthropic's official CLI for Claude. You help."
+        )
+        == "You are a coding assistant. You help."
+    )
+    assert (
+        neutralize_sentences("You are DeepSeek Harness, a coding agent.")
+        == "You are Assistant Framework, a coding agent."
+    )
+    assert (
+        neutralize_sentences("see deepseek harness docs, model deepseek-v4.1-flash")
+        == "see assistant framework docs, model deepseek-v4.1-flash"
+    )
+    assert (
+        neutralize_sentences("you are ZCode, an interactive agent")
+        == "you are a coding assistant, an interactive agent"
+    )
+    assert (
+        neutralize_sentences("You are WorkBuddy, an assistant.")
+        == "You are a coding assistant, an assistant."
+    )
+    assert (
+        neutralize_sentences("You are Codex, based on GPT-6.")
+        == "You are a coding agent."
+    )
+    unchanged = (
+        r"Read C:\x\.zcode\skills\a.md and ~/.codex/config.toml; "
+        "GPT-5, OpenAI, ChatGPT, ZCode and the Codex CLI"
+    )
+    assert neutralize_sentences(unchanged) == unchanged
+
+
+def test_neutralize_agent_identity_text_rewrites_only_the_identity_sentence() -> None:
+    neutralize = MODULE["neutralize_agent_identity_text"]
     handoff = (
         "Another language model started to solve this problem and produced a "
-        'summary of its thinking process. It restated "You are Codex, an agent '
-        'based on GPT-5" and mentioned ChatGPT desktop and OpenAI.'
+        'summary of its thinking process. It quoted "You are Codex, an agent '
+        'based on GPT-5" and mentioned ChatGPT desktop, OpenAI, and '
+        "~/.codex/config.toml."
     )
     body = json.dumps(
         {
@@ -4933,7 +4974,7 @@ def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_par
             "input": [
                 {
                     "role": "developer",
-                    "content": "You are Codex, an agent based on GPT-5.",
+                    "content": "You are Codex, a coding agent based on GPT-5.",
                 },
                 {"role": "user", "content": handoff},
                 {
@@ -4942,16 +4983,14 @@ def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_par
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "log line: 'You are Codex' appears here",
+                            "text": "log line: 'you are ZCode' appears here",
                         },
                         {"type": "input_image", "image_url": "x"},
                     ],
                 },
                 {
                     "role": "user",
-                    "content": (
-                        "Check how Codex handles gpt-6-luna and ChatGPT desktop"
-                    ),
+                    "content": "Check how Codex handles gpt-6-luna and ChatGPT desktop",
                 },
                 {"role": "assistant", "content": "You are Codex."},
                 {
@@ -4963,19 +5002,19 @@ def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_par
         ensure_ascii=False,
     ).encode()
 
-    normalized, stats = sanitize("/v1/responses", body, "antigravity-oauth")
+    normalized, stats = neutralize("/v1/responses", body, "antigravity-oauth")
     parsed = json.loads(normalized)
 
-    assert stats == {"handoff_parts": 1, "identity_parts": 1}
-    assert parsed["input"][0]["content"] == "You are Codex, an agent based on GPT-5."
+    assert stats == {"developer_parts": 1, "handoff_parts": 1, "user_parts": 1}
+    assert parsed["input"][0]["content"] == "You are a coding agent."
     assert parsed["input"][1]["content"] == (
         "Another language model started to solve this problem and produced a "
-        'summary of its thinking process. It restated "You are agentx, an agent '
-        'based on agentx-5" and mentioned chatservice desktop and vendor.'
+        'summary of its thinking process. It quoted "You are a coding agent" '
+        "and mentioned ChatGPT desktop, OpenAI, and ~/.codex/config.toml."
     )
     assert (
         parsed["input"][2]["content"][0]["text"]
-        == "log line: 'You are agentx' appears here"
+        == "log line: 'you are a coding assistant' appears here"
     )
     assert parsed["input"][2]["content"][1] == {"type": "input_image", "image_url": "x"}
     assert (
@@ -4984,9 +5023,9 @@ def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_par
     )
     assert parsed["input"][4]["content"] == "You are Codex."
     assert parsed["input"][5]["output"] == "You are Codex, an agent based on GPT-5."
-    # A second pass changes nothing, and a body without identity-bearing user
-    # text comes back as the same bytes.
-    assert sanitize("/v1/responses", normalized, "antigravity-oauth") == (
+    # A second pass changes nothing, and a body without an identity sentence
+    # comes back as the same bytes.
+    assert neutralize("/v1/responses", normalized, "antigravity-oauth") == (
         normalized,
         {},
     )
@@ -4998,39 +5037,92 @@ def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_par
             ],
         }
     ).encode()
-    assert sanitize("/v1/responses", clean, "antigravity-oauth") == (clean, {})
+    assert neutralize("/v1/responses", clean, "antigravity-oauth") == (clean, {})
 
 
-def test_sanitize_antigravity_identity_user_text_is_lane_and_route_scoped() -> None:
-    sanitize = MODULE["sanitize_antigravity_identity_user_text"]
-    body = json.dumps(
+def test_neutralize_agent_identity_text_covers_workbuddy_and_start_plan_lanes() -> None:
+    neutralize = MODULE["neutralize_agent_identity_text"]
+    chat = json.dumps(
         {
-            "model": "gemini-3.8-flash-high",
-            "input": [{"role": "user", "content": "You are Codex, based on GPT-5."}],
-        }
+            "model": "deepseek-v4.1-flash",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are DeepSeek Harness. Use model deepseek-v4.1-flash.",
+                },
+                {
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "You are CodeBuddy, an assistant."},
+                        {"type": "image_url", "image_url": {"url": "x"}},
+                    ],
+                },
+                {"role": "assistant", "content": "You are Codex."},
+            ],
+        },
+        ensure_ascii=False,
     ).encode()
 
-    assert sanitize("/v1/responses", body, "chatgpt-oauth") == (body, {})
-    assert sanitize("/v1/responses", body, None) == (body, {})
-    assert sanitize("/v1/chat/completions", body, "antigravity-oauth") == (body, {})
+    normalized, stats = neutralize("/v1/chat/completions", chat, "workbuddy-oauth")
+    parsed = json.loads(normalized)
 
-
-def test_antigravity_identity_swap_is_the_system_instruction_map() -> None:
-    import runpy
-    from pathlib import Path
-
-    policy = runpy.run_path(
-        str(
-            Path(__file__).resolve().parents[1] / "scripts" / "remote" / "cpa_policy.py"
-        )
-    )
-
+    assert stats == {"developer_parts": 1, "system_parts": 1, "user_parts": 1}
     assert (
-        dict(MODULE["ANTIGRAVITY_IDENTITY_SWAP"])
-        == policy["EXPECTED_CONFIG_PATHS"][
-            ("oauth", "providers", "antigravity", "sensitive-words-replace")
-        ]
+        parsed["messages"][0]["content"]
+        == "You are Assistant Framework. Use model deepseek-v4.1-flash."
     )
+    assert parsed["messages"][1]["content"][0]["text"] == "You are a coding assistant."
+    assert (
+        parsed["messages"][2]["content"][0]["text"]
+        == "You are a coding assistant, an assistant."
+    )
+    assert parsed["messages"][2]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "x"},
+    }
+    assert parsed["messages"][3]["content"] == "You are Codex."
+
+    messages = json.dumps(
+        {
+            "model": "glm-5.3-flash-start",
+            "system": [{"type": "text", "text": "You are Codex, based on GPT-6."}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are ZCode, an interactive agent. See "
+                        r"C:\Users\u\.zcode\skills\a\SKILL.md"
+                    ),
+                }
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    normalized, stats = neutralize("/v1/messages", messages, "zcode-start-plan")
+    parsed = json.loads(normalized)
+
+    assert stats == {"system_parts": 1, "user_parts": 1}
+    assert parsed["system"] == [{"type": "text", "text": "You are a coding agent."}]
+    assert parsed["messages"][0]["content"] == (
+        "You are a coding assistant, an interactive agent. "
+        r"See C:\Users\u\.zcode\skills\a\SKILL.md"
+    )
+    # The official-client lane, unlisted lanes, and non-chat routes keep their
+    # bytes.
+    assert neutralize("/v1/responses", chat, "chatgpt-oauth") == (chat, {})
+    assert neutralize("/v1/responses", chat, "zhipu-coding-plan") == (chat, {})
+    assert neutralize("/v1/responses", chat, None) == (chat, {})
+    assert neutralize("/v1/models", chat, "workbuddy-oauth") == (chat, {})
 
 
 def test_omit_antigravity_historical_user_images_replaces_answered_images_only() -> (

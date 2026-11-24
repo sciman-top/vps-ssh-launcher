@@ -1792,6 +1792,11 @@ docker() {{
                 ]
                 expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
                     "antigravity", {}
+                )["sensitive-patterns-replace"] = policy["EXPECTED_CONFIG_PATHS"][
+                    ("oauth", "providers", "antigravity", "sensitive-patterns-replace")
+                ]
+                expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
+                    "antigravity", {}
                 )["tos-pause-window"] = policy["EXPECTED_CONFIG_PATHS"][
                     ("oauth", "providers", "antigravity", "tos-pause-window")
                 ]

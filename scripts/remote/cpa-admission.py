@@ -3323,117 +3323,153 @@ def normalize_antigravity_image_detail(
     return out, changed
 
 
-# Antigravity's content filter reads user-role text as well as the system
-# instruction (2026-11-18 controlled probe: a fingerprint sentence placed in a
-# user message returns the bare 429). CLIProxyAPI's `sensitive-words-replace`
-# rewrites systemInstruction only, so an identity sentence that reaches the lane
-# inside a user turn is forwarded verbatim. The shape that carried it on
-# 2026-11-22 was Codex's compaction handoff summary: a user-role message,
-# written by the previous model, that quoted the agent's own system prompt
-# ("You are Codex, an agent based on GPT-5..."). That forked session drew the
-# only bare 429s of its window while sessions whose fingerprint literals sat in
-# tool output passed, and a 2026-11-25 replay of its history through the
-# pipeline as it stood drew the same 429. Only user text that carries an agent
-# identity is rewritten, with the same literal map as the system instruction;
-# ordinary user prompts and code identifiers stay verbatim.
-ANTIGRAVITY_IDENTITY_SWAP = (
-    ("chatgpt", "chatservice"),
-    ("openai", "vendor"),
-    ("codex", "agentx"),
-    ("gpt", "agentx"),
+# Upstream content filters key on the sentence with which a coding agent
+# introduces itself. Antigravity returns the bare 429 for it in the system
+# instruction and in user text (CLIProxyAPI #7553; the 2026-11-18 controlled
+# probe; the 2026-11-22 forked session whose compaction handoff summary quoted
+# "You are Codex, an agent based on GPT-5"). WorkBuddy and the ZCode start plan
+# serve official-client plans through third-party code, so naming another agent
+# in the prompt only discloses the client. CLIProxyAPI cleans systemInstruction
+# for Antigravity only, and by whole-word replacement; this pass rewrites the
+# identity sentence alone, so paths such as `.zcode/skills` and ordinary
+# mentions of a product keep their bytes. Bare product tokens in user text have
+# passed through every accepted session, so they are left alone here. The
+# ChatGPT lane is excluded: Codex's identity sentence is the official client's
+# own shape there.
+AGENT_IDENTITY_SENTENCES = (
+    (
+        re.compile(
+            r"\byou are claude code, anthropic['\u2019]s official cli for claude\b\.?",
+            re.IGNORECASE,
+        ),
+        "You are a coding assistant.",
+    ),
+    (
+        # DeepSeek Harness names itself by product phrase, not in one fixed
+        # sentence (#7553: three occurrences in its developer prompt drew the
+        # 429; "Assistant Framework" cleared them).
+        re.compile(r"\bdeepseek harness\b", re.IGNORECASE),
+        "Assistant Framework",
+    ),
+    (
+        re.compile(
+            r"\byou are (?:an? )?(?:zcode|codebuddy|workbuddy)\b", re.IGNORECASE
+        ),
+        "You are a coding assistant",
+    ),
+    (
+        re.compile(
+            r"\byou are (?:an? )?codex\b(?:, (?:an? )?(?:coding |interactive )?agent)?"
+            r"(?:,? based on gpt-[0-9]+(?:\.[0-9]+)*)?",
+            re.IGNORECASE,
+        ),
+        "You are a coding agent",
+    ),
 )
 _ANTIGRAVITY_HANDOFF_PREAMBLE = "another language model started to solve this problem"
-_ANTIGRAVITY_IDENTITY_PHRASE = re.compile(
-    r"\byou\s+(?:are|['\u2019]re)\s+(?:an?\s+)?(?:chatgpt|openai|codex|gpt)\b",
-    re.IGNORECASE,
-)
-_ANTIGRAVITY_IDENTITY_SWAP_RE = re.compile(
-    "|".join(
-        re.escape(target)
-        for target, _ in sorted(
-            ANTIGRAVITY_IDENTITY_SWAP, key=lambda pair: -len(pair[0])
-        )
-    ),
-    re.IGNORECASE,
-)
-_ANTIGRAVITY_IDENTITY_SWAP_MAP = {
-    target: replacement for target, replacement in ANTIGRAVITY_IDENTITY_SWAP
+# Lane -> message roles whose text gets the identity sentence rewritten.
+_AGENT_IDENTITY_TEXT_ROLES = {
+    "antigravity-oauth": frozenset({"developer", "user"}),
+    "workbuddy-oauth": frozenset({"system", "developer", "user"}),
+    "workbuddy-intl-oauth": frozenset({"system", "developer", "user"}),
+    "zcode-start-plan": frozenset({"system", "developer", "user"}),
 }
 
 
-def _antigravity_identity_swap(text: str) -> str:
-    return _ANTIGRAVITY_IDENTITY_SWAP_RE.sub(
-        lambda match: _ANTIGRAVITY_IDENTITY_SWAP_MAP[match.group(0).lower()], text
-    )
+def _as_matched_case(matched: str, target: str) -> str:
+    if matched.islower():
+        return target.lower()
+    if matched[:1].islower():
+        return target[:1].lower() + target[1:]
+    return target
 
 
-def _antigravity_identity_bearing(text: str) -> bool:
-    if text.lstrip().lower().startswith(_ANTIGRAVITY_HANDOFF_PREAMBLE):
-        return True
-    return _ANTIGRAVITY_IDENTITY_PHRASE.search(text) is not None
+def neutralize_agent_identity_sentences(text: str) -> str:
+    for pattern, replacement in AGENT_IDENTITY_SENTENCES:
+        text = pattern.sub(
+            lambda match, target=replacement: _as_matched_case(match.group(0), target),
+            text,
+        )
+    return text
 
 
-def sanitize_antigravity_identity_user_text(
+def neutralize_agent_identity_text(
     path: str, body: bytes, lane_name: str | None
 ) -> tuple[bytes, dict[str, int]]:
-    """Swap agent identity literals in identity-bearing user text.
+    """Rewrite agent identity sentences in the prompt text of listed lanes.
 
-    A user-role text part is rewritten when it is Codex's compaction handoff
-    summary or when it states an agent identity. Every other user item, and
-    every developer, assistant, tool, and reasoning item, keeps its bytes:
-    the system instruction is cleaned by CLIProxyAPI, and tool output has
-    carried these literals through thousands of accepted requests.
+    Responses `input`, chat-completions `messages`, and Anthropic `system` /
+    `messages` are walked. Only text in the lane's roles changes, and only the
+    identity sentence inside it; tool output, assistant turns, and every other
+    lane keep their bytes. A part that does not change is not counted.
     """
-    if lane_name != "antigravity-oauth":
-        return body, {}
-    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+    roles = _AGENT_IDENTITY_TEXT_ROLES.get(lane_name or "")
+    if not roles:
         return body, {}
     payload = parsed_json_body(body)
     if payload is _PARSE_FAILED or not isinstance(payload, dict):
         return body, {}
-    items = payload.get("input")
-    if not isinstance(items, list):
-        return body, {}
+    stats: dict[str, int] = {}
 
-    stats = {"handoff_parts": 0, "identity_parts": 0}
-
-    def kind_of(text: str) -> str:
-        return (
-            "handoff_parts"
-            if text.lstrip().lower().startswith(_ANTIGRAVITY_HANDOFF_PREAMBLE)
-            else "identity_parts"
-        )
-
-    def swap(kind: str, text: str) -> str:
-        replaced = _antigravity_identity_swap(text)
+    def swap(text: str, role: str) -> str:
+        replaced = neutralize_agent_identity_sentences(text)
         if replaced != text:
-            stats[kind] += 1
+            handoff = role == "user" and text.lstrip().lower().startswith(
+                _ANTIGRAVITY_HANDOFF_PREAMBLE
+            )
+            key = "handoff_parts" if handoff else f"{role}_parts"
+            stats[key] = stats.get(key, 0) + 1
         return replaced
 
-    for item in items:
-        if (
-            not isinstance(item, dict)
-            or item.get("role") != "user"
-            or item.get("type", "message") != "message"
-        ):
-            continue
-        content = item.get("content")
+    def rewrite_content(content: Any, role: str) -> Any:
         if isinstance(content, str):
-            if _antigravity_identity_bearing(content):
-                item["content"] = swap(kind_of(content), content)
-            continue
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "input_text"
-                and isinstance(part.get("text"), str)
-                and _antigravity_identity_bearing(part["text"])
-            ):
-                part["text"] = swap(kind_of(part["text"]), part["text"])
+            return swap(content, role)
+        if isinstance(content, list):
+            for part in content:
+                if (
+                    isinstance(part, dict)
+                    and isinstance(part.get("text"), str)
+                    and part.get("type") in (None, "text", "input_text")
+                ):
+                    part["text"] = swap(part["text"], role)
+        return content
 
-    if not any(stats.values()):
+    def rewrite_message(message: Any) -> None:
+        if (
+            isinstance(message, dict)
+            and message.get("role") in roles
+            and message.get("type") in (None, "message")
+        ):
+            message["content"] = rewrite_content(
+                message.get("content"), message["role"]
+            )
+
+    route = urlsplit(path).path.rstrip("/")
+    if route.endswith("/responses"):
+        items = payload.get("input")
+        if not isinstance(items, list):
+            return body, {}
+        for item in items:
+            rewrite_message(item)
+    elif route.endswith("/chat/completions"):
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return body, {}
+        for message in messages:
+            rewrite_message(message)
+    elif route.endswith("/messages"):
+        if "system" in roles:
+            payload["system"] = rewrite_content(payload.get("system"), "system")
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return body, {}
+        for message in messages:
+            if isinstance(message, dict) and message.get("role") == "user":
+                message["content"] = rewrite_content(message.get("content"), "user")
+    else:
+        return body, {}
+
+    if not stats:
         return body, {}
     out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     _body_parse_state.entry = (out, payload)
@@ -5505,12 +5541,23 @@ class Handler(BaseHTTPRequestHandler):
                 collapsed_retry_turns,
                 self._trace_context,
             )
-        body, identity_swap_stats = sanitize_antigravity_identity_user_text(
+        body, identity_text_stats = neutralize_agent_identity_text(
             self.path, body, lane_name
         )
-        if identity_swap_stats:
+        if identity_text_stats:
             identity_counts = " ".join(
-                f"{key}={count}" for key, count in sorted(identity_swap_stats.items())
+                f"{key}={count}" for key, count in sorted(identity_text_stats.items())
+            )
+            logging.info(
+                "protocol_normalized model=%s kind=%s %s %s",
+                observed_model,
+                (
+                    "antigravity_identity_user_text"
+                    if lane_name == "antigravity-oauth"
+                    else "agent_identity_neutralized"
+                ),
+                identity_counts,
+                self._trace_context,
             )
             logging.info(
                 "protocol_normalized model=%s kind=antigravity_identity_user_text "

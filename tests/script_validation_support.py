@@ -383,6 +383,18 @@ class ScriptValidationMixin:
                                 "codex": "agentx",
                                 "gpt": "agentx",
                             },
+                            "sensitive-patterns-replace": json.loads(
+                                json.dumps(
+                                    policy["EXPECTED_CONFIG_PATHS"][
+                                        (
+                                            "oauth",
+                                            "providers",
+                                            "antigravity",
+                                            "sensitive-patterns-replace",
+                                        )
+                                    ]
+                                )
+                            ),
                         }
                     },
                     "request-scoped-errors": json.loads(

@@ -187,17 +187,37 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # for agent identity literals in the system instruction (CLIProxyAPI #7553,
     # #5751); zero-width `sensitive-words` stopped clearing it on 2026-11-17
     # and the maintainer recommends literal replacement in systemInstruction.
-    # This map is that mechanism. It cannot reach user-role text: the identity
-    # sentence that drew the 2026-11-22 bare 429s arrived inside Codex's
-    # compaction handoff summary. cpa-admission.py swaps that shape with this
-    # same map; the blanket user-role swap stays removed because it rewrote
-    # natural prompts.
+    # This map is that mechanism. It cannot reach user-role text, and it is
+    # whole-word: cpa-admission.py rewrites the identity sentence itself there
+    # and for the other agents below; the blanket user-role swap stays removed
+    # because it rewrote natural prompts.
     ("oauth", "providers", "antigravity", "sensitive-words-replace"): {
         "chatgpt": "chatservice",
         "openai": "vendor",
         "codex": "agentx",
         "gpt": "agentx",
     },
+    # Identity lines of the other coding agents, as ordered RE2 rules that run
+    #  before the word map above and match the sentence or product phrase only. A
+    #  whole-word "zcode" key would rewrite every `.zcode/skills` path in a ZCode
+    #  prompt; DeepSeek Harness names itself by product phrase (#7553).
+    ("oauth", "providers", "antigravity", "sensitive-patterns-replace"): [
+        {
+            "pattern": (
+                r"(?i)\byou are claude code, anthropic['\x{2019}]s official cli"
+                r" for claude\b\.?"
+            ),
+            "replacement": "You are a coding assistant.",
+        },
+        {
+            "pattern": r"(?i)\bdeepseek harness\b",
+            "replacement": "Assistant Framework",
+        },
+        {
+            "pattern": r"(?i)\byou are (?:an? )?(?:zcode|codebuddy|workbuddy)\b",
+            "replacement": "You are a coding assistant",
+        },
+    ],
     # Stabilized device profile: confirmed Claude Code callers contribute their
     # real software profile, persisted per credential (KV 7d TTL), avoiding
     # restart churn. Deliberately no UA/OS/timezone overrides set. Location is

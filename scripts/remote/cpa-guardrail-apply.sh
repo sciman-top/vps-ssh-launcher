@@ -1822,15 +1822,36 @@ antigravity_connection_pool_after["enabled"] = True
 antigravity_connection_pool_after["idle-conn-timeout"] = "30s"
 antigravity_connection_pool_after["max-idle-conns-per-host"] = 2
 antigravity_provider_after["connection-pool"] = antigravity_connection_pool_after
-# Retain exact replacement only for the System Instruction projection. Natural
-# user text is not rewritten below; this mapping's account-risk benefit remains
-# unproven and needs separate review before any further use.
+# Exact replacement for the System Instruction projection (reviewed 2026-11-25):
+# Antigravity's content filter trips on these literals there. User text is not
+# rewritten here; cpa-admission.py rewrites the identity sentence itself.
 antigravity_provider_after["sensitive-words-replace"] = {
     "chatgpt": "chatservice",
     "openai": "vendor",
     "codex": "agentx",
     "gpt": "agentx",
 }
+# Identity lines of the other coding agents, as ordered RE2 rules that run
+#  before the word map above and match the sentence or product phrase only. A
+#  whole-word "zcode" key would rewrite every `.zcode/skills` path in a ZCode
+#  prompt; DeepSeek Harness names itself by product phrase (#7553).
+antigravity_provider_after["sensitive-patterns-replace"] = [
+    {
+        "pattern": (
+            r"(?i)\byou are claude code, anthropic['\x{2019}]s official cli"
+            r" for claude\b\.?"
+        ),
+        "replacement": "You are a coding assistant.",
+    },
+    {
+        "pattern": r"(?i)\bdeepseek harness\b",
+        "replacement": "Assistant Framework",
+    },
+    {
+        "pattern": r"(?i)\byou are (?:an? )?(?:zcode|codebuddy|workbuddy)\b",
+        "replacement": "You are a coding assistant",
+    },
+]
 oauth_exclusions = oauth_block_after.get("excluded-models")
 if oauth_exclusions is None:
     oauth_exclusions = {}

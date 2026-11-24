@@ -677,6 +677,46 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 f"expected sensitive-words-replace pin to reject {bad!r}",
             )
 
+    def test_cpa_policy_pins_antigravity_sensitive_patterns_replace(self) -> None:
+        import json
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        key = ("oauth", "providers", "antigravity", "sensitive-patterns-replace")
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        rules = policy["EXPECTED_CONFIG_PATHS"][key]
+        # The order is part of the contract: upstream applies the rules in
+        # sequence before the word map, so the Claude Code clause is consumed
+        # whole before any shorter rule can match inside it.
+        self.assertEqual(
+            [rule["replacement"] for rule in rules],
+            [
+                "You are a coding assistant.",
+                "Assistant Framework",
+                "You are a coding assistant",
+            ],
+        )
+        for bad in (
+            [],
+            rules[:1],
+            list(reversed(rules)),
+            [
+                {**rules[0], "replacement": "You are something else."},
+                *rules[1:],
+            ],
+        ):
+            mutated = json.loads(json.dumps(config))
+            mutated["oauth"]["providers"]["antigravity"][
+                "sensitive-patterns-replace"
+            ] = bad
+            issues = policy["validate_config"](mutated)
+            self.assertTrue(
+                any("sensitive-patterns-replace" in issue for issue in issues),
+                f"expected the patterns pin to reject {bad!r}",
+            )
+
     def test_cpa_policy_pins_antigravity_tos_pause_window(self) -> None:
         import json
         import runpy
