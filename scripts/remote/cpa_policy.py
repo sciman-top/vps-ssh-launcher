@@ -183,11 +183,15 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
         "openai",
         "codex",
     ],
-    # The historical replay suggested literal replacement could clear one
-    # response filter, but did not establish a durable reason for changing
-    # System Instructions. The old user-role swap has been removed because it
-    # rewrote natural content and prefixes. Keep this mapping only to preserve
-    # the deployed behavior until system instructions are reviewed separately.
+    # Reviewed 2026-11-25. Antigravity's content filter returns the bare 429
+    # for agent identity literals in the system instruction (CLIProxyAPI #7553,
+    # #5751); zero-width `sensitive-words` stopped clearing it on 2026-11-17
+    # and the maintainer recommends literal replacement in systemInstruction.
+    # This map is that mechanism. It cannot reach user-role text: the identity
+    # sentence that drew the 2026-11-22 bare 429s arrived inside Codex's
+    # compaction handoff summary. cpa-admission.py swaps that shape with this
+    # same map; the blanket user-role swap stays removed because it rewrote
+    # natural prompts.
     ("oauth", "providers", "antigravity", "sensitive-words-replace"): {
         "chatgpt": "chatservice",
         "openai": "vendor",

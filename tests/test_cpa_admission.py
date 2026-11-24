@@ -4918,6 +4918,121 @@ def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -
     assert parsed["input"][2]["content"] == [{"type": "input_image", "image_url": "x"}]
 
 
+def test_sanitize_antigravity_identity_user_text_swaps_only_identity_bearing_parts() -> (
+    None
+):
+    sanitize = MODULE["sanitize_antigravity_identity_user_text"]
+    handoff = (
+        "Another language model started to solve this problem and produced a "
+        'summary of its thinking process. It restated "You are Codex, an agent '
+        'based on GPT-5" and mentioned ChatGPT desktop and OpenAI.'
+    )
+    body = json.dumps(
+        {
+            "model": "gemini-3.8-flash-high",
+            "input": [
+                {
+                    "role": "developer",
+                    "content": "You are Codex, an agent based on GPT-5.",
+                },
+                {"role": "user", "content": handoff},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "log line: 'You are Codex' appears here",
+                        },
+                        {"type": "input_image", "image_url": "x"},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Check how Codex handles gpt-6-luna and ChatGPT desktop"
+                    ),
+                },
+                {"role": "assistant", "content": "You are Codex."},
+                {
+                    "type": "function_call_output",
+                    "output": "You are Codex, an agent based on GPT-5.",
+                },
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    normalized, stats = sanitize("/v1/responses", body, "antigravity-oauth")
+    parsed = json.loads(normalized)
+
+    assert stats == {"handoff_parts": 1, "identity_parts": 1}
+    assert parsed["input"][0]["content"] == "You are Codex, an agent based on GPT-5."
+    assert parsed["input"][1]["content"] == (
+        "Another language model started to solve this problem and produced a "
+        'summary of its thinking process. It restated "You are agentx, an agent '
+        'based on agentx-5" and mentioned chatservice desktop and vendor.'
+    )
+    assert (
+        parsed["input"][2]["content"][0]["text"]
+        == "log line: 'You are agentx' appears here"
+    )
+    assert parsed["input"][2]["content"][1] == {"type": "input_image", "image_url": "x"}
+    assert (
+        parsed["input"][3]["content"]
+        == "Check how Codex handles gpt-6-luna and ChatGPT desktop"
+    )
+    assert parsed["input"][4]["content"] == "You are Codex."
+    assert parsed["input"][5]["output"] == "You are Codex, an agent based on GPT-5."
+    # A second pass changes nothing, and a body without identity-bearing user
+    # text comes back as the same bytes.
+    assert sanitize("/v1/responses", normalized, "antigravity-oauth") == (
+        normalized,
+        {},
+    )
+    clean = json.dumps(
+        {
+            "model": "gemini-3.8-flash-high",
+            "input": [
+                {"role": "user", "content": "Codex and GPT mentioned in passing"}
+            ],
+        }
+    ).encode()
+    assert sanitize("/v1/responses", clean, "antigravity-oauth") == (clean, {})
+
+
+def test_sanitize_antigravity_identity_user_text_is_lane_and_route_scoped() -> None:
+    sanitize = MODULE["sanitize_antigravity_identity_user_text"]
+    body = json.dumps(
+        {
+            "model": "gemini-3.8-flash-high",
+            "input": [{"role": "user", "content": "You are Codex, based on GPT-5."}],
+        }
+    ).encode()
+
+    assert sanitize("/v1/responses", body, "chatgpt-oauth") == (body, {})
+    assert sanitize("/v1/responses", body, None) == (body, {})
+    assert sanitize("/v1/chat/completions", body, "antigravity-oauth") == (body, {})
+
+
+def test_antigravity_identity_swap_is_the_system_instruction_map() -> None:
+    import runpy
+    from pathlib import Path
+
+    policy = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1] / "scripts" / "remote" / "cpa_policy.py"
+        )
+    )
+
+    assert (
+        dict(MODULE["ANTIGRAVITY_IDENTITY_SWAP"])
+        == policy["EXPECTED_CONFIG_PATHS"][
+            ("oauth", "providers", "antigravity", "sensitive-words-replace")
+        ]
+    )
+
+
 def test_omit_antigravity_historical_user_images_replaces_answered_images_only() -> (
     None
 ):

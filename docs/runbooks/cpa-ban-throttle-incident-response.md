@@ -100,6 +100,19 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 - Antigravity 的 payload-sensitive 429 仅是历史相关性观察。快拒和配额页正常
   不足以确定过滤机制或排除限流；保留现有 sensitive-words 兼容设置，但不扩展
   混淆，也不把它当作账号保护或条款合规措施。按完整协议错误及可信等待窗口处置。
+- **2026-11-25 复审（身份字面量的作用面）**：零宽 `sensitive-words` 自 2026-11-17
+  起不再清除 429，上游零宽方案 [#6280](https://github.com/router-for-me/CLIProxyAPI/pull/6280)
+  已于同日关闭未合并；生效机制是 `sensitive-words-replace` 对
+  `systemInstruction` 的字面替换，也是维护者在
+  [#7553](https://github.com/router-for-me/CLIProxyAPI/issues/7553) 给出的口径
+  （触发句要逐客户端二分定位，可能有多段独立触发）。该机制**够不到 user 角色**：
+  11-22 卡死线程的压缩交接摘要（user 消息）复述了
+  `"You are Codex, an agent based on GPT-5..."`，11-25 用现行管线回放同一历史仍得
+  裸 429，而身份句只出现在工具输出里的会话全部 200。admission 现对**带身份的
+  user 文本段**（交接摘要或含身份短语）套用同一张替换表；普通用户输入与代码里的
+  `codex/gpt` 提及保持原样，11-21 摘除的全量 user 改写不恢复。排查序：先看
+  journal 是否有 `kind=antigravity_identity_user_text`，再按维护者方法二分，
+  **不得用在役账号做触发二分**。清洗只针对内容过滤这条路径，不是封号的充分条件。
 - WorkBuddy 官方客户端与网关的结果差异只能缩小排查范围；两侧同拒仍可能
   是共享模型故障或网络问题，不能直接确认账号受限。11158 等社区分类也不是
   永久模型封锁的证明，不主动诱发错误做 A/B。

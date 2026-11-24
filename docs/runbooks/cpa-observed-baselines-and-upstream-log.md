@@ -209,6 +209,33 @@ overlay tarball 不可复用**（叠层是整文件替换形态）：
   这些调用。在 fork 内跳过它需要重新构建与 swap，且没有证据表明它计入执法，
   暂不做。
 
+### 2026-11-25 身份字面量作用面复审（system instruction 与 user 角色）
+
+上游对 `systemInstruction` 提供三档机制，dev 自 v8.1.2 起无新增：
+
+| 机制 | 语义 | 本栈 |
+|---|---|---|
+| `sensitive-words` | 子词间插 U+034F 零宽字符 | 自 11-17 起失效，仅为兼容保留 |
+| `sensitive-words-replace` | 大小写不敏感子串的字面替换（最长优先） | 在役，4 个键 |
+| `sensitive-patterns-replace` | 有序 RE2 规则，优先于词表，空替换即删除 | 未用；句子级触发出现时用它 |
+
+三档都只作用于 `request.systemInstruction`。本栈 agy 车道 7 天 846 发里 831 发
+是 Responses 协议，WAF 型裸 429 只有 11-22 的 fork 会话（哈希 `1b0aa645df9f`）。
+离线对照（本地 rollout 对 journal 结果）：
+
+| 线程 | 成功 / 快拒 429 | user 角色里的身份句 | 工具输出里的 `codex` |
+|---|---|---|---|
+| `0f43c4f7c4ff` | 22 / 0 | 0 | 2005 |
+| `17fdba2e83ea` | 78 / 0 | 0 | 572 |
+| `98a98d8d465c`（同期对照） | 44 / 0 | 0 | 468 |
+| `1b0aa645df9f`（fork） | 0 / 3 | 5（压缩交接摘要） | 157 |
+
+成功的会话同样带压缩交接摘要、同样在压缩后用过 agy，差别只在身份句所在的
+角色。11-25 00:03Z 用当日 Codex 桌面端信封加重建的该会话历史，经 8318 现行
+管线对 `gemini-3.8-flash-high` 单发回放，上游 610ms 返回裸
+`RESOURCE_EXHAUSTED`；按约定只发一发。处置见
+[封号 runbook](cpa-ban-throttle-incident-response.md) 的 2026-11-25 复审条。
+
 ### 2026-11-24 `chatgpt-oauth` 流内过载波（单凭据实测）
 
 - 02:00Z–12:00Z：76 发里 31 发 `capacity=true`（41%），全部是 HTTP 200 流内
