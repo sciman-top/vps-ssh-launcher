@@ -38,16 +38,18 @@ OAUTH_ROUTE_ALIASES = [
 
 # Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order.
 # Declared 2026-10-14 and initially restricted to gemini-3.8-flash-high;
-# widened 2026-11-16 with gemini-4-hydrogen-xhigh and claude-sonnet-5-5-high,
-# then 2026-11-18 with gemini-4-carbon-high, gemini-4-argon-high, and
-# claude-opus-5-5-high by user directive. All four Gemini models retired
-# 2026-11-24 (user directive, after the fourth credential-level TOS_VIOLATION
-# sweep hit jalumuruvenkatarao and every G4-capable account left the pool):
-# they are tombstoned in antigravity_oauth_exclusions so neither OAuth nor
+# widened 2026-11-16/11-18/11-19 with the gemini-4 family and claude pair by
+# user directive. All three gemini-4 models retired 2026-11-24 (user
+# directive, after the fourth credential-level TOS_VIOLATION sweep hit
+# jalumuruvenkatarao and every G4-capable account left the pool); the same
+# day the user re-opened gemini-3.8-flash-high (the lane's only flash tier)
+# to keep the three flash-only free credentials in service. The gemini-4
+# names stay tombstoned in antigravity_oauth_exclusions so neither OAuth nor
 # Codex API-key lanes can re-register them. Gated by antigravity-oauth
 # admission: cpa_policy.py rejects a shared subscription OAuth route missing
 # its reviewed lane.
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
+    "gemini-3.8-flash-high",
     "claude-opus-5-5-high",
     "claude-sonnet-5-5-high",
 ]
@@ -69,11 +71,10 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 # claude-sonnet-5-5-high left the exclusion list 2026-11-16 (user decision):
 # it is now a declared antigravity route model, still tombstoned in
 # codex_api_key_exclusions so the API-key lane can never claim it.
-# gemini-3.8-flash-high / gemini-4-argon-high / gemini-4-hydrogen-xhigh /
-# gemini-4-neon-xhigh rejoined the exclusion list 2026-11-24 (user directive
-# after the fourth TOS_VIOLATION and the deletion of every G4-capable
-# account): retired from the route and double-tombstoned — they were already
-# in codex_api_key_exclusions.
+# gemini-3.8-flash-high rejoined the exclusion list 2026-11-24 (fourth-TOS
+# retirement batch) and LEFT it the same day (user directive re-opening the
+# flash tier on the three flash-only free credentials). The gemini-4 names
+# stay tombstoned (retired with their G4-capable accounts).
 ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
@@ -86,7 +87,6 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3.8-flash-tiered",
     # 2026-11-24 retirement tombstones (user directive; see the route alias
     # comment above).
-    "gemini-3.8-flash-high",
     "gemini-4-argon-high",
     "gemini-4-hydrogen-xhigh",
     "gemini-4-neon-xhigh",

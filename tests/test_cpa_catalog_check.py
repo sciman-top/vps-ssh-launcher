@@ -299,8 +299,8 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
                         "auto_compact_token_limit": "256000",
                     },
                     {
-                        # Still-live alias: gemini-3.8-flash-high retired from
-                        # the antigravity lane on 2026-11-24 and would take the
+                        # A still-live alias (the deepseek/glm/gemini slugs above
+                        # are all declared lanes); a retired slug would take the
                         # not-a-live-alias path instead of the ceiling one.
                         "slug": "claude-sonnet-5-5-high",
                         "context_window": 1000000,

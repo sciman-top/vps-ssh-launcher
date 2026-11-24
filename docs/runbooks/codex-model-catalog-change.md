@@ -31,10 +31,12 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 | 272000 | 200000 | `gpt-6-luna`, `gpt-6.1-terra`, `gpt-6.2-astra` |
 | 500000 | 320000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
 | 1000000 | 320000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash` |
+| 1048576 | 320000 | `gemini-3.8-flash-high` |
 
-1048576 档（`gemini-3.8-flash-high` 与全部 `gemini-4-*`）已随 2026-11-24 第四例
-TOS 退役从上表与桌面 override 清单摘除；下文对 gemini 各档的观测数据保留作历史
-对照，不再代表在役面。
+`gemini-4-argon-high` / `gemini-4-hydrogen-xhigh` / `gemini-4-neon-xhigh` 已随
+2026-11-24 第四例 TOS 退役摘出上表与桌面 override 清单（同日 flash-high 一度全退、
+经用户指令复名保留——车道唯一 flash 档，仅剩三个 flash-only 免费号承重）；下文对
+gemini 各档的观测数据保留作历史对照。
 
 272K 路由维持 200000，其余 12 款采用 320000 作为待验证的真实任务试验阈值。目录容量保持原值。该分组是统一试验起点，不代表不同模型已经证实有相同的最优压缩点；每款模型需按完成质量、返工、耗时和可取得的配额数据独立评估。`gpt-6.2-astra` 继续显式钉定目录窗口，以消除默认生成时 `max_context_window=872000` 的漂移。`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
 `deepseek-v4.1-flash` 由 WorkBuddy 插件 lane 承载，按入口验证实际输入与配额。

@@ -545,6 +545,7 @@ expected = {
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
+        "gemini-3.8-flash-high",
         "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
     ],
