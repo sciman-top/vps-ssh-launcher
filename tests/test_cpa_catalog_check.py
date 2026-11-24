@@ -244,7 +244,7 @@ def test_context_overrides_must_match_live_manifest_windows(
     manifest["oauth_settings"]["antigravity"] = [
         entry
         for entry in manifest["oauth_settings"]["antigravity"]
-        if entry.get("name") != "gemini-4-argon-high"
+        if entry.get("name") != "claude-sonnet-5-5-high"
     ]
     unpinned = tmp_path / "cpa_provider_routes.json"
     unpinned.write_text(json.dumps(manifest), encoding="utf-8")
@@ -252,7 +252,7 @@ def test_context_overrides_must_match_live_manifest_windows(
     monkeypatch.setattr(cpa_catalog_check, "MANIFEST", unpinned)
     errors = cpa_catalog_check.check()
     assert any(
-        "gemini-4-argon-high" in error and "no max-context-length" in error
+        "claude-sonnet-5-5-high" in error and "no max-context-length" in error
         for error in errors
     ), errors
 
@@ -299,9 +299,12 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
                         "auto_compact_token_limit": "256000",
                     },
                     {
-                        "slug": "gemini-3.8-flash-high",
-                        "context_window": 1048576,
-                        "max_context_window": 1048576,
+                        # Still-live alias: gemini-3.8-flash-high retired from
+                        # the antigravity lane on 2026-11-24 and would take the
+                        # not-a-live-alias path instead of the ceiling one.
+                        "slug": "claude-sonnet-5-5-high",
+                        "context_window": 1000000,
+                        "max_context_window": 1000000,
                         "auto_compact_token_limit": 256000,
                     },
                 ],
@@ -319,6 +322,6 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
         for error in errors
     ), errors
     assert not any(
-        "gemini-3.8-flash-high" in error and "auto_compact_token_limit" in error
+        "claude-sonnet-5-5-high" in error and "auto_compact_token_limit" in error
         for error in errors
     ), errors

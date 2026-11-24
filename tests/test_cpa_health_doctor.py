@@ -177,7 +177,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         catalog = {
             "data": [
                 {"id": model}
-                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+                for model in ["claude-opus-5-5-high", *HEALTH_FIXTURE_CATALOG_IDS]
             ]
         }
         response = mock.MagicMock()
@@ -227,7 +227,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         catalog = {
             "data": [
                 {"id": model}
-                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+                for model in ["claude-opus-5-5-high", *HEALTH_FIXTURE_CATALOG_IDS]
             ]
         }
         malformed = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
@@ -1027,21 +1027,21 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         health = runpy.run_path(
             str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
         )
-        alias = "gemini-3.8-flash-high"
+        alias = "claude-opus-5-5-high"
         self.assertEqual(alias, ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0])
         echo_map = health["_ANTIGRAVITY_ECHO_MODEL"]
         self.assertIsInstance(echo_map, dict)
         echo_set = echo_map[alias]
         self.assertIsInstance(echo_set, set)
-        self.assertIn("gemini-3.8-flash-n", echo_set)
-        self.assertIn("gemini-3.8-flash-control", echo_set)
-        self.assertNotIn("gemini-3.8-flash-n-plus", echo_set)
+        self.assertIn("claude-opus-5-5-n", echo_set)
+        self.assertIn("claude-opus-5-5-control", echo_set)
+        self.assertNotIn("claude-opus-5-5-n-plus", echo_set)
         self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
 
         catalog = {
             "data": [
                 {"id": model}
-                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+                for model in ["claude-opus-5-5-high", *HEALTH_FIXTURE_CATALOG_IDS]
             ]
         }
 
@@ -1064,7 +1064,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     ],
                 }
             return {
-                "model": "gemini-3.8-flash-n",
+                "model": "claude-opus-5-5-n",
                 "choices": [
                     {
                         "message": {"content": '{"sum":42,"word":"canary"}'},

@@ -999,12 +999,35 @@ def test_sse_reader_preserves_chunks_eof_and_errors(
 
 
 def config() -> dict[str, Any]:
-    return cast(
+    loaded = cast(
         dict[str, Any],
         load_config(
             Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
         ),
     )
+    # The four Gemini models retired from the antigravity lane on 2026-11-24
+    # (user directive; tombstoned in the route manifest). The admission
+    # mechanics below -- model scoping, quota families, envelope scopes --
+    # still exercise those names, so the synthetic config pins the historical
+    # model set here, decoupled from the production catalog exactly like
+    # claude_lane_config() above. model_lanes is the runtime model-to-lane
+    # resolver, so both faces must be pinned.
+    historical = [
+        "gemini-3.8-flash-high",
+        "gemini-4-hydrogen-xhigh",
+        "gemini-4-argon-high",
+        "gemini-4-neon-xhigh",
+    ]
+    for lane in loaded["lanes"]:
+        if lane.get("name") == "antigravity-oauth":
+            lane["models"] = [
+                *historical,
+                "claude-opus-5-5-high",
+                "claude-sonnet-5-5-high",
+            ]
+    for model in historical:
+        loaded["model_lanes"][model] = "antigravity-oauth"
+    return loaded
 
 
 def claude_lane_config() -> dict[str, Any]:
@@ -1057,6 +1080,27 @@ def claude_lane_config() -> dict[str, Any]:
             "models": [{"name": model, "alias": model} for model in retired_models],
         }
     )
+    # The four Gemini models retired 2026-11-24 (see config()): the
+    # antigravity-lane parametrizations still exercise those names, so pin
+    # them onto the synthetic config AND its manifest before load_config's
+    # fail-closed model/lane cross-check runs.
+    historical = [
+        "gemini-3.8-flash-high",
+        "gemini-4-hydrogen-xhigh",
+        "gemini-4-argon-high",
+        "gemini-4-neon-xhigh",
+    ]
+    antigravity_models = [
+        *historical,
+        "claude-opus-5-5-high",
+        "claude-sonnet-5-5-high",
+    ]
+    for lane in synthetic["lanes"]:
+        if lane.get("name") == "antigravity-oauth":
+            lane["models"] = antigravity_models
+    for route in synthetic_manifest["oauth_routes"]:
+        if route.get("name") == "antigravity-oauth":
+            route["models"] = [{"name": n, "alias": n} for n in antigravity_models]
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         config_path = root / "cpa-admission.json"
@@ -1253,7 +1297,15 @@ def lane(loaded: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def test_config_freezes_shared_official_account_lanes() -> None:
-    loaded = config()
+    # The real-file contract test: load the config directly, bypassing the
+    # config() helper that pins the retired Gemini models for the mechanics
+    # tests.
+    loaded = cast(
+        dict[str, Any],
+        load_config(
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
+        ),
+    )
     assert loaded["listen_host"] == "127.0.0.1"
     assert loaded["listen_port"] == 8318
     assert loaded["upstream_port"] == 8317

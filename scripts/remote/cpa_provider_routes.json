@@ -122,22 +122,6 @@
       "admission_lane": "antigravity-oauth",
       "models": [
         {
-          "name": "gemini-3.8-flash-high",
-          "alias": "gemini-3.8-flash-high"
-        },
-        {
-          "name": "gemini-4-hydrogen-xhigh",
-          "alias": "gemini-4-hydrogen-xhigh"
-        },
-        {
-          "name": "gemini-4-argon-high",
-          "alias": "gemini-4-argon-high"
-        },
-        {
-          "name": "gemini-4-neon-xhigh",
-          "alias": "gemini-4-neon-xhigh"
-        },
-        {
           "name": "claude-opus-5-5-high",
           "alias": "claude-opus-5-5-high"
         },
@@ -176,22 +160,6 @@
       }
     ],
     "antigravity": [
-      {
-        "name": "gemini-3.8-flash-high",
-        "max-context-length": 1048576
-      },
-      {
-        "name": "gemini-4-hydrogen-xhigh",
-        "max-context-length": 1048576
-      },
-      {
-        "name": "gemini-4-argon-high",
-        "max-context-length": 1048576
-      },
-      {
-        "name": "gemini-4-neon-xhigh",
-        "max-context-length": 524288
-      },
       {
         "name": "claude-opus-5-5-high",
         "max-context-length": 1000000
@@ -232,6 +200,10 @@
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-high",
+    "gemini-4-argon-high",
+    "gemini-4-hydrogen-xhigh",
+    "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",

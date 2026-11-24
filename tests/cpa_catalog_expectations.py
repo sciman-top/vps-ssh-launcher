@@ -40,23 +40,14 @@ OAUTH_ROUTE_ALIASES = [
 # Declared 2026-10-14 and initially restricted to gemini-3.8-flash-high;
 # widened 2026-11-16 with gemini-4-hydrogen-xhigh and claude-sonnet-5-5-high,
 # then 2026-11-18 with gemini-4-carbon-high, gemini-4-argon-high, and
-# claude-opus-5-5-high by user directive. The 2026-11-16 additions were
-# available on one pro credential each at the time (single-source, no
-# failover); Opus live credential availability is unverified. The model is
-# declared with its 1M context window. Gated by antigravity-oauth admission:
-# cpa_policy.py rejects a shared subscription OAuth route missing its reviewed
-# lane.
+# claude-opus-5-5-high by user directive. All four Gemini models retired
+# 2026-11-24 (user directive, after the fourth credential-level TOS_VIOLATION
+# sweep hit jalumuruvenkatarao and every G4-capable account left the pool):
+# they are tombstoned in antigravity_oauth_exclusions so neither OAuth nor
+# Codex API-key lanes can re-register them. Gated by antigravity-oauth
+# admission: cpa_policy.py rejects a shared subscription OAuth route missing
+# its reviewed lane.
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
-    "gemini-3.8-flash-high",
-    "gemini-4-hydrogen-xhigh",
-    # gemini-4-argon-high left the exclusion list 2026-11-18 (user directive).
-    # Per-credential availability differs across the pooled accounts; CPA
-    # registers each credential's own catalog, so an alias served by a subset
-    # of the pool schedules only onto those credentials.
-    "gemini-4-argon-high",
-    # gemini-4-neon-xhigh opened 2026-11-19 (user directive): Google released
-    # the model today, auto-registered on active pro credentials.
-    "gemini-4-neon-xhigh",
     "claude-opus-5-5-high",
     "claude-sonnet-5-5-high",
 ]
@@ -78,6 +69,11 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 # claude-sonnet-5-5-high left the exclusion list 2026-11-16 (user decision):
 # it is now a declared antigravity route model, still tombstoned in
 # codex_api_key_exclusions so the API-key lane can never claim it.
+# gemini-3.8-flash-high / gemini-4-argon-high / gemini-4-hydrogen-xhigh /
+# gemini-4-neon-xhigh rejoined the exclusion list 2026-11-24 (user directive
+# after the fourth TOS_VIOLATION and the deletion of every G4-capable
+# account): retired from the route and double-tombstoned — they were already
+# in codex_api_key_exclusions.
 ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
@@ -88,6 +84,12 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     # stays flash-high-only (user decision), so the alias is pinned out of
     # the client catalog instead of being admitted past lane admission.
     "gemini-3.8-flash-tiered",
+    # 2026-11-24 retirement tombstones (user directive; see the route alias
+    # comment above).
+    "gemini-3.8-flash-high",
+    "gemini-4-argon-high",
+    "gemini-4-hydrogen-xhigh",
+    "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
