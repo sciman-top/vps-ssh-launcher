@@ -217,7 +217,7 @@ overlay tarball 不可复用**（叠层是整文件替换形态）：
 |---|---|---|
 | `sensitive-words` | 子词间插 U+034F 零宽字符 | 自 11-17 起失效，仅为兼容保留 |
 | `sensitive-words-replace` | 大小写不敏感子串的字面替换（最长优先） | 在役，4 个键 |
-| `sensitive-patterns-replace` | 有序 RE2 规则，优先于词表，空替换即删除 | 未用；句子级触发出现时用它 |
+| `sensitive-patterns-replace` | 有序 RE2 规则，优先于词表，空替换即删除 | 在役，3 条：Claude Code 整句、`DeepSeek Harness` 短语、ZCode / CodeBuddy / WorkBuddy 身份句 |
 
 三档都只作用于 `request.systemInstruction`。本栈 agy 车道 7 天 846 发里 831 发
 是 Responses 协议，WAF 型裸 429 只有 11-22 的 fork 会话（哈希 `1b0aa645df9f`）。
@@ -235,6 +235,16 @@ overlay tarball 不可复用**（叠层是整文件替换形态）：
 管线对 `gemini-3.8-flash-high` 单发回放，上游 610ms 返回裸
 `RESOURCE_EXHAUSTED`；按约定只发一发。处置见
 [封号 runbook](cpa-ban-throttle-incident-response.md) 的 2026-11-25 复审条。
+
+同日后续（用户要求覆盖 ZCode、Claude Code、WorkBuddy、DeepSeek Harness）：
+规则改走句子级，因为整词键会改写 ZCode 提示里的 `.zcode/skills` 路径。规则由
+Go RE2 编译执行，部署前在 WSL 按上游顺序实测；部署后管理视图顶层
+`antigravity.sensitive-patterns-replace` 为 3 条，零条无效正则告警（注意管理视图是
+扁平布局，不在 `oauth.providers` 下）。逐客户端只发清洗后的提示，全部 `200`，
+没有可二分的对象：Claude Code、DeepSeek Harness、ZCode、CodeBuddy + WorkBuddy
+各一发（直连 8317），卡死历史经 8318 一发，WorkBuddy 车道一发。ZCode 起步套餐
+车道在非免费时段，未做线上验证。过程、回滚与边界见
+[多车道中性化台账](../change-evidence/20261125-bwg-agent-identity-neutralization.md)。
 
 ### 2026-11-24 `chatgpt-oauth` 流内过载波（单凭据实测）
 

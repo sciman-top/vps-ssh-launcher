@@ -108,13 +108,19 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   （触发句要逐客户端二分定位，可能有多段独立触发）。该机制**够不到 user 角色**：
   11-22 卡死线程的压缩交接摘要（user 消息）复述了
   `"You are Codex, an agent based on GPT-5..."`，11-25 用现行管线回放同一历史仍得
-  裸 429，而身份句只出现在工具输出里的会话全部 200。admission 现对**带身份的
-  user 文本段**（交接摘要或含身份短语）套用同一张替换表；普通用户输入与代码里的
-  `codex/gpt` 提及保持原样，11-21 摘除的全量 user 改写不恢复。排查序：先看
-  journal 是否有 `kind=antigravity_identity_user_text`，再按维护者方法二分，
-  **不得用在役账号做触发二分**。清洗只针对内容过滤这条路径，不是封号的充分条件。
-  定位过程、回放与回滚见
-  [20261125 台账](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)。
+  裸 429，而身份句只出现在工具输出里的会话全部 200。处置分两层：Antigravity
+  `systemInstruction` 由整词词表加有序 RE2 `sensitive-patterns-replace` 处理；
+  admission 的 `neutralize_agent_identity_text()` 只改写**身份句本身**（Claude Code
+  整句、`DeepSeek Harness` 短语、ZCode / CodeBuddy / WorkBuddy 与 Codex 身份句），
+  裸产品名、`.zcode/skills` 这类路径与工具输出原样保留——整词键会把路径改坏。
+  作用面：agy 车道的 developer 与 user 文本；WorkBuddy 与 ZCode 起步套餐车道的
+  system、developer、user 文本。ChatGPT 车道不处理（Codex 的身份句在那里是官方
+  客户端自身的形状），11-21 摘除的全量 user 改写不恢复。排查序：先看 journal 的
+  `kind=antigravity_identity_user_text` 或 `kind=agent_identity_neutralized`（每请求
+  恰一条），再按维护者方法二分，**不得用在役账号做触发二分**——先发清洗后的
+  提示，全部通过就没有可二分的对象。清洗只针对内容过滤与客户端披露，不是封号
+  的充分条件。台账：[定位与回放](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)、
+  [多车道中性化](../change-evidence/20261125-bwg-agent-identity-neutralization.md)。
 - WorkBuddy 官方客户端与网关的结果差异只能缩小排查范围；两侧同拒仍可能
   是共享模型故障或网络问题，不能直接确认账号受限。11158 等社区分类也不是
   永久模型封锁的证明，不主动诱发错误做 A/B。
