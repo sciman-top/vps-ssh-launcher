@@ -5559,13 +5559,6 @@ class Handler(BaseHTTPRequestHandler):
                 identity_counts,
                 self._trace_context,
             )
-            logging.info(
-                "protocol_normalized model=%s kind=antigravity_identity_user_text "
-                "%s %s",
-                observed_model,
-                identity_counts,
-                self._trace_context,
-            )
         if lane_name == "antigravity-oauth":
             repeat_remaining = antigravity_repeat_reject_remaining(
                 getattr(self, "_client_request_hash", None),

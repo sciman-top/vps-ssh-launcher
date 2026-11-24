@@ -5125,6 +5125,94 @@ def test_neutralize_agent_identity_text_covers_workbuddy_and_start_plan_lanes() 
     assert neutralize("/v1/models", chat, "workbuddy-oauth") == (chat, {})
 
 
+@pytest.mark.parametrize(
+    ("lane_model", "path", "expected_kind", "other_kind"),
+    [
+        (
+            "gemini-3.8-flash-high",
+            "/v1/responses",
+            "kind=antigravity_identity_user_text",
+            "kind=agent_identity_neutralized",
+        ),
+        (
+            "deepseek-v4.1-flash",
+            "/v1/chat/completions",
+            "kind=agent_identity_neutralized",
+            "kind=antigravity_identity_user_text",
+        ),
+    ],
+)
+def test_neutralize_agent_identity_text_logs_one_record_with_the_lane_kind(
+    lane_model: str, path: str, expected_kind: str, other_kind: str, caplog: Any
+) -> None:
+    # The journal is the attribution surface for this pass: one record per
+    # request, named for the lane it ran on. A second, hard-coded antigravity
+    # record on a WorkBuddy request misfiles it in every journal audit.
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            data = b'{"status":"completed","output":[]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    identity = "You are Codex, an agent based on GPT-5."
+    if path == "/v1/responses":
+        payload = {
+            "model": lane_model,
+            "store": False,
+            "stream": False,
+            "input": [{"role": "user", "content": identity}],
+        }
+    else:
+        payload = {
+            "model": lane_model,
+            "stream": False,
+            "messages": [{"role": "system", "content": identity}],
+        }
+    body = json.dumps(payload).encode()
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        with caplog.at_level(logging.INFO):
+            client.request("POST", path, body)
+            response = client.getresponse()
+            response.read()
+        assert response.status == 200
+        assert len(received) == 1
+        forwarded = json.dumps(json.loads(received[0]), ensure_ascii=False)
+        assert "You are a coding agent." in forwarded
+        assert "You are Codex" not in forwarded
+        identity_records = [
+            record.getMessage()
+            for record in caplog.records
+            if "protocol_normalized" in record.getMessage()
+            and (
+                "identity_user_text" in record.getMessage()
+                or "identity_neutralized" in record.getMessage()
+            )
+        ]
+        assert len(identity_records) == 1, caplog.text
+        assert expected_kind in identity_records[0]
+        assert other_kind not in caplog.text
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+
+
 def test_omit_antigravity_historical_user_images_replaces_answered_images_only() -> (
     None
 ):
