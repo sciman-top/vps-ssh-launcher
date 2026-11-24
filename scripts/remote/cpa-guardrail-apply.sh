@@ -2661,7 +2661,7 @@ print(
         for entry in oauth_aliases_manifest.get("codex", [])
     )
 )
-print("ANTIGRAVITY_OAUTH_ROUTES_READY claude-only=allowed gemini=retired-and-excluded")
+print("ANTIGRAVITY_OAUTH_ROUTES_READY flash=allowed claude=allowed gemini-4=retired-and-excluded")
 print(
     "ANTIGRAVITY_OAUTH_EXCLUSIONS_READY "
     + "/".join(sorted(oauth_exclusions["antigravity"]))
@@ -2897,6 +2897,7 @@ expected = {
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
+        "gemini-3.8-flash-high",
         "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
     ],
@@ -3495,12 +3496,12 @@ print("has_retired_gpt_reserve=" + str("gpt-reserve" in ids))
 print("has_glm_5_3=" + str("glm-5.3" in ids))
 print("has_glm_5_3_flash=" + str("glm-5.3-flash" in ids))
 print("has_retired_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))
+print("has_antigravity_gemini_3_8_flash_high=" + str("gemini-3.8-flash-high" in ids))
 print("has_retired_antigravity_lane_models=" + str(bool({
     "gemini-3-flash",
     "gemini-3.1-flash-image",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    "gemini-3.8-flash-high",
     "gemini-4-argon-high",
     "gemini-4-hydrogen-xhigh",
     "gemini-4-neon-xhigh",
