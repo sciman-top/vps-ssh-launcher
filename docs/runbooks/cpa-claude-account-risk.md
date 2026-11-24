@@ -104,6 +104,11 @@ lane 开关权属用户（2026-10-17 固化，同日曾发生 agent 会话仅凭
   对向终端用户提供 Claude Code 的开发者限制代付、转售或代中转 Claude 使用，
   并要求终端用户使用自己的适用凭据；不要把这条规则泛化为任何第三方 API
   服务都必然禁止，也不要把它反向解释为某个第三方路由已获授权。
+  2026-11-24 复核同页 "Usage policy → Authentication and credential use" 的原文：
+  "Anthropic does not permit third-party developers to offer Claude.ai login into
+  their own applications"、"developers may not collect, store, or intermediate
+  Claude.ai credentials or session tokens"，并保留 "without prior notice" 执法的
+  权利。后两句直接覆盖代持订阅令牌的形态，比上一条的中转限制更具体。
 - [Google Antigravity Terms](https://antigravity.google/terms) 明确规定，通过第三方软件、
   工具或服务访问 Antigravity（条款以 Antigravity OAuth 为例）违反协议，可能导致
   Antigravity 和/或 Gemini 服务暂停或终止。此条款已于 2026-10-17 在线复核；本仓

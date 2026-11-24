@@ -136,6 +136,16 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 > 处置仍按 L2：等可信窗口结束或切非 OAuth lane，**不改 `capacity_markers`、
 > 不清冷却、不缩短 `transient-error-cooldown-seconds`、不加账号**。
 
+> **2026-11-24 增补（Originator 分流与 cloaking 断言）**：上游
+> [#4679](https://github.com/router-for-me/CLIProxyAPI/issues/4679) 的 A/B 证明
+> OpenAI 在负载升高时优先自家客户端——同一请求 `Originator: codex_cli_rs`
+> 4/4 成功，`codex-tui` 立即流内 `server_is_overloaded`，只改 User-Agent 无效；
+> 维护者建议保持 cloaking 开启（v7.2.110 起默认）。本栈此前只靠上游默认值，
+> `cpa_policy.py` 现把 `disable-codex-cloaking` 的 `true`（v8 路径、
+> `oauth.providers.codex`、pre-v8 `codex` 段）判为 policy 违规；键缺省或显式
+> `false` 均通过，不投影该键，现役配置无需改动。当日流内过载波的实测与
+> 判读升级条件见 [上游台账](cpa-observed-baselines-and-upstream-log.md) 六节。
+
 ## 分级处置
 
 ### L1 线程级错误（thinking_signature_invalid / encrypted_content item_id mismatch）
@@ -285,6 +295,19 @@ retry_after=300` 循环 = 真 hold（人工复核锁，不自动恢复）。部�
 请求的熔断诉求；可执行增量仅一条——**新号入池前几小时保持低量**（补 carbon
 档新号时适用）。
 
+2026-11-24 增补（同 issue photobrand 跟评的 109 号池对照表，REPORTED）：被封
+7 号在 11-10..20 被选中 4,836–7,269 次、单分钟峰值 10–49 RPM；存活 16 号为
+0–3,101 次、峰值 0–18 RPM。**请求量只是相关项**：82 个被封号里 35 个
+（42.7%）封前 24 小时零 429；#8021 报整池同批停用。打标离线完成后在下一次
+请求才显现，本栈第二至四例"空闲后首请求即 403"同形，继续压低日量不改变这
+一维。**每出口的账号数**是该表区分度最大的一列：86 号挤在 3 个代理端口
+（28–29 号/端口）0/86 存活，1–2 号/端口 16/23 存活。对齐本栈：峰值 8 号共用
+bwg 单出口，现 2 号；同出口不再回加账号。另有三条上游事实支持"封禁号移出
+auth 目录而非留 `disabled`"的现行做法——后台刷新仍会对留存的号调
+`loadCodeAssist`（[#7994](https://github.com/router-for-me/CLIProxyAPI/issues/7994)，
+维护者 11-24 以 working as intended 关闭）、`fetchAvailableModels` 周期探测
+TOS 号（#7869）、重启后 `disabled` 回落为 false（#8021，REPORTED）。
+
 ### 执行器侧 thoughtSignature 凭据隔离（sig-iso fork 车道，2026-11-23 起）
 
 #7846 的跨账号签名重放面有两层：reasoning replay 账本面已由 crossauth 车道
@@ -380,6 +403,7 @@ doctor（`==claude-lane==` 段）+ error dumps；条款与资格边界见
 | `Anthropic-Ratelimit-Unified-5h/7d-Status: rejected` | 真配额窗（5h/周窗，claude.ai/Desktop/Code 全产品共享池），不是风控事件 | 尊重完整 reset 窗口；缺少可信期限则人工复核停流；与官方桌面/网页重活错峰；不硬打 |
 | `invalid_grant` / 刷新持续失败 | 先核 provider 归属：doctor 只将带 provider 标签的容器刷新失败归给对应通道；无归属日志与混合凭据 dumps 单列 unknown，元数据正常不证明账号可用 | 人工确认对应凭据后按官方支持流程恢复；[OAuth 失效恢复](cpa-oauth-failure-recovery.md) 的 device-login 命令仅适用 Codex |
 | doctor `claude_lane=EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` | 目录契约漂移（排除表与 manifest 墓碑不一致，或认领名被墓碑阻断） | 恢复走受审查 apply 重投影；不手工改 config 续命 |
+| `400 invalid_request_error` "Third-party apps now draw from your extra usage, not your plan limits." | Anthropic 的第三方流量分类器命中：订阅 OAuth 上的第三方调用改走额外用量计费，关掉 Extra Usage 的号直接 400（上游 [#6432](https://github.com/router-for-me/CLIProxyAPI/issues/6432)，两人复现） | 计费/断流后果而非封号；仍是"被识别为第三方"的直接证据，按账号级信号停流复核，不以改写 system 块绕过 |
 
 急停优先用可逆的 provider 级隔离，完整步骤见
 [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md)：

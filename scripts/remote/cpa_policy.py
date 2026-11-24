@@ -389,6 +389,37 @@ EXPECTED_CODEX = {
     "upstream-request-compression-min-bytes": 1024,
 }
 
+# The executor sends the official Codex Originator and User-Agent by default
+# (applyCodexCloakingHeaders) and v8 reads the opt-out from three places
+# (config_v8.go). OpenAI sheds load ahead of its own clients: a request that is
+# not identified as an official client gets an in-stream
+# `server_is_overloaded` while the same request with the official Originator
+# succeeds (CLIProxyAPI #4679; the maintainer recommends leaving cloaking on).
+# An opt-out therefore turns upstream load bursts into lane-wide outages for the
+# single ChatGPT credential and changes its client fingerprint. The accepted
+# state is an absent key or an explicit false; the key is asserted rather than
+# projected because writing it would restart the container for no runtime gain.
+CODEX_CLOAKING_OPT_OUT_PATHS = (
+    ("upstream", "codex", "disable-codex-cloaking"),
+    ("oauth", "providers", "codex", "disable-codex-cloaking"),
+    ("codex", "disable-codex-cloaking"),
+)
+
+
+def _codex_cloaking_issues(config: Any) -> list[str]:
+    issues: list[str] = []
+    for path in CODEX_CLOAKING_OPT_OUT_PATHS:
+        node: Any = config
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if node is True:
+            issues.append(
+                f"{'.'.join(path)}=True; expected unset or False "
+                "(official Codex identity stays on)"
+            )
+    return issues
+
+
 ROUTE_MANIFEST_PATH = Path(__file__).with_name("cpa_provider_routes.json")
 try:
     ROUTE_MANIFEST: Any = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -2293,6 +2324,7 @@ def validate_config(
             actual = codex.get(key)
             if not _same_value(actual, expected):
                 issues.append(f"upstream.codex.{key}={actual!r}; expected {expected!r}")
+    issues.extend(_codex_cloaking_issues(config))
 
     oauth_block = config.get("oauth")
     oauth_exclusions = (

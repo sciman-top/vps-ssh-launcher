@@ -169,5 +169,57 @@ overlay tarball 不可复用**（叠层是整文件替换形态）：
      `gpt-6-luna` 上只能命中 ~6,016 tokens 的静态系统前缀（或 0），单次产生 200k–419k
      uncached tokens；同时同一秒并发派生的 2–3 个子代理在 `chatgpt-oauth`
      （`max_inflight=2`）上还会制造 `waited_ms` p90≈22.1s 的本地排队尖峰。
-  3. **结论**：`gpt-6-luna` 的 0.25–0.27 是**跨模型 one-shot 派生流量在聚合分母上的统计稀释**，
-     而非服务端 session/prompt_cache_key 退化或账号降智。
+3. **结论**：`gpt-6-luna` 的 0.25–0.27 是**跨模型 one-shot 派生流量在聚合分母上的统计稀释**，
+   而非服务端 session/prompt_cache_key 退化或账号降智。
+
+## 六、post-v8.1.2 dev 增量与 2026-11-24 实测（2026-11-24 实拉）
+
+生产 fork upstream 锚 = `85225381`（v8.1.2）+ `7966fix`。`main` 无新 tag；
+`dev` 在 v8.1.2 之后 27 个提交（至 `b82d3d4e`）。只列与风控/翻译面相关项：
+
+| 提交 | 一句话 | 本栈处置 |
+|---|---|---|
+| `fe571afe`（#7966） | 上游官方修复并行工具调用流：未标记的完整 functionCall 立即作单 delta 发射，并支持 partialArgs/willContinue 续接 | 仅在 dev。下次 rebase 以官方实现为准去化 `7966fix` 叠层，去化前跑全量 `./internal/...`（TestIssue6825 族） |
+| `38067a29`（[#7967](https://github.com/router-for-me/CLIProxyAPI/issues/7967)） | `requestId` 改斜杠分隔 `reqType/<uuid>` 并保留 normalizer 已提供的值；原生 Gemini 形态请求统一工具输出键与单段 systemInstruction | 仅在 dev；翻译器仍写 `functionResponse.response.result`。对封号率无数据 |
+| `20be744e` / `d1bdee85` / `9bce4825`（#7990–#7992） | 上游 HTTP 200 但空体、非 SSE 或非 JSON 时改判可重试 502，不再记为成功 | 新 watch：现役代仍把这类响应当零输出成功，降智类投诉先核此形；admission 的 `empty_text_completed` 计数可观测 |
+| `7be2a678` / `b82d3d4e`（#8000/#8001） | Gemini thoughtSignature 清洗补 snake_case 与空签路径 | 与 crossauth/sig-iso 同域，rebase 时对照 |
+| `0286e5d1` / `6c2308a1` / `06225fcf`（#7988/#7989/#7968） | 签名缓存模型组归一、空 scope 保留 Gemini 哨兵、首次刷新保留 grant 身份 | v8.1.2 缓存级隔离的补丁，rebase 时整批带入 |
+| `e9dd8bad` / `3b20ee22` / `335b6987` / `14a95b19` / `e9a92d25`（#7997/#7995/#7970/#7985/#7969） | replay 快照失效、LCP 命名空间拆分、websocket nil auth、thinking-group 输出上限、model enum 快照 | 无直接风控动作 |
+
+**[#7977](https://github.com/router-for-me/CLIProxyAPI/issues/7977) 分诊后的三条口径**
+（维护者 2026-11-24 回复；报告项均未定论）：
+
+- 503 容量错误的 `continue` workaround **判否**：维护者建议对
+  "No capacity available" / "MODEL_CAPACITY_EXHAUSTED" 配 `action: continue`
+  做请求内换号。本栈 agy 池只剩 2 个同为 flash-only 的号，容量 503 是后端面
+  而非凭据面，换号只多一次上游接触；维持 `request-retry=0` +
+  `max-retry-credentials=1` 的单次尝试语义，由 admission 镜像 Retry-After。
+- Gemini 3.8 Flash 工具续轮"0-thinking 塌陷"（#7977 第 2 点、#8013）：维护者
+  认为代码证据不足以认定是代理造成，未采纳合成续轮。仅 watch：flash-high
+  工具循环若出现空 reasoning 加截断短答，先与官方客户端同题对照再归因。
+  本栈 7 天 flash-high 103 发完成里 `truncated_text_completed` 与
+  `empty_text_completed` 均为 0。
+- 后台 `fetchAvailableModels` 探测洪水：维护者要求时间线与计数证据。本栈
+  容器日志 info 级不记录该调用，`OVERLOADED_TOO_MANY_RETRIES_PER_REQUEST`
+  自容器启动以来 0 次；空闲 12 分钟（journal 零上游结果）的 5 秒粒度套接字
+  采样未见出站连接。**可量化的后台接触来自 token 刷新**：Google 返回的
+  `refresh_interval_seconds` 为 1399/1657，每号每天约 53 次刷新，每次按
+  #7994 配一次 `loadCodeAssist`（维护者以 working as intended 关闭）；版本号
+  拉取每 3 小时一次。`per-credential-daily-cap` 只计 execute/stream，不含
+  这些调用。在 fork 内跳过它需要重新构建与 swap，且没有证据表明它计入执法，
+  暂不做。
+
+### 2026-11-24 `chatgpt-oauth` 流内过载波（单凭据实测）
+
+- 02:00Z–12:00Z：76 发里 31 发 `capacity=true`（41%），全部是 HTTP 200 流内
+  第 4 帧 `response.failed`，携带
+  `{"type":"service_unavailable_error","code":"server_is_overloaded"}` 与
+  `retry-after≈347s`；四个模型均匀分布，53 token 的 watchdog 探针同样被甩。
+  此前 48 小时约 900 发仅 2 发。
+- OpenAI 状态页同时段无事故，上游 issue 近两日无同形集中报告，原因在网关侧
+  **无法定论**（上游负载突发，或该账号被降优先级）。#4679 的判别项已核：
+  出站身份为官方 `codex_cli_rs`（cloaking 默认开，配置无 opt-out，现由
+  `cpa_policy.py` 断言）。
+- 网关行为符合设计：`request-retry=0` 不重打，Retry-After 镜像为模型级窗口，
+  同车道兄弟模型不连坐。判读升级条件：持续超过 24 小时，或官方客户端直连
+  同账号不复现同形错误——届时按账号级软限流处置并停下复核。

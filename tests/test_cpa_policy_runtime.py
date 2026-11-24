@@ -1348,6 +1348,36 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             apply_source,
         )
 
+    def test_cpa_policy_requires_codex_cloaking_to_stay_on(self) -> None:
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        config = self._valid_cpa_policy_config(policy)
+        self.assertNotIn("disable-codex-cloaking", config["upstream"]["codex"])
+        self.assertEqual(policy["validate_config"](config), [])
+        # The key is asserted, not projected: the live config carries no copy of
+        # it, so the accepted states are an absent key and an explicit false.
+        config["upstream"]["codex"]["disable-codex-cloaking"] = False
+        self.assertEqual(policy["validate_config"](config), [])
+        config["upstream"]["codex"].pop("disable-codex-cloaking")
+        # OpenAI sheds non-official client identity first (CLIProxyAPI #4679),
+        # and v8 reads the opt-out from the v8 path, the providers path and the
+        # pre-v8 section.
+        for section in (
+            config["upstream"]["codex"],
+            config["oauth"].setdefault("providers", {}).setdefault("codex", {}),
+            config.setdefault("codex", {}),
+        ):
+            section["disable-codex-cloaking"] = True
+            issues = policy["validate_config"](config)
+            self.assertTrue(
+                any("disable-codex-cloaking=True" in issue for issue in issues),
+                issues,
+            )
+            section.pop("disable-codex-cloaking")
+        self.assertEqual(policy["validate_config"](config), [])
+
     def test_cpa_policy_oauth_quarantine_requires_a_matching_marker(self) -> None:
         import runpy
 
