@@ -86,6 +86,26 @@ overlay 构建脚本属历史记录，下代 fork 若再生成，必须继承本
 时首查此因**；上游修复落地并随 fork 换代收编前，不要为"防重启"上调 512MB 限制
 （那会把爆炸半径还给主机）。
 
+## 2026-11-26 更新：v8.1.4 代的可复用做法
+
+当前生产 = `cli-proxy-api-fork:v8.1.4-gemini-raw-daily-cap-authiso-sigiso`（binary
+`424fb393…`，upstream 锚 `38fe9295`）。脚本：
+`outputs/build-fork-image-v814-20261126.ps1`、`cpa-v814-swap-transaction-20261126.ps1`、
+`cpa-v814-rollback-transaction-20261126.ps1`、`accept-v814-postswap-20261126.ps1`。
+
+- **三方合并不需要旧的 merge 仓**：WSL `/root/build/src` 就是现役二进制的源码树。
+  用 `git archive` 导出两个纯净 tag（Windows 侧要加 `-c core.autocrlf=false`，否则
+  导出成 CRLF），在一个新仓里按「纯净旧 tag → 生产树 → 纯净新 tag」提交后
+  `git merge`，冲突只落在两边都改过的文件上。生产树里有三个文件是 CRLF，提交前
+  归一化，否则 git 看到的是整文件差异。
+- **全量测试三边对照**（合并树、纯净新 tag、生产树）能把上游抖动与自有回归分开。
+- **先 `-Apply`、后换芯**：主机目录里出现清单未声明的模型时，`cpa-health.py`
+  readiness 的目录门 fail-closed，换芯脚本的 `wait_readiness` 会失败并回滚。凡是
+  同时声明新模型的换代，先把清单投影上去。换芯脚本因此改为事务内快照配置哈希。
+- 插件升级可以并进换芯的同一次容器重建：插件按 rename 替换，回滚时连同 compose
+  一起还原。WorkBuddy 插件是 `-buildmode=c-shared` 的 C ABI 库，不要求与宿主同
+  工具链；换前用 scratch 容器（无网络、最小配置）确认新插件能被新二进制注册。
+
 ## 问题
 
 现役 CPA 不是“镜像说了算”，而是 `<image tag> + /opt/cliproxyapi/CLIProxyAPI-patched`

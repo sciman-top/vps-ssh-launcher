@@ -152,6 +152,13 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
     provider 看门狗有同形的周期探测。是否改指向 `/v1/models` 由用户裁决。
   - 降智读数：48h 内 `gemini-3.8-flash-high` 的 77 发全部被
     `gemini-3.8-flash-n` 接管，是免费号的服务档策略，客户端无解。
+- **2026-11-26 换到 v8.1.4**（用户指令直接升级）：五叠层原样重移植，身份句中性化
+  与日量帽、签名隔离不变；7966fix 两部分去化（上游 `fe571afe` 及 v8.1.4 的配对
+  契约）。`gpt-6.1-terra` 保留——上游移除的是 API key 渠道的登记项，Plus OAuth
+  仍支持。事务、回滚与验收见
+  [换代台账](../change-evidence/20261126-bwg-cpa-v814-five-overlay-swap.md)；
+  换代顺序的教训（先 `-Apply`、后换芯）见
+  [派生镜像 RFC](cpa-fork-image-derivation-rfc.md)。
 - WorkBuddy 官方客户端与网关的结果差异只能缩小排查范围；两侧同拒仍可能
   是共享模型故障或网络问题，不能直接确认账号受限。11158 等社区分类也不是
   永久模型封锁的证明，不主动诱发错误做 A/B。

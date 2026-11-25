@@ -22,17 +22,40 @@ trap 'rm -rf --one-file-system -- "$ROOT"' EXIT
 PARALLEL='__PARALLEL__'
 API_KEY=$(python3 -c 'import yaml,pathlib;print(yaml.safe_load(pathlib.Path("/opt/cliproxyapi/config.yaml").read_text())["access"]["api-keys"][0])')
 lanes_healthy() {
-  curl -s --max-time 5 http://127.0.0.1:8318/healthz | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-bad = []
-for name, lane in d.get("lanes", {}).items():
-    st = lane.get("state", {})
-    if st.get("hold_reason") is not None or st.get("cooldown_active") or st.get("inflight", 0) or st.get("pending", 0):
-        bad.append("%s hold=%r cooldown=%s inflight=%s" % (name, st.get("hold_reason"), st.get("cooldown_active"), st.get("inflight")))
-print("LANES_OK" if not bad else "LANES_BUSY " + "; ".join(bad))
-sys.exit(0 if not bad else 4)
-'
+  python3 - "$1" <<'PY'
+import json, sys, urllib.request
+
+lane_name = sys.argv[1]
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open("http://127.0.0.1:8318/healthz", timeout=5) as response:
+    d = json.load(response)
+st = (d.get("lanes", {}).get(lane_name) or {}).get("state", {})
+if st.get("hold_reason") is not None or st.get("cooldown_active"):
+    print("LANE_BLOCKED %s hold=%r cooldown=%s" % (lane_name, st.get("hold_reason"), st.get("cooldown_active")))
+    raise SystemExit(4)
+if st.get("inflight", 0) or st.get("pending", 0):
+    print("LANE_BUSY %s inflight=%s pending=%s" % (lane_name, st.get("inflight"), st.get("pending")))
+    raise SystemExit(5)
+print("LANE_IDLE %s" % lane_name)
+PY
+}
+# A hold or an active cooldown on the lane about to be probed aborts; a lane
+# that is merely serving the user's own request is waited for, briefly.
+gate() {
+  if ! lanes_healthy "$2"; then
+    rc=$?
+    if [ "$rc" != 5 ]; then echo "ABORT=$1"; exit 4; fi
+    waited=0
+    while [ "$waited" -lt 90 ]; do
+      sleep 10; waited=$((waited + 10))
+      lanes_healthy "$2" && return 0
+      rc=$?
+      [ "$rc" = 5 ] || { echo "ABORT=$1"; exit 4; }
+    done
+    echo "ABORT=$1 lane_still_busy"
+    exit 4
+  fi
+  return 0
 }
 # chat-completions streaming single shot
 chat_single() {
@@ -137,38 +160,44 @@ raise SystemExit(0 if d.get("status") == "completed" and out_text.strip() else 7
 PY
 }
 step() { echo "== $1"; }
-gate() { if ! lanes_healthy; then echo "ABORT=$1"; exit 4; fi; }
 
 step "runtime"
 docker inspect cli-proxy-api --format 'IMAGE={{.Config.Image}} STARTED={{.State.StartedAt}} RESTARTS={{.RestartCount}}'
 docker exec cli-proxy-api sha256sum /CLIProxyAPI/CLIProxyAPI | cut -c1-64 | sed 's/^/RUNTIME_BINARY_SHA=/'
 
-gate lanes_not_idle_before_flash
+gate lanes_not_idle_before_flash antigravity-oauth
 step "probe 1/5: gemini-3.8-flash-high (antigravity lane, chat stream)"
 chat_single "gemini-3.8-flash-high" '{"model":"gemini-3.8-flash-high","stream":true,"messages":[{"role":"user","content":"Return the word PONG only."}]}'
-gate lanes_not_idle_after_flash
+gate lanes_not_idle_after_flash antigravity-oauth
 
 if [ "$PARALLEL" = run ]; then
   step "probe 1b: gemini-3.8-flash-high parallel tool calls (issue 7966 contract, upstream fe571afe)"
   chat_single "gemini-3.8-flash-high" '{"model":"gemini-3.8-flash-high","stream":true,"parallel_tool_calls":true,"tool_choice":"auto","messages":[{"role":"user","content":"Call get_time for the time zones UTC, America/Santiago and Asia/Tokyo. Make all three calls in the same turn; do not answer in text."}],"tools":[{"type":"function","function":{"name":"get_time","description":"Return the current time in a time zone.","parameters":{"type":"object","properties":{"tz":{"type":"string"}},"required":["tz"]}}}]}'
-  gate lanes_not_idle_after_parallel
+  gate lanes_not_idle_after_parallel antigravity-oauth
 fi
 
+gate lanes_before_deepseek workbuddy-oauth
 step "probe 2/5: deepseek-v4.1-flash (workbuddy lane, plugin 0.21.31)"
 chat_single "deepseek-v4.1-flash" '{"model":"deepseek-v4.1-flash","stream":true,"messages":[{"role":"user","content":"Return the word PONG only."}]}'
-gate lanes_not_idle_after_deepseek
+gate lanes_not_idle_after_deepseek workbuddy-oauth
 
+gate lanes_before_glm54 workbuddy-oauth
 step "probe 3/5: glm-5.4 (workbuddy lane, responses wire with a developer item)"
 responses_single "glm-5.4" '[{"type":"message","role":"developer","content":[{"type":"input_text","text":"You are a terse assistant. Follow the user instruction exactly."}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with exactly: GLM54_OK"}]}]' ''
-gate lanes_not_idle_after_glm54
+gate lanes_not_idle_after_glm54 workbuddy-oauth
 
+gate lanes_before_terra chatgpt-oauth
 step "probe 4/5: gpt-6.1-terra (chatgpt lane, responses wire)"
 responses_single "gpt-6.1-terra" '[{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with exactly: OK"}]}]' ',"reasoning":{"effort":"low"}'
-gate lanes_not_idle_after_terra
+gate lanes_not_idle_after_terra chatgpt-oauth
 
+gate lanes_before_glm53flash zhipu-coding-plan
 step "probe 5/5: glm-5.3-flash (zhipu coding plan, responses wire)"
 responses_single "glm-5.3-flash" '[{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with exactly: OK"}]}]' ''
-gate lanes_final
+gate lanes_after_glm53flash zhipu-coding-plan
+
+step "final lane states"
+for lane in antigravity-oauth workbuddy-oauth chatgpt-oauth zhipu-coding-plan; do lanes_healthy "$lane" || true; done
 
 step "journal: probe window upstream results"
 journalctl -u cpa-admission --since "6 minutes ago" --no-pager -o cat 2>/dev/null | python3 -c '

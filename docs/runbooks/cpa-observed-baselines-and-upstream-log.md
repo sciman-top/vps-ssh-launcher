@@ -319,7 +319,7 @@ user 四种摆放各 2 发，约 13 万输入 token）：第二发都只命中 8
 | `38067a29`（[#7967](https://github.com/router-for-me/CLIProxyAPI/issues/7967)） | Antigravity 出站线格式对齐：requestId 斜杠分隔、`functionResponse.response.output`、单段 systemInstruction。与官方二进制一致性的直接改进，rebase 时带入 |
 | `06225fcf` / `0286e5d1` / `6c2308a1`、`7be2a678` / `b82d3d4e`、`e9dd8bad` | 签名缓存、签名清洗、replay 快照；与 crossauth / sig-iso 同域，rebase 时逐层对照 |
 | `20be744e` / `d1bdee85` / `9bce4825` | 上游 HTTP 200 但空体时改判可重试 502 |
-| `5b857ecc`（main，v8.1.3 之后） | 移除登记为 obsolete 的 GPT-6.1 Terra；[#8012](https://github.com/router-for-me/CLIProxyAPI/issues/8012) 报 Free 号对该模型 `model_not_found`。本栈 `gpt-6.1-terra` 仍在役（48h 86 发，24h 本地冷却拒绝 27 发），去留属用户裁决 |
+| `5b857ecc`（main，v8.1.3 之后） | 移除登记为 obsolete 的 GPT-6.1 Terra；[#8012](https://github.com/router-for-me/CLIProxyAPI/issues/8012) 报 Free 号对该模型 `model_not_found`。移除的是 OpenAI **API key** 渠道的登记项，v8.1.4 的 `codex_client_models.json` 仍列该模型（`visibility: list`，`available_in_plans` 含 `plus`）；本栈 Plus 号 48h 内 63 发 200 完成、零条 `model_not_found`，**保留**（2026-11-26 用户条件指令“不支持才去掉”，条件不成立） |
 
 生产是 fork，换代要重放五个叠层并过全量测试门；新鲜 tag 先 soak（按惯例 72h，
 最早 2026-11-28 04:26Z）。WorkBuddy CN 插件上游已有 0.21.31，在役 0.21.30。
@@ -328,3 +328,27 @@ user 四种摆放各 2 发，约 13 万输入 token）：第二发都只命中 8
 （`owned_by=workbuddy-provider`），strict doctor 报
 `client-model-catalog-contract=FAIL`。排除表此前只存在于主机，现纳入清单
 `plugin_exclusions`（见 [WorkBuddy runbook](cpa-workbuddy-plugin.md) §2.1）。
+
+### 2026-11-26：换到 v8.1.4，去化 7966fix，开放 glm-5.4
+
+用户 2026-11-26 指令直接升级（不等 soak）。生产现为
+`cli-proxy-api-fork:v8.1.4-gemini-raw-daily-cap-authiso-sigiso`（binary `424fb393…`，
+upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN 插件 0.21.31；
+`glm-5.4` 开放为 CN 的第二个 pin。事务、回滚与验收见
+[换代台账](../change-evidence/20261126-bwg-cpa-v814-five-overlay-swap.md)。
+
+- **v8.1.4**（2026-11-25T14:02:19Z，v8.1.3 之后 48 个提交）：v8.1.3 的全部条目
+  （#7966 官方修复、#7967 线格式对齐、签名缓存三连、空成功体改判 502）加上
+  Hub fallback 2.35.1、一批翻译器 null 守卫（对应 #8100–#8120 那批报告）与 Home
+  派发到插件执行器。
+- **7966fix 全部去化**。emit-once 由上游 `fe571afe` 取代；seen-condition 也去掉：
+  上游在 v8.1.4 把 `InterruptedMessageBeforeRealOutput…` 测试的期望定为“工具响应组
+  在前、后到的用户打断在后”，与自修正相反。差异只在 `willContinue` 标记的流式调用。
+- **跨号隔离叠层多一处测试适配**：上游新增的 `TestIssue6332ReasoningReplayTwoTurns`
+  （`sdk/api/handlers/openai`）按不带凭据前缀的键读 replay 缓存，读键改为作用域键。
+- **事务顺序**：主机上 `glm-5.4` 未声明时，`cpa-health.py readiness` 的目录门
+  fail-closed，换芯脚本的 `wait_readiness` 必失败并回滚。所以声明新模型的换代必须
+  **先 `-Apply`、后换芯**。
+- **上游抖动**：`TestAntigravityManagerExecuteAndStream_ToppedUpCreditsRecoverDuringQuotaCooldown`
+  隔离重跑 6 次失败 1 次，纯净 v8.1.4、生产树、合并树三边同形；未报上游。
+- zcode-start-plan 已是最新（`zcode-proxy` 4.9.1），未动。
