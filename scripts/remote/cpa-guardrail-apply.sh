@@ -1984,6 +1984,68 @@ if antigravity_oauth_aliases & {p.strip().lower() for p in antigravity_exclusion
 oauth_exclusions["antigravity"] = antigravity_exclusions_after
 oauth_block_after["excluded-models"] = oauth_exclusions
 
+# Plugin channels register whatever their upstream catalog serves at load time,
+# so a pin holds only as an exclusion list. The manifest carries that list. A
+# model the upstream adds later is not in it: glm-5.4 surfaced in the CN
+# catalog on 2026-11-25 and failed the doctor client-model-catalog contract
+# before anything here knew about it. Entries already on the host keep their
+# order; only missing manifest entries are appended, so a retirement recorded
+# on the host is never dropped by a projection.
+plugin_exclusions_manifest = route_manifest.get("plugin_exclusions", {})
+if not isinstance(plugin_exclusions_manifest, dict):
+    raise SystemExit("REFUSE plugin_exclusions must be a mapping")
+plugin_exclusion_channels = {
+    route.get("provider")
+    for route in route_manifest.get("plugin_routes", [])
+    if isinstance(route, dict) and isinstance(route.get("provider"), str)
+}
+plugin_pinned_models = {
+    name.strip().lower()
+    for route in route_manifest.get("plugin_routes", [])
+    if isinstance(route, dict)
+    for name in route.get("models", [])
+    if isinstance(name, str) and name.strip()
+}
+for channel, entries in (route_manifest.get("oauth_model_aliases") or {}).items():
+    if channel in plugin_exclusion_channels and isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                for key in ("name", "alias"):
+                    if isinstance(entry.get(key), str):
+                        plugin_pinned_models.add(entry[key].strip().lower())
+for provider, models in plugin_exclusions_manifest.items():
+    if not isinstance(provider, str) or provider not in plugin_exclusion_channels:
+        raise SystemExit("REFUSE plugin_exclusions names an undeclared plugin channel")
+    if (
+        not isinstance(models, list)
+        or not models
+        or any(not isinstance(model, str) or not model.strip() for model in models)
+    ):
+        raise SystemExit(
+            f"REFUSE plugin_exclusions.{provider} must be a non-empty list of model names"
+        )
+    plugin_exclusions = oauth_exclusions.get(provider, [])
+    if not isinstance(plugin_exclusions, list) or not all(
+        isinstance(pattern, str) and pattern.strip() for pattern in plugin_exclusions
+    ):
+        raise SystemExit(
+            f"REFUSE oauth.excluded-models.{provider} must be a list of strings"
+        )
+    blocked_pins = sorted(
+        {model.strip().lower() for model in models} & plugin_pinned_models
+    )
+    if blocked_pins:
+        raise SystemExit(
+            f"REFUSE plugin exclusion blocks a declared plugin model: {blocked_pins}"
+        )
+    present = {pattern.strip().lower() for pattern in plugin_exclusions}
+    for model in models:
+        if model.strip().lower() not in present:
+            plugin_exclusions.append(model)
+            present.add(model.strip().lower())
+    oauth_exclusions[provider] = plugin_exclusions
+oauth_block_after["excluded-models"] = oauth_exclusions
+
 # Context-window metadata is pinned in the same manifest as the routes. The
 # compatibility providers carry it on each model entry; OAuth and plugin
 # channels carry it under oauth.settings. Managed channel lists are replaced

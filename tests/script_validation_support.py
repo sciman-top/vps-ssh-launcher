@@ -430,6 +430,12 @@ class ScriptValidationMixin:
                             "claude-opus-4-20250514",
                             "claude-sonnet-4-20250514",
                         ],
+                        **{
+                            provider: list(models)
+                            for provider, models in route_manifest[
+                                "plugin_exclusions"
+                            ].items()
+                        },
                     },
                 },
                 "upstream": {

@@ -130,6 +130,28 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   与工具输出不清扫；`systemInstruction` 的整词替换有损，`.codex` 这类路径会被改写。
   台账：[定位与回放](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)、
   [多车道中性化](../change-evidence/20261125-bwg-agent-identity-neutralization.md)。
+- **2026-11-25 第二轮复审（自然流量验收与 ChatGPT 车道结论）**：
+  - 自然流量已验收。48h 内 Antigravity 车道 71 发里 68 发命中
+    `antigravity_identity_user_text`，69 发完成；journal 里该车道只有一发 429，
+    是 11-24 16:03Z 部署前的受控回放，不是自然流量。WorkBuddy 车道 175 发里
+    162 发命中 `agent_identity_neutralized`，零上游错误。ZCode 起步套餐车道仍是
+    零流量，未验收。
+  - ChatGPT 车道**不建清洗规则**。该车道的 agent 流量全部走 `/v1/responses` 且
+    来自官方 Codex 客户端；`/v1/chat/completions` 上的 108 发（48h）是约 53 token
+    的非流式探活，不带系统提示。官方客户端的请求没有顶层 `instructions`（基础
+    提示是 `input[0]` 的 developer message），经翻译的第三方客户端在结构上即可
+    分辨，清洗身份句不改变这一点（出站头与请求形状的实测见
+    [上游台账](cpa-observed-baselines-and-upstream-log.md) 六节）。上游也没有
+    OpenAI 按提示词内容处置账号的报告：#2396 是新号首用即封，维护者称与 CPA
+    无关。证据充分的只有 Antigravity 的内容过滤（#4696、#7553、#7904、#7627）。
+  - **周期探活（观察，未处置）**：全天候都有上述小请求打到订阅号——中位间隔
+    `gpt-6.1-sol` 约 25 分钟、`gpt-6.1-terra` 约 64 分钟、`deepseek-v4.1-flash`
+    约 29 分钟，UA `codex_exec/0.142.3 (Windows 10.0.26200; x86_64)`，经同一出口。
+    这是机器形状的订阅号流量，与「不挂周期 OAuth 生成探针」相悖。来源没有从
+    服务端确认（nginx 与 CPA 都不记 UA 与 URI）；本机 `qq-astrbot-stack` 的
+    provider 看门狗有同形的周期探测。是否改指向 `/v1/models` 由用户裁决。
+  - 降智读数：48h 内 `gemini-3.8-flash-high` 的 77 发全部被
+    `gemini-3.8-flash-n` 接管，是免费号的服务档策略，客户端无解。
 - WorkBuddy 官方客户端与网关的结果差异只能缩小排查范围；两侧同拒仍可能
   是共享模型故障或网络问题，不能直接确认账号受限。11158 等社区分类也不是
   永久模型封锁的证明，不主动诱发错误做 A/B。
@@ -916,6 +938,22 @@ OpenCode 扇出。流已输出后不重放。
   换 IP/UA、跨 realm 续打；不共享消费级 OAuth 凭据给外部消费者。
 - 保留明文 HTTP 渠道时，按“已接受传输风险”处理：不传敏感数据，不把 key 写入
   日志、证据或提交。
+
+### 探针脱敏（2026-11-25 事故后补）
+
+- **事故**：一次只读的配置脱敏探针没有遮住 `access.api-keys` 的列表项，网关
+  接入 key（`agt_gw_` 前缀那一把）明文进入了当次会话输出。它是客户端接入
+  key，不是上游 OAuth 凭据；轮换与否由用户裁决，流程见上文
+  「密钥轮换前操作清单」。
+- **成因**：YAML 允许块序列与父键同缩进（`api-keys:` 与 `- <key>` 同一列），
+  脚本只在列表项缩进更深时才沿用机密上下文，本地假值夹具恰好写成了更深缩进，
+  所以没复现。
+- **纪律**：
+  1. 机密键的上下文延续到其后所有 `- ` 列表项，遇到下一个键行才结束。
+  2. 任何打印主机配置的脚本，先在本机用**同缩进与深缩进两种**假值夹具跑一遍
+     （`python -I`），确认两种写法都被遮住再上主机。
+  3. key 只留在主机进程内（管道进解释器，不经命令行参数、不落 `/tmp`、不回显）。
+  4. 泄漏后如实报告并给出轮换路径；不要通过重跑探针来「确认没有泄漏」。
 
 ## 边界
 

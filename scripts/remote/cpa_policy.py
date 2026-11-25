@@ -1253,6 +1253,44 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             "OAuth aliases must set fork=true for independent admission state: "
             f"{sorted(alias_without_fork)!r}"
         )
+    # An exclusion list is what keeps a plugin channel on its pins, so it may
+    # not name the pin itself or one of the channel's aliases.
+    plugin_exclusions = manifest.get("plugin_exclusions", {})
+    if not isinstance(plugin_exclusions, dict):
+        issues.append("route manifest plugin_exclusions must be a mapping")
+    else:
+        plugin_channels = {channel for channel, _ in plugin_pin_sources}
+        for channel, entries in plugin_exclusions.items():
+            label = f"route manifest plugin_exclusions[{channel!r}]"
+            if not isinstance(channel, str) or channel not in plugin_channels:
+                issues.append(f"{label} must name a declared plugin channel")
+                continue
+            if (
+                not isinstance(entries, list)
+                or not entries
+                or any(
+                    not isinstance(model, str) or not model.strip() for model in entries
+                )
+                or len({model.strip().lower() for model in entries}) != len(entries)
+            ):
+                issues.append(f"{label} must be a non-empty list of unique model names")
+                continue
+            channel_aliases = {
+                entry["alias"].strip().lower()
+                for alias_channel, alias_entries in raw_aliases.items()
+                if alias_channel == channel and isinstance(alias_entries, list)
+                for entry in alias_entries
+                if isinstance(entry, dict) and isinstance(entry.get("alias"), str)
+            }
+            for model in entries:
+                lowered = model.strip().lower()
+                if (
+                    channel,
+                    lowered,
+                ) in plugin_pin_sources or lowered in channel_aliases:
+                    issues.append(
+                        f"{label} must not exclude the {channel} pin or alias {model!r}"
+                    )
     static_antigravity_models = manifest.get("antigravity_upstream_static_models")
     if not isinstance(static_antigravity_models, list) or not all(
         isinstance(model, str) and model.strip() for model in static_antigravity_models
@@ -2070,6 +2108,16 @@ EXPECTED_PLUGIN_MODEL_OWNERS = {
     for model in route["models"]
     if isinstance(model, str)
 }
+# A plugin channel's pin is an exclusion list (see the manifest note). These are
+# the names a deployed oauth.excluded-models list must still carry; -Apply
+# appends the ones it is missing.
+EXPECTED_PLUGIN_EXCLUSIONS = {
+    provider: [model.strip().lower() for model in models]
+    for provider, models in (ROUTE_MANIFEST.get("plugin_exclusions") or {}).items()
+    if isinstance(provider, str)
+    and isinstance(models, list)
+    and all(isinstance(model, str) for model in models)
+}
 EXPECTED_PROVIDER_URLS = {
     provider["host"]: (
         f"{provider.get('scheme', 'https')}://{provider['host']}"
@@ -2555,6 +2603,26 @@ def validate_config(
                 issues.append(
                     "oauth-excluded-models.codex must leave configured OAuth "
                     f"routes available; blocked aliases={blocked_oauth_routes!r}"
+                )
+        # A plugin channel serves its whole upstream catalog unless the rest
+        # is excluded, so a missing entry is a wider lane, not a stale name.
+        for provider, expected_models in EXPECTED_PLUGIN_EXCLUSIONS.items():
+            plugin_exclusions = oauth_exclusions.get(provider)
+            if not isinstance(plugin_exclusions, list) or not all(
+                isinstance(pattern, str) and pattern.strip()
+                for pattern in plugin_exclusions
+            ):
+                issues.append(
+                    f"oauth.excluded-models.{provider} must be a list of "
+                    "non-empty strings"
+                )
+                continue
+            plugin_patterns = {pattern.strip().lower() for pattern in plugin_exclusions}
+            missing_exclusions = sorted(set(expected_models) - plugin_patterns)
+            if missing_exclusions:
+                issues.append(
+                    f"oauth.excluded-models.{provider} must exclude "
+                    f"{missing_exclusions!r} to keep the plugin channel on its pins"
                 )
 
     api_keys_block = config.get("api-keys")

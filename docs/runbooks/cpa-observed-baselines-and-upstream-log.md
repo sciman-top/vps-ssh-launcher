@@ -254,9 +254,77 @@ Go RE2 编译执行，部署前在 WSL 按上游顺序实测；部署后管理�
   `retry-after≈347s`；四个模型均匀分布，53 token 的 watchdog 探针同样被甩。
   此前 48 小时约 900 发仅 2 发。
 - OpenAI 状态页同时段无事故，上游 issue 近两日无同形集中报告，原因在网关侧
-  **无法定论**（上游负载突发，或该账号被降优先级）。#4679 的判别项已核：
-  出站身份为官方 `codex_cli_rs`（cloaking 默认开，配置无 opt-out，现由
-  `cpa_policy.py` 断言）。
+  **无法定论**（上游负载突发，或该账号被降优先级）。#4679 的判别项见下节
+  2026-11-25 更正：当时写的「出站身份为官方 `codex_cli_rs`，已核」不成立，
+  实际出站是 `codex-tui`。
 - 网关行为符合设计：`request-retry=0` 不重打，Retry-After 镜像为模型级窗口，
   同车道兄弟模型不连坐。判读升级条件：持续超过 24 小时，或官方客户端直连
   同账号不复现同形错误——届时按账号级软限流处置并停下复核。
+
+### 2026-11-25 第二轮复审：出站身份地面真相、官方请求形状、v8.1.3
+
+**出站身份**（线上保留的错误转储，入站 `HEADERS` 对比发往 chatgpt.com 的
+`API REQUEST 1`；只读头名与三个非机密头的值）：
+
+| 入站客户端 | 入站 `Originator` / `User-Agent` | 发往上游 |
+|---|---|---|
+| Codex Desktop 0.171.0-alpha.13.2（Windows 11） | `Codex Desktop` / `Codex Desktop/0.171.0-alpha.13.2 …` | `codex-tui` / `codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)` |
+| 小探针（`/v1/chat/completions`，约 506 字节） | 无 Originator / `codex_exec/0.142.3 (Windows 10.0.26200; x86_64) …` | 同上 |
+
+- cloak 是无条件覆盖（v8.1.2 `codex_executor_request.go` 的
+  `applyCodexCloakingHeaders`，在 `applyCodexHeadersWithSIWC` 末尾执行）：
+  `User-Agent` 与 `Originator` 恒写常量，客户端真实值、`codex-header-defaults`
+  与 auth `header:` 规则都被盖掉；`x-codex-window-id`（桌面专属）、
+  `x-codex-beta-features: remote_compaction_v2`、`x-codex-turn-metadata`、
+  `thread-id` 则原样转发。结果是一个自相矛盾的复合指纹（自称 macOS iTerm 上的
+  0.154.0 终端客户端，却带 Windows 桌面窗口 id 与新版本特性标记），并与所有
+  CPA 部署共用同一串 UA。
+- [#4679](https://github.com/router-for-me/CLIProxyAPI/issues/4679) 的 A/B：
+  `Originator: codex_cli_rs` 4/4 成功，`codex-tui` 立即流内
+  `server_is_overloaded`，只改 UA 无效。本栈发出的正是后者；24h 容量事件 34 发
+  （流内过载 14、502 19、503 1）。**cloak 开关对过载率的影响没有测过**——
+  要改远端配置并做受控 A/B，属用户裁决。
+- 取舍：本栈 ChatGPT 车道的 agent 流量全部来自官方客户端，关 cloak 即透传各自
+  真实且自洽的官方指纹；代价是探针类请求露出真实 UA（无 Originator 时仍回落
+  `codex-tui`）。维护者「保持开启」的建议面向第三方客户端。现状未改，
+  `cpa_policy.py` 仍把关闭判为违规。
+
+**官方客户端请求形状**（同一转储的 `REQUEST BODY`）：顶层键为
+`client_metadata / include / input / model / parallel_tool_calls / prompt_cache_key /
+reasoning / store / stream / text / tool_choice / tools`，**没有顶层
+`instructions`**；`input[0]` 是 developer 角色的基础提示（约 18K 字符），其后是
+`<app-context>`（约 46K 字符）等；顶层 `tools` 18 个；`client_metadata` 含
+`x-codex-installation-id` 与 `x-codex-window-id`。与源码一致
+（openai/codex `codex-rs/core/src/client.rs` 的 `build_responses_request`，
+2026-11-25 读 HEAD）。含义：经 CPA 翻译的第三方客户端请求（顶层 `instructions`
+加顶层 `tools`）在结构上即可分辨，不依赖提示词内容。ChatGPT 车道上清洗身份句
+对 OpenAI 侧的识别没有实质作用，不为此建规则。
+
+**GPT-6.2 与顶层 `instructions` 的缓存**：OpenAI 向 OpenCode 确认 GPT-6.2 把
+顶层 `instructions` 排除在提示词缓存之外并置于输入末尾，建议放进 `input` 的
+首条 developer message（[anomalyco/opencode#64550](https://github.com/anomalyco/opencode/issues/64550)，
+2026-11-18；GPT-6.1 正常缓存）。本栈官方桌面端不带顶层 `instructions`，不受
+影响。`gpt-6.2-astra`（API key 渠道）的自然流量另有一个与摆放位置无关的现象：
+48h 内 48 组「上下文增长不足 1500 token」的相邻请求，增长中位数 371、未命中
+中位数 17,374；同一客户端在 `gpt-6.1-sol` 上是 190 / 381。未命中量约占输入的
+16%。当日在该付费渠道做了一次有界实验（developer / instructions / system /
+user 四种摆放各 2 发，约 13 万输入 token）：第二发都只命中 81–86%。**结论：
+这是该渠道自身的缓存比例上限，网关侧没有杠杆，未改代码。**
+
+**v8.1.3 已发布**（2026-11-25T04:26Z，v8.1.2 之后 45 个提交）：
+
+| 条目 | 本栈处置 |
+|---|---|
+| `fe571afe`（#7966） | 官方修复并行工具调用流；下次 rebase 以官方实现去化 `7966fix`，去化前跑全量 `./internal/...` |
+| `38067a29`（[#7967](https://github.com/router-for-me/CLIProxyAPI/issues/7967)） | Antigravity 出站线格式对齐：requestId 斜杠分隔、`functionResponse.response.output`、单段 systemInstruction。与官方二进制一致性的直接改进，rebase 时带入 |
+| `06225fcf` / `0286e5d1` / `6c2308a1`、`7be2a678` / `b82d3d4e`、`e9dd8bad` | 签名缓存、签名清洗、replay 快照；与 crossauth / sig-iso 同域，rebase 时逐层对照 |
+| `20be744e` / `d1bdee85` / `9bce4825` | 上游 HTTP 200 但空体时改判可重试 502 |
+| `5b857ecc`（main，v8.1.3 之后） | 移除登记为 obsolete 的 GPT-6.1 Terra；[#8012](https://github.com/router-for-me/CLIProxyAPI/issues/8012) 报 Free 号对该模型 `model_not_found`。本栈 `gpt-6.1-terra` 仍在役（48h 86 发，24h 本地冷却拒绝 27 发），去留属用户裁决 |
+
+生产是 fork，换代要重放五个叠层并过全量测试门；新鲜 tag 先 soak（按惯例 72h，
+最早 2026-11-28 04:26Z）。WorkBuddy CN 插件上游已有 0.21.31，在役 0.21.30。
+
+**目录泄漏**：`glm-5.4` 经 WorkBuddy CN 插件的动态目录进入 `/v1/models`
+（`owned_by=workbuddy-provider`），strict doctor 报
+`client-model-catalog-contract=FAIL`。排除表此前只存在于主机，现纳入清单
+`plugin_exclusions`（见 [WorkBuddy runbook](cpa-workbuddy-plugin.md) §2.1）。

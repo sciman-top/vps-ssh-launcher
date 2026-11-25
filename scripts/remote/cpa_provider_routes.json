@@ -193,6 +193,52 @@
       }
     ]
   },
+  "plugin_exclusions_note": "A plugin channel registers whatever its upstream catalog serves at load time, so its pin holds only as an exclusion list. plugin_exclusions carries the names the deployed oauth.excluded-models lists had on 2026-11-25, so -Apply reproduces them. A model the upstream adds later is not listed: it surfaces as MODEL_IDS_UNKNOWN in the doctor client-model-catalog contract and is then recorded here (glm-5.4, CN catalog, 2026-11-25). Entries are appended, never removed, so a retirement recorded on the host survives a projection.",
+  "plugin_exclusions": {
+    "workbuddy-provider": [
+      "auto",
+      "deepseek-v4-pro",
+      "glm-5.2",
+      "glm-5.3",
+      "glm-5.3-flash",
+      "hy4flash",
+      "hy4flash-free",
+      "hy4std",
+      "kimi-k2.8-preview",
+      "kimi-k3-1",
+      "kimi-k3.1-pro",
+      "mimo-v2.6-pro",
+      "minimax-m3.1-flash",
+      "space-bunny",
+      "step-5-preview",
+      "glm-5.4"
+    ],
+    "workbuddy-ai-provider": [
+      "auto",
+      "default-model",
+      "gemini-3.8-flash",
+      "gemini-4-argon",
+      "gemini-4-carbon",
+      "glm-5.3",
+      "glm-5.3-flash",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-6-sol",
+      "gpt-6.1-sol",
+      "grok-4.7",
+      "hy4flash",
+      "hy4std",
+      "kimi-k3",
+      "kimi-k3.1-pro",
+      "kimi-k3.1-pro-highspeed",
+      "max-model",
+      "minimax-m3.1-flash",
+      "hy4flash-free"
+    ]
+  },
   "codex_api_key_routes": [],
   "claude_api_key_routes": [],
   "retired_hosts": [

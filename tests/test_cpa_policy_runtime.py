@@ -121,6 +121,172 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 )
             self.assertIn("quarantine is active", str(quarantine_exc.exception))
 
+    def test_apply_appends_missing_plugin_exclusions_from_manifest(self) -> None:
+        """A plugin pin is an exclusion list, and the manifest keeps it."""
+        repo_root = Path(__file__).resolve().parents[1]
+        apply_source = (
+            repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        start = apply_source.index(
+            'plugin_exclusions_manifest = route_manifest.get("plugin_exclusions", {})'
+        )
+        end = apply_source.index(
+            'oauth_settings_manifest = route_manifest.get("oauth_settings")'
+        )
+        snippet = apply_source[start:end]
+        manifest = json.loads(
+            (repo_root / "scripts" / "remote" / "cpa_provider_routes.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cn_expected = manifest["plugin_exclusions"]["workbuddy-provider"]
+
+        def run(
+            route_manifest: dict[str, Any], oauth_exclusions: dict[str, Any]
+        ) -> dict[str, Any]:
+            block_after: dict[str, Any] = {}
+            exec(
+                snippet,
+                {
+                    "route_manifest": route_manifest,
+                    "oauth_exclusions": oauth_exclusions,
+                    "oauth_block_after": block_after,
+                },
+            )
+            return block_after
+
+        # The host on 2026-11-25: the CN list predates glm-5.4 and carries a
+        # retirement of its own; INTL already matches the manifest.
+        cn_before = [model for model in cn_expected if model != "glm-5.4"]
+        host_lists: dict[str, Any] = {
+            "workbuddy-provider": [*cn_before, "operator-retired-model"],
+            "workbuddy-ai-provider": list(
+                manifest["plugin_exclusions"]["workbuddy-ai-provider"]
+            ),
+        }
+        block_after = run(manifest, host_lists)
+        # The host retirement keeps its place; the missing entry is appended.
+        self.assertEqual(
+            host_lists["workbuddy-provider"],
+            [*cn_before, "operator-retired-model", "glm-5.4"],
+        )
+        self.assertEqual(
+            host_lists["workbuddy-ai-provider"],
+            manifest["plugin_exclusions"]["workbuddy-ai-provider"],
+        )
+        self.assertIs(block_after["excluded-models"], host_lists)
+        settled = list(host_lists["workbuddy-provider"])
+        # Idempotent, and a differently-cased host entry is not duplicated.
+        run(manifest, host_lists)
+        self.assertEqual(host_lists["workbuddy-provider"], settled)
+        host_lists["workbuddy-provider"][-1] = "GLM-5.4"
+        run(manifest, host_lists)
+        self.assertEqual(
+            host_lists["workbuddy-provider"],
+            [*settled[:-1], "GLM-5.4"],
+        )
+
+        for bad_manifest, message in (
+            # The CN pin itself.
+            ("deepseek-v4.1-flash", "blocks a declared plugin model"),
+            # The INTL pin and the alias that renames it.
+            ("deepseek-v4.1-flash-sg", "blocks a declared plugin model"),
+            ("deepseek-v4.1-flash-intl", "blocks a declared plugin model"),
+        ):
+            clashing = json.loads(json.dumps(manifest))
+            clashing["plugin_exclusions"]["workbuddy-provider"].append(bad_manifest)
+            with self.assertRaises(SystemExit) as clash_exc:
+                run(clashing, {"workbuddy-provider": [], "workbuddy-ai-provider": []})
+            self.assertIn(
+                "REFUSE plugin exclusion " + message, str(clash_exc.exception)
+            )
+
+        undeclared = json.loads(json.dumps(manifest))
+        undeclared["plugin_exclusions"]["antigravity"] = ["gemini-3-flash"]
+        with self.assertRaises(SystemExit) as undeclared_exc:
+            run(undeclared, {})
+        self.assertIn(
+            "REFUSE plugin_exclusions names an undeclared plugin channel",
+            str(undeclared_exc.exception),
+        )
+
+        with self.assertRaises(SystemExit) as shape_exc:
+            run(manifest, {"workbuddy-provider": "auto", "workbuddy-ai-provider": []})
+        self.assertIn(
+            "REFUSE oauth.excluded-models.workbuddy-provider must be a list of strings",
+            str(shape_exc.exception),
+        )
+
+    def test_plugin_exclusion_drift_is_reported(self) -> None:
+        import json
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        # A model the upstream adds is a wider lane until its exclusion is
+        # recorded and projected (glm-5.4 entered the CN catalog on 2026-11-25).
+        for provider, model in (
+            ("workbuddy-provider", "glm-5.4"),
+            ("workbuddy-ai-provider", "hy4flash-free"),
+        ):
+            mutated = json.loads(json.dumps(config))
+            mutated["oauth"]["excluded-models"][provider].remove(model)
+            issues = policy["validate_config"](mutated)
+            self.assertEqual(
+                [
+                    issue
+                    for issue in issues
+                    if issue.startswith(
+                        f"oauth.excluded-models.{provider} must exclude"
+                    )
+                ],
+                [
+                    f"oauth.excluded-models.{provider} must exclude {[model]!r} "
+                    "to keep the plugin channel on its pins"
+                ],
+            )
+        # A retirement recorded only on the host is still an excluded name.
+        mutated = json.loads(json.dumps(config))
+        mutated["oauth"]["excluded-models"]["workbuddy-provider"].append(
+            "operator-retired-model"
+        )
+        self.assertEqual(policy["validate_config"](mutated), [])
+        mutated = json.loads(json.dumps(config))
+        mutated["oauth"]["excluded-models"]["workbuddy-provider"] = "auto"
+        self.assertIn(
+            "oauth.excluded-models.workbuddy-provider must be a list of non-empty strings",
+            policy["validate_config"](mutated),
+        )
+
+        # Excluding a pin or an undeclared channel is a manifest error.
+        for provider, model, message in (
+            ("workbuddy-provider", "deepseek-v4.1-flash", "pin or alias"),
+            ("workbuddy-ai-provider", "deepseek-v4.1-flash-intl", "pin or alias"),
+            ("codex", "gpt-5.5", "declared plugin channel"),
+        ):
+            bad_manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+            bad_manifest["plugin_exclusions"][provider] = [
+                *bad_manifest["plugin_exclusions"].get(provider, []),
+                model,
+            ]
+            self.assertTrue(
+                any(
+                    message in issue
+                    for issue in policy["_route_manifest_issues"](bad_manifest)
+                ),
+                (provider, model),
+            )
+        duplicate = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        duplicate["plugin_exclusions"]["workbuddy-provider"].append("glm-5.3")
+        self.assertTrue(
+            any(
+                "must be a non-empty list of unique model names" in issue
+                for issue in policy["_route_manifest_issues"](duplicate)
+            )
+        )
+
     def test_thinking_levels_contract_is_declared_and_enforced(self) -> None:
         """An unsupported effort must be clamped, not forwarded for substitution.
 

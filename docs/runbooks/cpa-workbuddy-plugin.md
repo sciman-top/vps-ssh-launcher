@@ -200,6 +200,17 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
    `deepseek-v4.1-flash`；INTL 声明 pin 为 `deepseek-v4.1-flash-sg`。
    它们用于收窄候选目录，不能把相同的
    `deepseek-v4.1-flash` 变成 realm-aware 账号选择器。
+
+   **排除表由清单管理（2026-11-25 起）**：插件注册的是上游加载时的整个
+   动态目录，所以「收窄」只是一份排除表。两个通道的排除名单记在
+   `cpa_provider_routes.json` 的 `plugin_exclusions`，`-Apply` 只追加缺失项
+   （主机上单独记录的退役不会被投影抹掉），`cpa_policy.py` 把缺项判为漂移。
+   上游日后新增的模型不在这份名单里，会先以 doctor
+   `MODEL_IDS_UNKNOWN` → `client-model-catalog-contract=FAIL` 暴露，此时它
+   不在任何 admission 车道内；处置是把名字记入 `plugin_exclusions` 再
+   `-Apply`（或经用户裁决开名）。首例：2026-11-25 `glm-5.4` 出现在 CN
+   目录（`owned_by=workbuddy-provider`），已记入清单，**线上排除尚待
+   `-Apply`**。
 3. CPA admission 的客户端/状态分流如下（2026-11-17 第二批用户指令后）：
 
    | 请求名 | Admission lane | 持久状态 | 现状 |
