@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
 **全局规则复核**: 9.93
-**最后更新**: 2026-11-17
+**最后更新**: 2026-11-25
 
 ## 1. 当前落点与目标归宿
 - source of truth：本文件第 A 节的仓库事实、当前代码与脚本、`scripts/run_gates.ps1` 的门禁结果；运行态配置真源在仓外，路径由 `Get-LauncherUserDataRoot` / `vps_ssh_launcher.config.app_config_dir()` 决定（Windows `%APPDATA%\vps-ssh-launcher`，其他平台 `~/.config/vps-ssh-launcher`），文件名 `target.json`。
