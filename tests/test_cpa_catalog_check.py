@@ -33,9 +33,11 @@ def test_derived_lanes_match_the_deployable_admission_config() -> None:
 
 def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
+    # The CN lane carries the paid primary and, since 2026-11-26 (user
+    # directive), glm-5.4 as a second pin.
     assert cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-provider", "cn"
-    ) == ["deepseek-v4.1-flash"]
+    ) == ["deepseek-v4.1-flash", "glm-5.4"]
     intl_models = cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-ai-provider", "intl"
     )
@@ -56,7 +58,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     errors: list[str] = []
     derived = cpa_catalog_check.derive_lanes(manifest, errors)
     assert errors == []
-    assert derived["workbuddy-oauth"] == ["deepseek-v4.1-flash"]
+    assert derived["workbuddy-oauth"] == ["deepseek-v4.1-flash", "glm-5.4"]
     assert derived["workbuddy-intl-oauth"] == [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",

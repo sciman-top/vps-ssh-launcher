@@ -151,7 +151,8 @@
     {
       "name": "workbuddy-oauth",
       "models": [
-        "deepseek-v4.1-flash"
+        "deepseek-v4.1-flash",
+        "glm-5.4"
       ],
       "max_inflight": 1,
       "max_pending": 4,

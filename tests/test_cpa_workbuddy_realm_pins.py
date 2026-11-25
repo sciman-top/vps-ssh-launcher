@@ -8,7 +8,7 @@ realm's dynamic catalog must keep narrowed to via oauth-excluded-models,
 and (3) hy4flash-free is RETIRED (2026-11-17, user directive) while
 deepseek-v4.1-flash-sg stays declared but closed dark — the INTL plugin is
 disabled in config.yaml, so re-enabling is one enabled-flag flip. The CN
-pool still carries only the paid primary.
+pool carries the paid primary and glm-5.4 (opened 2026-11-26, user directive).
 """
 
 from __future__ import annotations
@@ -39,12 +39,14 @@ def test_pin_scripts_reference_the_bridge_not_dead_plugin_keys() -> None:
     assert "models_intl" not in source
 
 
-def test_manifest_cn_plugin_pin_is_the_paid_primary_only() -> None:
+def test_manifest_cn_plugin_pins_are_the_primary_and_glm54() -> None:
     routes = _manifest()["plugin_routes"]
     cn = [r for r in routes if r["realm"] == "cn"]
     assert len(cn) == 1
     assert cn[0]["provider"] == "workbuddy-provider"
-    assert cn[0]["models"] == ["deepseek-v4.1-flash"]
+    # The paid primary, plus glm-5.4 opened as a second pin on the same lane
+    # and credential pool (2026-11-26, user directive).
+    assert cn[0]["models"] == ["deepseek-v4.1-flash", "glm-5.4"]
     assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
 

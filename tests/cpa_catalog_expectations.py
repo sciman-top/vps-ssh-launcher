@@ -112,7 +112,8 @@ ALL_OAUTH_ROUTE_ALIASES = (
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
 # claude-oauth retired 2026-10-20 (see above).
 ADMISSION_LANE_MODELS = {
-    "workbuddy-oauth": ["deepseek-v4.1-flash"],
+    # 2026-11-26 (user directive): glm-5.4 opened on the CN lane.
+    "workbuddy-oauth": ["deepseek-v4.1-flash", "glm-5.4"],
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
@@ -138,11 +139,12 @@ WORKBUDDY_PLUGIN_MODELS = {
     # is one flag flip that brings back both the sg bare name and the
     # deepseek-v4.1-flash-intl fork alias. The CN pool still carries only the
     # paid primary.
-    "cn": ["deepseek-v4.1-flash"],
+    # 2026-11-26 (user directive): glm-5.4 is a second CN pin on the same lane.
+    "cn": ["deepseek-v4.1-flash", "glm-5.4"],
     "intl": ["deepseek-v4.1-flash-sg"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
-    "cn": ["deepseek-v4.1-flash"],
+    "cn": ["deepseek-v4.1-flash", "glm-5.4"],
     "intl": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",

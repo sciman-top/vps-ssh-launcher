@@ -207,10 +207,14 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
    （主机上单独记录的退役不会被投影抹掉），`cpa_policy.py` 把缺项判为漂移。
    上游日后新增的模型不在这份名单里，会先以 doctor
    `MODEL_IDS_UNKNOWN` → `client-model-catalog-contract=FAIL` 暴露，此时它
-   不在任何 admission 车道内；处置是把名字记入 `plugin_exclusions` 再
-   `-Apply`（或经用户裁决开名）。首例：2026-11-25 `glm-5.4` 出现在 CN
-   目录（`owned_by=workbuddy-provider`），已记入清单，**线上排除尚待
-   `-Apply`**。
+   不在任何 admission 车道内；处置二选一：把名字记入 `plugin_exclusions`，
+   或经用户裁决声明为 pin。处置后都走 `-Apply`。
+   首例 `glm-5.4`（2026-11-25 出现在 CN 目录，`owned_by=workbuddy-provider`）
+   按用户 2026-11-26 指令**开放为第二个 pin**：与 `deepseek-v4.1-flash` 共用
+   `workbuddy-oauth` 车道、并发/RPM 预算与凭据池；上下文按清单同族 GLM 的
+   1,000,000 声明（插件不发布规格，WorkBuddy 侧数值未核实），桌面端压缩阈值
+   320000。它同样在 `workbuddy_developer_role_override` 里——拒收 `developer`
+   角色的是 WorkBuddy 网关（11128），与模型无关。
 3. CPA admission 的客户端/状态分流如下（2026-11-17 第二批用户指令后）：
 
    | 请求名 | Admission lane | 持久状态 | 现状 |

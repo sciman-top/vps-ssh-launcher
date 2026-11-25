@@ -650,7 +650,8 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
   `antigravity-oauth`（`gemini-3.8-flash-high` / `gemini-4-hydrogen-xhigh` /
   `gemini-4-argon-high` / `gemini-4-neon-xhigh` / `claude-opus-5-5-high` /
   `claude-sonnet-5-5-high`，2026-11-16..19 扩池）、CN `workbuddy-oauth`
-  （`deepseek-v4.1-flash`）与 INTL `workbuddy-intl-oauth`
+  （`deepseek-v4.1-flash`、`glm-5.4`；后者 2026-11-26 按用户指令开放为第二个
+  pin）与 INTL `workbuddy-intl-oauth`
   （`deepseek-v4.1-flash-intl`、`deepseek-v4.1-flash-sg`）。
   `deepseek-v4.1-flash-intl` 是指向同一上游模型的 fork alias；`sg` 保留为
   INTL 的第二个独立模型桶。**2026-11-17（用户指令）INTL 双名关闭暗置**：

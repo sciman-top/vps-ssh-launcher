@@ -155,11 +155,16 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             )
             return block_after
 
-        # The host on 2026-11-25: the CN list predates glm-5.4 and carries a
-        # retirement of its own; INTL already matches the manifest.
-        cn_before = [model for model in cn_expected if model != "glm-5.4"]
+        # A model the upstream adds later is recorded in the manifest while the
+        # host list still predates it, and the host carries a retirement of its
+        # own; INTL already matches the manifest.
+        manifest = json.loads(json.dumps(manifest))
+        manifest["plugin_exclusions"]["workbuddy-provider"] = [
+            *cn_expected,
+            "glm-9.9",
+        ]
         host_lists: dict[str, Any] = {
-            "workbuddy-provider": [*cn_before, "operator-retired-model"],
+            "workbuddy-provider": [*cn_expected, "operator-retired-model"],
             "workbuddy-ai-provider": list(
                 manifest["plugin_exclusions"]["workbuddy-ai-provider"]
             ),
@@ -168,7 +173,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # The host retirement keeps its place; the missing entry is appended.
         self.assertEqual(
             host_lists["workbuddy-provider"],
-            [*cn_before, "operator-retired-model", "glm-5.4"],
+            [*cn_expected, "operator-retired-model", "glm-9.9"],
         )
         self.assertEqual(
             host_lists["workbuddy-ai-provider"],
@@ -179,16 +184,17 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # Idempotent, and a differently-cased host entry is not duplicated.
         run(manifest, host_lists)
         self.assertEqual(host_lists["workbuddy-provider"], settled)
-        host_lists["workbuddy-provider"][-1] = "GLM-5.4"
+        host_lists["workbuddy-provider"][-1] = "GLM-9.9"
         run(manifest, host_lists)
         self.assertEqual(
             host_lists["workbuddy-provider"],
-            [*settled[:-1], "GLM-5.4"],
+            [*settled[:-1], "GLM-9.9"],
         )
 
         for bad_manifest, message in (
-            # The CN pin itself.
+            # Both CN pins: the paid primary and glm-5.4 (opened 2026-11-26).
             ("deepseek-v4.1-flash", "blocks a declared plugin model"),
+            ("glm-5.4", "blocks a declared plugin model"),
             # The INTL pin and the alias that renames it.
             ("deepseek-v4.1-flash-sg", "blocks a declared plugin model"),
             ("deepseek-v4.1-flash-intl", "blocks a declared plugin model"),
@@ -226,9 +232,9 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config = self._valid_cpa_policy_config(policy)
         self.assertEqual(policy["validate_config"](config), [])
         # A model the upstream adds is a wider lane until its exclusion is
-        # recorded and projected (glm-5.4 entered the CN catalog on 2026-11-25).
+        # recorded and projected.
         for provider, model in (
-            ("workbuddy-provider", "glm-5.4"),
+            ("workbuddy-provider", "step-5-preview"),
             ("workbuddy-ai-provider", "hy4flash-free"),
         ):
             mutated = json.loads(json.dumps(config))
@@ -263,6 +269,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # Excluding a pin or an undeclared channel is a manifest error.
         for provider, model, message in (
             ("workbuddy-provider", "deepseek-v4.1-flash", "pin or alias"),
+            ("workbuddy-provider", "glm-5.4", "pin or alias"),
             ("workbuddy-ai-provider", "deepseek-v4.1-flash-intl", "pin or alias"),
             ("codex", "gpt-5.5", "declared plugin channel"),
         ):

@@ -2986,6 +2986,7 @@ expected = {
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
+        "glm-5.4",
     ],
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
