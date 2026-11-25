@@ -14,7 +14,7 @@
 
 - Antigravity 是唯一有实证内容过滤的上游（#7553）。WorkBuddy 上游 72 小时 106 发
   全过，并不拒绝带 Codex 身份句的提示；ZCode 起步套餐车道 72 小时零流量。
-- 上游对 `systemInstruction` 的三档机制都是整词替换；ZCode 的系统提示里有几十个
+- 上游对 `systemInstruction` 的字面替换是整词的；ZCode 的系统提示里有几十个
   `.zcode/skills` 路径，整词键会把路径改坏。所以新增规则一律只匹配身份句或
   产品短语。
 - Claude/Anthropic 没有在役上游（订阅 OAuth 车道已退役，Antigravity 侧的
@@ -84,6 +84,49 @@ user_parts=1`。卡死历史在 16:03Z（上一代、整词替换之外无处理
 对照来自 #7553：未清洗的 Claude Code 身份句 0.85 秒即 429。本次没有发未清洗的
 对照，所以“规则生效”依据的是运行态核对、RE2 实测与上述通过结果，不是同请求的
 开关 A/B。
+
+## 线级抓包（2026-11-25 04:30Z 前后）
+
+用户追问“系统提示是否彻底清理干净”。探针只能证明上游返回 200，看不到发出去了
+什么，所以用同一个 fork 镜像做了隔离抓包：独立的临时容器（host 网络，API 只绑
+`127.0.0.1:8390`）、最小配置、一个假凭据（假 token、假项目号、`base_url` 指向
+`127.0.0.1:8391`，只从线上凭据复制非机密的模型名单），宿主回环上的监听器记录
+二进制实际发出的请求体。零上游接触，跑完即清理；生产容器的启动时间与重启次数
+不变。脚本：`outputs/cpa-wire-capture-20261125.py`。
+
+| 样本 | systemInstruction | tools | contents |
+|---|---|---|---|
+| R1：11-22 卡死会话历史，先过线上 admission 管线 | 身份句 0、厂商词 0；51,854 字符，开头 `<app-context>` / `# agentx desktop context` | 无（重建样本不含工具） | user 3 项：身份句 0、厂商词 31；model 12 项：身份句 1、厂商词 43 |
+| R2：含全部身份句、路径和一个工具，不经 admission | 身份句 0、厂商词 0；`You are agentx, a coding agent based on agentx-5. You are a coding assistant. You are Assistant Framework…` | 厂商词 4，原样 | user 1 项：身份句 1（CPA 不处理 user 角色） |
+| R3：ZCode 形状 `/v1/messages`，不经 admission | 身份句 0；`You are a coding assistant, an interactive agent…`；裸 `ZCode` 11 处 | 裸 `ZCode` 1 处，原样 | user 1 项：裸 `ZCode` 1 处 |
+
+出站信封与官方客户端一致：`user-agent: antigravity/hub/2.34.0 (aidev_client; …)`、
+`requestId` 为 `agent/<uuid>/<时间戳>`，带 `requestType`、`labels`、`sessionId`。
+
+**结论**：
+
+- 身份句在 `systemInstruction` 里已全部清除（五个客户端）；agy 车道 user 角色里
+  的身份句也已清除（R1 的 user 部分从 5 处降到 0）。
+- **工具定义完全不清扫**。描述里的 Codex、OpenAI、GPT-5 与 `.codex` 路径原样发出，
+  这是上游实现决定的（清洗只作用于 `systemInstruction`）。真实 Codex 桌面端请求的
+  工具定义里带大量厂商词（11-18 测得 157 处），同日对照显示工具定义不触发 429；
+  改工具名会破坏调用，所以有意不动。
+- **对话历史里的裸产品名不清扫**。R1 的 user 文本仍有 31 处厂商词，model 轮次与
+  工具输出有 43 处，其中一处身份句在工具输出里（一条 grep 结果）。实证上这些
+  不触发。
+- **`systemInstruction` 的整词替换是有损的**。`~/.codex/config.toml` 发出去时成了
+  `~/.agentx/config.toml`，`# Codex desktop context` 成了 `# agentx desktop context`。
+  这是 11-18 起的既有行为，前提是 `systemInstruction` 里的裸厂商词被证实会触发
+  429；代价是 Gemini 经 agy 回答涉及这些路径的问题时会拿到错的名字。
+
+**未做线级验证的**：真实 Codex 工具定义（带工具的桌面端转储在抓包前已轮转掉，
+重建样本不含工具）；WorkBuddy 与 ZCode 起步套餐车道（走插件与 sidecar，隔离容器
+里没有对应凭据）。
+
+抓包过程中踩过的三处，复用时注意：假上游对 `fetchAvailableModels` 必须回
+`{"models": {<模型名>: {"model": …}}}`，回空目录会让凭据不支持任何模型；临时
+容器里的配置要写容器内路径（挂载点 `/w/auth`），不是宿主路径；非流式请求走
+`generateContent`，路径匹配不能区分大小写。
 
 ## 部署后发现的缺陷
 

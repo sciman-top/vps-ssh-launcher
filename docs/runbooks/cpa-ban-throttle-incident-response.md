@@ -119,7 +119,10 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   `kind=antigravity_identity_user_text` 或 `kind=agent_identity_neutralized`（每请求
   恰一条），再按维护者方法二分，**不得用在役账号做触发二分**——先发清洗后的
   提示，全部通过就没有可二分的对象。清洗只针对内容过滤与客户端披露，不是封号
-  的充分条件。台账：[定位与回放](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)、
+  的充分条件。线级抓包（11-25，同镜像隔离容器加回环假上游）的边界：身份句在
+  `systemInstruction` 与 agy 的 user 文本里已清除；工具定义、对话历史里的裸产品名
+  与工具输出不清扫；`systemInstruction` 的整词替换有损，`.codex` 这类路径会被改写。
+  台账：[定位与回放](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)、
   [多车道中性化](../change-evidence/20261125-bwg-agent-identity-neutralization.md)。
 - WorkBuddy 官方客户端与网关的结果差异只能缩小排查范围；两侧同拒仍可能
   是共享模型故障或网络问题，不能直接确认账号受限。11158 等社区分类也不是
