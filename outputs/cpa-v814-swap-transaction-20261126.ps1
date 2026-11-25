@@ -34,7 +34,6 @@ NEW_ID='__NEWID__'
 OLD_BINARY_SHA='de6169b825325657b6eaf29659afbe75d2c73c40a19913fe58ee9283ed4df917'
 NEW_BINARY_SHA='__NEWSHA__'
 NEW_BINARY=/root/cpa-v814-build/CLIProxyAPI-8.1.4-gemini-raw-agy-effort-daily-cap-authiso-sigiso
-CONFIG_SHA='b3d94c29785e930ff9b83d33a4157cb385557b3c6f56e35a0a504923d42e19b4'
 WB_CN_OLD_SHA='931bf2f2440ab8a85aa304b87d7b1a35fa3d7901e2f2c599a6434bd7aa567c04'
 WB_CN_NEW_SHA='c8d69b79323dfb76e1e55863ea2b9c0a0474bd90bcb4a5f9d87a37edaad2d36b'
 WB_CN_NEW_SRC=/root/cpa-v814-build/plugin/unpack/workbuddy-provider.so
@@ -120,6 +119,11 @@ PY
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -w 60 -x 9 || { echo 'LOCK_BUSY'; exit 75; }
 
+# config.yaml is whatever the last -Apply projected. This transaction runs
+# after that -Apply (the catalog door fails readiness while glm-5.4 is
+# undeclared on the host) and never edits the file, so it is snapshotted
+# here and asserted unchanged at the end.
+CONFIG_SHA=$(sha_of "$DIR/config.yaml")
 CUR_REF=$(compose_ref)
 [ "$CUR_REF" = "$OLD_IMAGE" ] || { log "COMPOSE_REF_UNEXPECTED got=$CUR_REF want=$OLD_IMAGE"; exit 10; }
 CUR_ID=$(docker inspect --format '{{.Image}}' "$CONTAINER")
