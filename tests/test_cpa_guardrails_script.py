@@ -2614,13 +2614,18 @@ except Exception as exc:
         self.assertEqual(
             route_manifest["oauth_model_aliases"],
             {
+                "workbuddy-provider": [
+                    {"name": "glm-5.3", "alias": "glm-5.3-wb"},
+                    {"name": "glm-5.3-flash", "alias": "glm-5.3-flash-wb"},
+                    {"name": "glm-5.4", "alias": "glm-5.4-wb"},
+                ],
                 "workbuddy-ai-provider": [
                     {
                         "name": "deepseek-v4.1-flash-sg",
                         "alias": "deepseek-v4.1-flash-intl",
                         "fork": True,
                     },
-                ]
+                ],
             },
         )
         slot1_route = next(
@@ -2659,6 +2664,7 @@ except Exception as exc:
             4: {
                 "glm-5.3",
                 "glm-5.3-flash",
+                "glm-5.4",
             },
         }.items():
             provider = next(
@@ -2704,7 +2710,7 @@ except Exception as exc:
         )
         self.assertEqual(
             route_manifest["apply_patch_filter_models"],
-            ["glm-5.3", "glm-5.3-flash"],
+            ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
         )
         import runpy
 
@@ -2712,7 +2718,7 @@ except Exception as exc:
             str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
         )
         self.assertEqual(
-            policy["EXPECTED_PAYLOAD_TOOL_RULES"]["filter"][-2:],
+            policy["EXPECTED_PAYLOAD_TOOL_RULES"]["filter"][-3:],
             [
                 {
                     "models": [{"name": "glm-5.3"}],
@@ -2724,6 +2730,14 @@ except Exception as exc:
                 },
                 {
                     "models": [{"name": "glm-5.3-flash"}],
+                    "params": [
+                        'tools.#(type=="custom")',
+                        'input.#(type=="additional_tools")#.tools.#(name=="functions")#'
+                        '.tools.#(name=="apply_patch")#',
+                    ],
+                },
+                {
+                    "models": [{"name": "glm-5.4"}],
                     "params": [
                         'tools.#(type=="custom")',
                         'input.#(type=="additional_tools")#.tools.#(name=="functions")#'

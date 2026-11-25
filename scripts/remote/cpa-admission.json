@@ -52,7 +52,8 @@
       "name": "zhipu-coding-plan",
       "models": [
         "glm-5.3",
-        "glm-5.3-flash"
+        "glm-5.3-flash",
+        "glm-5.4"
       ],
       "max_inflight": 3,
       "max_pending": 4,
@@ -115,6 +116,7 @@
       "name": "antigravity-oauth",
       "models": [
         "gemini-3.8-flash-high",
+        "gemini-4-hydrogen-xhigh",
         "claude-opus-5-5-high",
         "claude-sonnet-5-5-high"
       ],
@@ -152,7 +154,9 @@
       "name": "workbuddy-oauth",
       "models": [
         "deepseek-v4.1-flash",
-        "glm-5.4"
+        "glm-5.3-wb",
+        "glm-5.3-flash-wb",
+        "glm-5.4-wb"
       ],
       "max_inflight": 1,
       "max_pending": 4,

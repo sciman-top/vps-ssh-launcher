@@ -542,16 +542,19 @@ expected = {
         "gpt-6.1-terra",
         "gpt-6.2-sol",
     ],
-    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
+        "gemini-4-hydrogen-xhigh",
         "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
-        "glm-5.4",
+        "glm-5.3-wb",
+        "glm-5.3-flash-wb",
+        "glm-5.4-wb",
     ],
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
@@ -1846,7 +1849,6 @@ allowed = {
      and any(
          isinstance(route, dict)
          and route.get("provider") == provider
-         and route.get("realm") == "intl"
          and isinstance(route.get("models"), list)
          and entry.get("name") in route.get("models", [])
          for route in manifest.get("plugin_routes", [])

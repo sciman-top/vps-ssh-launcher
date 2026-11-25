@@ -50,6 +50,7 @@ OAUTH_ROUTE_ALIASES = [
 # its reviewed lane.
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     "gemini-3.8-flash-high",
+    "gemini-4-hydrogen-xhigh",
     "claude-opus-5-5-high",
     "claude-sonnet-5-5-high",
 ]
@@ -88,7 +89,6 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     # 2026-11-24 retirement tombstones (user directive; see the route alias
     # comment above).
     "gemini-4-argon-high",
-    "gemini-4-hydrogen-xhigh",
     "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
@@ -112,14 +112,18 @@ ALL_OAUTH_ROUTE_ALIASES = (
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
 # claude-oauth retired 2026-10-20 (see above).
 ADMISSION_LANE_MODELS = {
-    # 2026-11-26 (user directive): glm-5.4 opened on the CN lane.
-    "workbuddy-oauth": ["deepseek-v4.1-flash", "glm-5.4"],
+    "workbuddy-oauth": [
+        "deepseek-v4.1-flash",
+        "glm-5.3-wb",
+        "glm-5.3-flash-wb",
+        "glm-5.4-wb",
+    ],
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
-    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
 }
@@ -139,12 +143,16 @@ WORKBUDDY_PLUGIN_MODELS = {
     # is one flag flip that brings back both the sg bare name and the
     # deepseek-v4.1-flash-intl fork alias. The CN pool still carries only the
     # paid primary.
-    # 2026-11-26 (user directive): glm-5.4 is a second CN pin on the same lane.
-    "cn": ["deepseek-v4.1-flash", "glm-5.4"],
+    "cn": ["deepseek-v4.1-flash", "glm-5.3", "glm-5.3-flash", "glm-5.4"],
     "intl": ["deepseek-v4.1-flash-sg"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
-    "cn": ["deepseek-v4.1-flash", "glm-5.4"],
+    "cn": [
+        "deepseek-v4.1-flash",
+        "glm-5.3-wb",
+        "glm-5.3-flash-wb",
+        "glm-5.4-wb",
+    ],
     "intl": [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",
@@ -173,6 +181,7 @@ PROVIDER_MATRIX_TAIL = [
     # it rides the workbuddy plugin lane (shared-subscription policy,
     # matrix probes forbidden; cpa-health.py skips it explicitly).
     "glm-5.3",
+    "glm-5.4",
     # codex_api_key_routes follow the provider block in the matrix order.
     # muse-spark-1.3-contributor retired 2026-10-18 with the slot-2 channel
     # (user decision). deepseek-v4.1-flash moved the same day to the

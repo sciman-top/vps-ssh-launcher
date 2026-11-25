@@ -370,7 +370,6 @@ def _plugin_route_aliases(routes: dict[str, Any], route: dict[str, Any]) -> list
     """
 
     provider = route.get("provider")
-    realm = route.get("realm")
     aliases: dict[str, tuple[str, bool]] = {}
     raw_aliases = routes.get("oauth_model_aliases")
     if isinstance(raw_aliases, dict):
@@ -390,7 +389,7 @@ def _plugin_route_aliases(routes: dict[str, Any], route: dict[str, Any]) -> list
     for model in route.get("models", []) or []:
         if not isinstance(model, str):
             continue
-        if realm == "intl" and model in aliases:
+        if model in aliases:
             alias, forked = aliases[model]
             if forked and model not in result:
                 result.append(model)

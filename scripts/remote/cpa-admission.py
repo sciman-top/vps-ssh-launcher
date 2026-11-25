@@ -671,9 +671,7 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
                     # (fork omitted REPLACES the id with the alias).
                     model_name = str(model).strip()
                     expansions: list[str] = []
-                    if route.get("realm") == "intl" and isinstance(
-                        route.get("provider"), str
-                    ):
+                    if isinstance(route.get("provider"), str):
                         pin_entries = plugin_aliases.get(route["provider"], {}).get(
                             model_name.lower()
                         )

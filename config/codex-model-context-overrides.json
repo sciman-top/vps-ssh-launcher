@@ -56,6 +56,24 @@
       "auto_compact_token_limit": 320000
     },
     {
+      "slug": "glm-5.3-wb",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 320000
+    },
+    {
+      "slug": "glm-5.3-flash-wb",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 320000
+    },
+    {
+      "slug": "glm-5.4-wb",
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 320000
+    },
+    {
       "slug": "deepseek-v4.1-flash",
       "context_window": 1000000,
       "max_context_window": 1000000,
@@ -63,6 +81,12 @@
     },
     {
       "slug": "gemini-3.8-flash-high",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "auto_compact_token_limit": 320000
+    },
+    {
+      "slug": "gemini-4-hydrogen-xhigh",
       "context_window": 1048576,
       "max_context_window": 1048576,
       "auto_compact_token_limit": 320000

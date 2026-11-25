@@ -46,7 +46,12 @@ def test_manifest_cn_plugin_pins_are_the_primary_and_glm54() -> None:
     assert cn[0]["provider"] == "workbuddy-provider"
     # The paid primary, plus glm-5.4 opened as a second pin on the same lane
     # and credential pool (2026-11-26, user directive).
-    assert cn[0]["models"] == ["deepseek-v4.1-flash", "glm-5.4"]
+    assert cn[0]["models"] == [
+        "deepseek-v4.1-flash",
+        "glm-5.3",
+        "glm-5.3-flash",
+        "glm-5.4",
+    ]
     assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
 

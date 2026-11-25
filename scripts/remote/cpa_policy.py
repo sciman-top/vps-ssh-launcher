@@ -1187,18 +1187,15 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 for route in manifest.get("plugin_routes", [])
                 if isinstance(route, dict) and route.get("provider") == channel
             ]
-            intl_models = {
+            plugin_models = {
                 model
                 for route in plugin_routes
-                if route.get("realm") == "intl"
                 for model in route.get("models", [])
                 if isinstance(model, str)
             }
-            has_intl_source = source in intl_models
-            if plugin_routes and not has_intl_source:
+            if plugin_routes and source not in plugin_models:
                 issues.append(
-                    f"{entry_label} alias is not owned by the plugin provider's "
-                    "intl realm"
+                    f"{entry_label} alias is not owned by the plugin provider"
                 )
             # fork=true keeps the upstream id alongside the client alias;
             # fork omitted REPLACES the id with the alias in the client
@@ -1568,11 +1565,7 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
                 for model in models:
                     if not isinstance(model, str) or not model:
                         continue
-                    pin_entries = (
-                        plugin_aliases.get(model, [])
-                        if route.get("realm") == "intl"
-                        else []
-                    )
+                    pin_entries = plugin_aliases.get(model, [])
                     if not pin_entries:
                         expanded.append(model)
                         continue

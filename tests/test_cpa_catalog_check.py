@@ -37,7 +37,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     # directive), glm-5.4 as a second pin.
     assert cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-provider", "cn"
-    ) == ["deepseek-v4.1-flash", "glm-5.4"]
+    ) == ["deepseek-v4.1-flash", "glm-5.3", "glm-5.3-flash", "glm-5.4"]
     intl_models = cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-ai-provider", "intl"
     )
@@ -58,7 +58,12 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     errors: list[str] = []
     derived = cpa_catalog_check.derive_lanes(manifest, errors)
     assert errors == []
-    assert derived["workbuddy-oauth"] == ["deepseek-v4.1-flash", "glm-5.4"]
+    assert derived["workbuddy-oauth"] == [
+        "deepseek-v4.1-flash",
+        "glm-5.3-wb",
+        "glm-5.3-flash-wb",
+        "glm-5.4-wb",
+    ]
     assert derived["workbuddy-intl-oauth"] == [
         "deepseek-v4.1-flash-intl",
         "deepseek-v4.1-flash-sg",

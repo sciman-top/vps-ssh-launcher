@@ -7,13 +7,15 @@
   ],
   "apply_patch_filter_models": [
     "glm-5.3",
-    "glm-5.3-flash"
+    "glm-5.3-flash",
+    "glm-5.4"
   ],
   "zhipu_developer_role_override": {
     "from_protocol": "responses",
     "models": [
       "glm-5.3",
-      "glm-5.3-flash"
+      "glm-5.3-flash",
+      "glm-5.4"
     ]
   },
   "workbuddy_developer_role_override": {
@@ -22,7 +24,9 @@
       "deepseek-v4.1-flash",
       "deepseek-v4.1-flash-intl",
       "deepseek-v4.1-flash-sg",
-      "glm-5.4"
+      "glm-5.3-flash-wb",
+      "glm-5.3-wb",
+      "glm-5.4-wb"
     ]
   },
   "providers": [
@@ -63,6 +67,12 @@
         {
           "name": "glm-5.3-flash",
           "alias": "glm-5.3-flash",
+          "max-context-length": 1000000,
+          "thinking-levels": ["low", "medium", "high", "xhigh"]
+        },
+        {
+          "name": "glm-5.4",
+          "alias": "glm-5.4",
           "max-context-length": 1000000,
           "thinking-levels": ["low", "medium", "high", "xhigh"]
         }
@@ -127,6 +137,10 @@
           "alias": "gemini-3.8-flash-high"
         },
         {
+          "name": "gemini-4-hydrogen-xhigh",
+          "alias": "gemini-4-hydrogen-xhigh"
+        },
+        {
           "name": "claude-opus-5-5-high",
           "alias": "claude-opus-5-5-high"
         },
@@ -170,6 +184,10 @@
         "max-context-length": 1048576
       },
       {
+        "name": "gemini-4-hydrogen-xhigh",
+        "max-context-length": 1048576
+      },
+      {
         "name": "claude-opus-5-5-high",
         "max-context-length": 1000000
       },
@@ -184,12 +202,34 @@
         "max-context-length": 1000000
       },
       {
+        "name": "glm-5.3",
+        "max-context-length": 1000000
+      },
+      {
+        "name": "glm-5.3-flash",
+        "max-context-length": 1000000
+      },
+      {
         "name": "glm-5.4",
         "max-context-length": 1000000
       }
     ]
   },
   "oauth_model_aliases": {
+    "workbuddy-provider": [
+      {
+        "name": "glm-5.3",
+        "alias": "glm-5.3-wb"
+      },
+      {
+        "name": "glm-5.3-flash",
+        "alias": "glm-5.3-flash-wb"
+      },
+      {
+        "name": "glm-5.4",
+        "alias": "glm-5.4-wb"
+      }
+    ],
     "workbuddy-ai-provider": [
       {
         "name": "deepseek-v4.1-flash-sg",
@@ -198,14 +238,12 @@
       }
     ]
   },
-  "plugin_exclusions_note": "A plugin channel registers whatever its upstream catalog serves at load time, so its pin holds only as an exclusion list. plugin_exclusions carries the names the deployed oauth.excluded-models lists had on 2026-11-25, so -Apply reproduces them. A model the upstream adds later is not listed: it surfaces as MODEL_IDS_UNKNOWN in the doctor client-model-catalog contract, and is then either recorded here or declared as a pin. glm-5.4 entered the CN catalog on 2026-11-25 and was opened as a pin by user directive on 2026-11-26, so it is not an exclusion. Entries are appended, never removed, so a retirement recorded on the host survives a projection.",
+  "plugin_exclusions_note": "A plugin channel registers whatever its upstream catalog serves at load time, so its pin holds only as an exclusion list. plugin_exclusions carries the names the deployed oauth.excluded-models lists had on 2026-11-25, so -Apply reproduces them. A model the upstream adds later is not listed: it surfaces as MODEL_IDS_UNKNOWN in the doctor client-model-catalog contract, and is then either recorded here or declared as a pin. glm-5.3, glm-5.3-flash and glm-5.4 are opened as CN pins aliased to -wb by user directive on 2026-11-26, so they are not exclusions. Entries are appended, never removed, so a retirement recorded on the host survives a projection.",
   "plugin_exclusions": {
     "workbuddy-provider": [
       "auto",
       "deepseek-v4-pro",
       "glm-5.2",
-      "glm-5.3",
-      "glm-5.3-flash",
       "hy4flash",
       "hy4flash-free",
       "hy4std",
@@ -259,7 +297,6 @@
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash-tiered",
     "gemini-4-argon-high",
-    "gemini-4-hydrogen-xhigh",
     "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
@@ -379,9 +416,11 @@
       "realm": "cn",
       "models": [
         "deepseek-v4.1-flash",
+        "glm-5.3",
+        "glm-5.3-flash",
         "glm-5.4"
       ],
-      "note": "2026-11-17 luode0320 cutover: the CN plugin registers as workbuddy-provider and its dynamic catalog is narrowed back to this single pin via oauth-excluded-models; the client bare name belongs to the CN admission lane. 2026-11-26 (user directive): glm-5.4, which entered the upstream catalog on 2026-11-25, is opened as a second pin on the same lane and credential pool. Its 1,000,000 context is the manifest's GLM-family declaration; the plugin publishes no limit for it and the WorkBuddy-side figure was not verified.",
+      "note": "2026-11-17 luode0320 cutover: the CN plugin registers as workbuddy-provider and its dynamic catalog is narrowed back to its declared pins via oauth-excluded-models. 2026-11-26 (user directive): glm-5.3, glm-5.3-flash and glm-5.4 are opened on CN with non-fork -wb client aliases (glm-5.3-wb, glm-5.3-flash-wb, glm-5.4-wb) so bare glm-5.3/glm-5.3-flash/glm-5.4 route exclusively to BigModel Coding Plan (zhipu-plan).",
       "shared_consumption": true,
       "admission_lane": "workbuddy-oauth"
     },

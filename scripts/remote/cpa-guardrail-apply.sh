@@ -1999,20 +1999,22 @@ plugin_exclusion_channels = {
     for route in route_manifest.get("plugin_routes", [])
     if isinstance(route, dict) and isinstance(route.get("provider"), str)
 }
-plugin_pinned_models = {
-    name.strip().lower()
-    for route in route_manifest.get("plugin_routes", [])
-    if isinstance(route, dict)
-    for name in route.get("models", [])
-    if isinstance(name, str) and name.strip()
-}
+plugin_pinned_models: dict[str, set[str]] = {}
+for route in route_manifest.get("plugin_routes", []):
+    if isinstance(route, dict) and isinstance(route.get("provider"), str):
+        provider_key = route["provider"]
+        pinned = plugin_pinned_models.setdefault(provider_key, set())
+        for name in route.get("models", []):
+            if isinstance(name, str) and name.strip():
+                pinned.add(name.strip().lower())
 for channel, entries in (route_manifest.get("oauth_model_aliases") or {}).items():
     if channel in plugin_exclusion_channels and isinstance(entries, list):
+        pinned = plugin_pinned_models.setdefault(channel, set())
         for entry in entries:
             if isinstance(entry, dict):
                 for key in ("name", "alias"):
                     if isinstance(entry.get(key), str):
-                        plugin_pinned_models.add(entry[key].strip().lower())
+                        pinned.add(entry[key].strip().lower())
 for provider, models in plugin_exclusions_manifest.items():
     if not isinstance(provider, str) or provider not in plugin_exclusion_channels:
         raise SystemExit("REFUSE plugin_exclusions names an undeclared plugin channel")
@@ -2032,7 +2034,8 @@ for provider, models in plugin_exclusions_manifest.items():
             f"REFUSE oauth.excluded-models.{provider} must be a list of strings"
         )
     blocked_pins = sorted(
-        {model.strip().lower() for model in models} & plugin_pinned_models
+        {model.strip().lower() for model in models}
+        & plugin_pinned_models.get(provider, set())
     )
     if blocked_pins:
         raise SystemExit(
@@ -2977,16 +2980,19 @@ expected = {
         "gpt-6.1-terra",
         "gpt-6.2-sol",
     ],
-    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
+        "gemini-4-hydrogen-xhigh",
         "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
-        "glm-5.4",
+        "glm-5.3-wb",
+        "glm-5.3-flash-wb",
+        "glm-5.4-wb",
     ],
     "workbuddy-intl-oauth": [
         "deepseek-v4.1-flash-intl",
@@ -3587,7 +3593,6 @@ print("has_retired_antigravity_lane_models=" + str(bool({
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
     "gemini-4-argon-high",
-    "gemini-4-hydrogen-xhigh",
     "gemini-4-neon-xhigh",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",

@@ -491,17 +491,40 @@ def check() -> list[str]:
             if isinstance(alias, str) and alias and type(window) is int:
                 manifest_contexts[alias] = window
     oauth_settings = manifest.get("oauth_settings")
+    oauth_aliases_map = manifest.get("oauth_model_aliases") or {}
     if isinstance(oauth_settings, dict):
-        for entries in oauth_settings.values():
+        for channel, entries in oauth_settings.items():
             if not isinstance(entries, list):
                 continue
+            channel_aliases = (
+                oauth_aliases_map.get(channel, [])
+                if isinstance(oauth_aliases_map, dict)
+                else []
+            )
+            alias_by_source: dict[str, list[tuple[str, bool]]] = {}
+            if isinstance(channel_aliases, list):
+                for a_entry in channel_aliases:
+                    if (
+                        isinstance(a_entry, dict)
+                        and isinstance(a_entry.get("name"), str)
+                        and isinstance(a_entry.get("alias"), str)
+                    ):
+                        alias_by_source.setdefault(a_entry["name"].strip(), []).append(
+                            (a_entry["alias"].strip(), bool(a_entry.get("fork")))
+                        )
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
                 alias = entry.get("alias") or entry.get("name")
                 window = entry.get("max-context-length")
                 if isinstance(alias, str) and alias and type(window) is int:
-                    manifest_contexts[alias] = window
+                    if alias in alias_by_source:
+                        for target_alias, forked in alias_by_source[alias]:
+                            manifest_contexts[target_alias] = window
+                            if forked:
+                                manifest_contexts[alias] = window
+                    else:
+                        manifest_contexts[alias] = window
     overrides = _load_json(CONTEXT_OVERRIDES, errors)
     override_models = overrides.get("models")
     override_slugs: set[str] = set()

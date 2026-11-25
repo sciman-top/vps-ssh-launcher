@@ -191,16 +191,29 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             [*settled[:-1], "GLM-9.9"],
         )
 
-        for bad_manifest, message in (
-            # Both CN pins: the paid primary and glm-5.4 (opened 2026-11-26).
-            ("deepseek-v4.1-flash", "blocks a declared plugin model"),
-            ("glm-5.4", "blocks a declared plugin model"),
+        for provider, bad_manifest, message in (
+            # CN pins and their -wb client aliases.
+            (
+                "workbuddy-provider",
+                "deepseek-v4.1-flash",
+                "blocks a declared plugin model",
+            ),
+            ("workbuddy-provider", "glm-5.4", "blocks a declared plugin model"),
+            ("workbuddy-provider", "glm-5.4-wb", "blocks a declared plugin model"),
             # The INTL pin and the alias that renames it.
-            ("deepseek-v4.1-flash-sg", "blocks a declared plugin model"),
-            ("deepseek-v4.1-flash-intl", "blocks a declared plugin model"),
+            (
+                "workbuddy-ai-provider",
+                "deepseek-v4.1-flash-sg",
+                "blocks a declared plugin model",
+            ),
+            (
+                "workbuddy-ai-provider",
+                "deepseek-v4.1-flash-intl",
+                "blocks a declared plugin model",
+            ),
         ):
             clashing = json.loads(json.dumps(manifest))
-            clashing["plugin_exclusions"]["workbuddy-provider"].append(bad_manifest)
+            clashing["plugin_exclusions"][provider].append(bad_manifest)
             with self.assertRaises(SystemExit) as clash_exc:
                 run(clashing, {"workbuddy-provider": [], "workbuddy-ai-provider": []})
             self.assertIn(
@@ -286,7 +299,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 (provider, model),
             )
         duplicate = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        duplicate["plugin_exclusions"]["workbuddy-provider"].append("glm-5.3")
+        duplicate["plugin_exclusions"]["workbuddy-provider"].append("glm-5.2")
         self.assertTrue(
             any(
                 "must be a non-empty list of unique model names" in issue
