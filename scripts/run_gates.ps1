@@ -524,8 +524,10 @@ try {
   Initialize-WindowsProcessEnvironment
 
   # Auto: any touched file that can change runtime behaviour forces the full
-  # gate; a rules/docs/test-only diff stays focused. This is deliberately
-  # conservative -- an unknown path counts as risky.
+  # gate; a rules/docs/test-only diff stays focused. Touched covers the
+  # working tree AND unpushed commits -- a clean tree after a commit is not a
+  # gated tree (the 2026-11-25 closeout caught Auto reporting PASS on one).
+  # This is deliberately conservative -- an unknown path counts as risky.
   function Resolve-AutoProfile {
     param(
       [string]$RepoRoot,
@@ -567,9 +569,28 @@ try {
     if ($untracked) {
       $changed += @($untracked)
     }
+    # Unpushed commits carry the same risk as working-tree edits: a clean
+    # tree after a commit used to take the cheap no-op path with nothing
+    # gated. Repos without an upstream (bare fixtures, detached HEAD) keep
+    # the working-tree-only decision.
+    $upstreamRef = & git -C $RepoRoot rev-parse --abbrev-ref --verify "@{u}" 2>$null
+    if ($LASTEXITCODE -eq 0 -and @($upstreamRef)[0]) {
+      $mergeBase = & git -C $RepoRoot merge-base @($upstreamRef)[0] HEAD 2>$null
+      if ($LASTEXITCODE -ne 0 -or -not $mergeBase) {
+        throw "auto profile could not resolve the merge base for unpushed commits."
+      }
+      $committed = & git -C $RepoRoot diff --name-only $mergeBase HEAD 2>$null
+      if ($LASTEXITCODE -ne 0) {
+        throw "auto profile could not inspect unpushed commits with git diff."
+      }
+      if ($committed) {
+        Write-Host "==> auto: unpushed commits are folded into the classification"
+        $changed += @($committed)
+      }
+    }
     $changed = @($changed | Where-Object { $_ } | Sort-Object -Unique)
     if ($changed.Count -eq 0) {
-      Write-Host "==> auto: no working-tree change; no gate needed"
+      Write-Host "==> auto: no working-tree change and nothing unpushed; no gate needed"
       return "NoChanges"
     }
 

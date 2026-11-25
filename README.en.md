@@ -340,7 +340,7 @@ Unified local quality gate:
 .\scripts\run_gates.ps1
 ```
 
-The default `Auto` profile picks the gate from `git diff`: anything under `vps_ssh_launcher/`, `scripts/`, the entry scripts, `pyproject.toml` or the CI workflows runs the equivalent of `Full`; test-only or doc-only changes stay `Focused`; a documentation-only change just runs `git diff --check` and `scripts/check_docs.py`; a clean working tree reports `NoChanges` without repeating the full gate; any unrecognised path falls back to `Full`. `-Profile Full` still works explicitly.
+The default `Auto` profile picks the gate from `git diff`: anything under `vps_ssh_launcher/`, `scripts/`, the entry scripts, `pyproject.toml` or the CI workflows runs the equivalent of `Full`; test-only or doc-only changes stay `Focused`; a documentation-only change just runs `git diff --check` and `scripts/check_docs.py`; a clean working tree with nothing unpushed reports `NoChanges` without repeating the full gate (unpushed commits are classified like working-tree edits); any unrecognised path falls back to `Full`. `-Profile Full` still works explicitly.
 
 `Full` executes an installed-package import check, the catalog consistency check (`contract:catalog`), pytest, Bandit, Ruff lint/format, and Mypy. With `-RunParallel`, pytest runs once in the parallel lane; add `-ProveParallel` only when a serial recheck is needed. CI runs the static scope once, runs the full suite on Windows and Ubuntu with Python 3.11, and uses a focused launcher compatibility smoke on Python 3.13; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
 

@@ -1116,12 +1116,12 @@ $global:observedCommands = @()
     def test_auto_profile_maps_a_diff_to_full_focused_skip_or_no_changes(
         self,
     ) -> None:
-        # -Profile Auto picks the gate from the working tree, so a mistake in
-        # that decision either skips a runtime change or runs a needless full
-        # gate. There was no coverage for it when its doc-only branch was
-        # written in the wrong scope and crashed on every documentation-only
-        # diff; this pins all four outcomes, including the cheap clean-tree
-        # result.
+        # -Profile Auto picks the gate from the working tree and the unpushed
+        # commits, so a mistake in that decision either skips a runtime change
+        # or runs a needless full gate. There was no coverage for it when its
+        # doc-only branch was written in the wrong scope and crashed on every
+        # documentation-only diff; this pins every outcome, including the
+        # cheap clean-tree result and the committed-but-unpushed trap.
         powershell = shutil.which("pwsh")
         if powershell is None:
             self.skipTest("PowerShell 7 is not available")
@@ -1137,15 +1137,30 @@ function Invoke-GateProbe {
   $global:LASTEXITCODE = 0
 }
 """
-        cases: tuple[tuple[dict[str, str], str, str], ...] = (
-            # (files to create, expected legs, description)
-            ({}, "no_changes", "clean tree"),
-            ({"vps_ssh_launcher/config.py": "pass\n"}, "full", "runtime surface"),
-            ({"docs/runbook.md": "# doc\n"}, "skip", "documentation only"),
-            ({"tests/test_config.py": ""}, "focused", "test file only"),
-            ({"notes.md": "x\n"}, "full", "unclassified path"),
+        cases: tuple[tuple[dict[str, str], str, str, dict[str, str]], ...] = (
+            # (worktree files, expected legs, description, files to commit)
+            ({}, "no_changes", "clean tree", {}),
+            ({"vps_ssh_launcher/config.py": "pass\n"}, "full", "runtime surface", {}),
+            ({"docs/runbook.md": "# doc\n"}, "skip", "documentation only", {}),
+            ({"tests/test_config.py": ""}, "focused", "test file only", {}),
+            ({"notes.md": "x\n"}, "full", "unclassified path", {}),
+            # A clean tree that still carries an unpushed commit is not the
+            # cheap no-op: the 2026-11-25 closeout watched Auto report PASS
+            # on exactly that state without running anything.
+            (
+                {},
+                "full",
+                "runtime change hidden in an unpushed commit",
+                {"vps_ssh_launcher/config.py": "pass\n"},
+            ),
+            (
+                {},
+                "skip",
+                "doc-only change hidden in an unpushed commit",
+                {"docs/runbook.md": "# doc\n"},
+            ),
         )
-        for files, kind, description in cases:
+        for files, kind, description, committed in cases:
             with self.subTest(case=description):
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
@@ -1179,8 +1194,13 @@ function Invoke-GateProbe {
                         }
                     )
                     # A git repository is required: Auto reads the diff.
+                    # The branch name is pinned because the upstream setup
+                    # below names it.
                     subprocess.run(
-                        ["git", "init", "-q"], cwd=root, check=True, timeout=30
+                        ["git", "init", "-q", "-b", "main"],
+                        cwd=root,
+                        check=True,
+                        timeout=30,
                     )
                     subprocess.run(
                         ["git", "add", "-A"], cwd=root, check=True, timeout=30
@@ -1200,11 +1220,60 @@ function Invoke-GateProbe {
                         check=True,
                         timeout=30,
                     )
+                    # Auto also classifies unpushed commits, so give the
+                    # fixture a remote-tracking upstream at the base commit.
+                    # The repo is its own remote: fetching copies refs/heads
+                    # into refs/remotes/origin under the standard refspec,
+                    # which is what makes --set-upstream-to resolvable.
+                    # Without an upstream (bare init, detached HEAD) the
+                    # runner must keep the working-tree-only decision.
+                    subprocess.run(
+                        ["git", "remote", "add", "origin", str(root)],
+                        cwd=root,
+                        check=True,
+                        timeout=30,
+                    )
+                    subprocess.run(
+                        ["git", "fetch", "-q", "origin", "main"],
+                        cwd=root,
+                        check=True,
+                        timeout=30,
+                    )
+                    subprocess.run(
+                        ["git", "branch", "--set-upstream-to", "origin/main"],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
                     # The actual change Auto must classify.
                     for name, body in files.items():
                         target = root / name
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_text(body, encoding="utf-8")
+                    for name, body in committed.items():
+                        target = root / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(body, encoding="utf-8")
+                    if committed:
+                        subprocess.run(
+                            ["git", "add", "-A"], cwd=root, check=True, timeout=30
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-c",
+                                "user.email=gate@test",
+                                "-c",
+                                "user.name=gate",
+                                "commit",
+                                "-qm",
+                                "case",
+                            ],
+                            cwd=root,
+                            check=True,
+                            timeout=30,
+                        )
                     command = (
                         "$global:observedCommands = @(); "
                         "& $env:VPS_GATE_RUNNER -Profile Auto; "
