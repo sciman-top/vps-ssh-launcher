@@ -179,8 +179,41 @@ HEAD，改动丢失后按仓外底稿重建。此后改完先做本地提交再�
   在改动前就被上游接受，清洗属于不披露客户端的预防措施，不是修复已知故障。
 - 未纳入的社区已知触发：omp 的 `Read xd://<tool> for full docs + JSON schema before
   first use.`、OpenCode 的 `tools.opencode.session_move`、pi 的 harness 句、Hermes
-  的四段未公开片段（#7553、#7562）。OpenCode 那条是工具名，只改提示里的提及会让
-  它与工具定义对不上，不能照搬。
+  的四段未公开片段（#7553、#7562）。OpenCode 那条已有社区解法可循：strannick-ru
+  用词表把提示里的工具名提及替换成另一个真实工具名（429→200），并自行标注代价
+  "可能影响真正需要 session_move 的任务"；照搬前需单变量探针。
+
+## 依据补充（2026-11-25 晚，回答"这两条判断有没有依据"）
+
+社区与官方文档给两条遗留判断补齐了依据，并暴露一个我们规则的文档化缺口：
+
+- **"工具定义不触发"有直接社区实证**：#7627 原文——同一短语留在 user 文本和工具
+  描述里不会单独触发 429；#7560 受控测试——只删全部工具定义仍 429；#7608 维护者
+  确认扫描面是 systemInstruction **和 user 消息**（未提工具）。
+- **"改工具名会破坏调用"是结构性推断，非实测**：Gemini 官方文档把 `name` 定为
+  回呼与分发键（"Unique function name"，官方示例按 `fc_step.name` 分发）；CPA
+  翻译层对名字原样透传（源码+线级抓包）；历史 function_call 项带原名且 admission
+  有意不碰工具项。社区实践一致：strannick-ru 改的是提示里的提及（不是定义），
+  Hirokimeji（AstrBot）明说"保留真实工具名、只改句子其余部分"，omp 修复只改句子。
+  没有任何已确认的修复改过工具定义名或历史项。
+- **路径损坏无社区先例**：检索全部相关 issue（20 条），无人报告整词替换损坏
+  路径；社区实践普遍接受子串级有损替换（#7627 的规则就是裸短语替换，strannick-ru
+  是整短语替换）。我们的线级抓包观察（`~/.codex` → `~/.agentx`）是新的，没有
+  现成最佳实践可循。
+- **我们的 Claude Code 规则存在文档化缺口（休眠）**：#7904 二分出 6 条触发行——
+  两条身份行（CLI 变体 + `You are a Claude agent, built on Anthropic's Claude
+  Agent SDK.`）、安全测试政策行、多条 harness 样板行；跟评指出 Claude Code
+  Desktop 的身份行以 ", running within the Claude Agent SDK." 结尾，只匹配到
+  `Claude\.` 的规则会在后面留下仍触发的残段。#7627 另证第二段系统提示还有两条
+  独立触发句（"You are an interactive agent that helps users with software
+  engineering tasks." 整句触发；"Dual-use security tools … require clear
+  authorization context." 截到句中即触发）。我们的规则只覆盖 CLI 身份行；因
+  Claude 车道现无在役上游（agy 侧 `claude-*` 零注册），缺口休眠。将来 Claude
+  Code 接入时按 #7904/#7627 的整行 pattern（`[^\n]*` 到行尾）扩展，不能沿用单句
+  规则。
+- **user 消息在扫描面内已获维护者确认**：#7608 的 A/B 表与 luispater 的回复直接
+  证明把 systemInstruction 降级进 user 消息绕不开过滤器（该方案已关闭）——反证
+  我们 admission 层的 user 文本身份句清洗是必要的。
 - ChatGPT 车道与 zhipu 付费车道有意不处理。
 - 清洗只针对内容过滤与客户端披露这两件事，不是封号的充分条件。
 - 自然流量验收尚未兑现：日志修复换代后只有 1 发真实的 chatgpt 请求和 2 发复核探针
