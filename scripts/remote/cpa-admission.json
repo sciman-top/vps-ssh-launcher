@@ -51,7 +51,6 @@
     {
       "name": "zhipu-coding-plan",
       "models": [
-        "glm-5.3",
         "glm-5.3-flash",
         "glm-5.4"
       ],
@@ -154,7 +153,6 @@
       "name": "workbuddy-oauth",
       "models": [
         "deepseek-v4.1-flash",
-        "glm-5.3-wb",
         "glm-5.3-flash-wb",
         "glm-5.4-wb"
       ],

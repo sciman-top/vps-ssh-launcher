@@ -37,7 +37,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     # directive), glm-5.4 as a second pin.
     assert cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-provider", "cn"
-    ) == ["deepseek-v4.1-flash", "glm-5.3", "glm-5.3-flash", "glm-5.4"]
+    ) == ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4"]
     intl_models = cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-ai-provider", "intl"
     )
@@ -60,7 +60,6 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     assert errors == []
     assert derived["workbuddy-oauth"] == [
         "deepseek-v4.1-flash",
-        "glm-5.3-wb",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ]
@@ -206,12 +205,12 @@ def test_local_cockpit_policy_cannot_retire_a_live_alias(
     # retired with the OpenCode slot on 2026-11-20 and would silently pass.
     policy = tmp_path / "cockpit_local_provider_policy.json"
     policy.write_text(
-        json.dumps({"retired_hosts": [], "retired_models": ["glm-5.3"]}),
+        json.dumps({"retired_hosts": [], "retired_models": ["glm-5.4"]}),
         encoding="utf-8",
     )
     monkeypatch.setattr(cpa_catalog_check, "COCKPIT_POLICY", policy)
     errors = cpa_catalog_check.check()
-    assert any("glm-5.3" in error and "retired_models" in error for error in errors), (
+    assert any("glm-5.4" in error and "retired_models" in error for error in errors), (
         errors
     )
 
@@ -300,7 +299,7 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
                         "auto_compact_token_limit": 900001,
                     },
                     {
-                        "slug": "glm-5.3",
+                        "slug": "glm-5.4",
                         "context_window": 1000000,
                         "max_context_window": 1000000,
                         "auto_compact_token_limit": "256000",
@@ -325,7 +324,7 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
         "glm-5.3-flash" in error and "between 1 and 900000" in error for error in errors
     ), errors
     assert any(
-        "auto_compact_token_limit='256000'" in error and "glm-5.3'" in error
+        "auto_compact_token_limit='256000'" in error and "glm-5.4'" in error
         for error in errors
     ), errors
     assert not any(

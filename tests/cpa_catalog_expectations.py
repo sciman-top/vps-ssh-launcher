@@ -114,7 +114,6 @@ ALL_OAUTH_ROUTE_ALIASES = (
 ADMISSION_LANE_MODELS = {
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
-        "glm-5.3-wb",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ],
@@ -123,7 +122,7 @@ ADMISSION_LANE_MODELS = {
         "deepseek-v4.1-flash-sg",
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
-    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
+    "zhipu-coding-plan": ["glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
 }
@@ -143,13 +142,12 @@ WORKBUDDY_PLUGIN_MODELS = {
     # is one flag flip that brings back both the sg bare name and the
     # deepseek-v4.1-flash-intl fork alias. The CN pool still carries only the
     # paid primary.
-    "cn": ["deepseek-v4.1-flash", "glm-5.3", "glm-5.3-flash", "glm-5.4"],
+    "cn": ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4"],
     "intl": ["deepseek-v4.1-flash-sg"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
     "cn": [
         "deepseek-v4.1-flash",
-        "glm-5.3-wb",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ],
@@ -180,7 +178,6 @@ PROVIDER_MATRIX_TAIL = [
     # The bare deepseek-v4.1-flash name stays OUT of the provider matrix:
     # it rides the workbuddy plugin lane (shared-subscription policy,
     # matrix probes forbidden; cpa-health.py skips it explicitly).
-    "glm-5.3",
     "glm-5.4",
     # codex_api_key_routes follow the provider block in the matrix order.
     # muse-spark-1.3-contributor retired 2026-10-18 with the slot-2 channel

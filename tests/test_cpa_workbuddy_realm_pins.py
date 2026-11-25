@@ -48,7 +48,6 @@ def test_manifest_cn_plugin_pins_are_the_primary_and_glm54() -> None:
     # and credential pool (2026-11-26, user directive).
     assert cn[0]["models"] == [
         "deepseek-v4.1-flash",
-        "glm-5.3",
         "glm-5.3-flash",
         "glm-5.4",
     ]

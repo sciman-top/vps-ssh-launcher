@@ -32,12 +32,6 @@
       "auto_compact_token_limit": 320000
     },
     {
-      "slug": "glm-5.3",
-      "context_window": 1000000,
-      "max_context_window": 1000000,
-      "auto_compact_token_limit": 320000
-    },
-    {
       "slug": "glm-5.3-flash",
       "context_window": 1000000,
       "max_context_window": 1000000,
@@ -51,12 +45,6 @@
     },
     {
       "slug": "glm-5.4",
-      "context_window": 1000000,
-      "max_context_window": 1000000,
-      "auto_compact_token_limit": 320000
-    },
-    {
-      "slug": "glm-5.3-wb",
       "context_window": 1000000,
       "max_context_window": 1000000,
       "auto_compact_token_limit": 320000

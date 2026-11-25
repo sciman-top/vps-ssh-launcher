@@ -2615,7 +2615,6 @@ except Exception as exc:
             route_manifest["oauth_model_aliases"],
             {
                 "workbuddy-provider": [
-                    {"name": "glm-5.3", "alias": "glm-5.3-wb"},
                     {"name": "glm-5.3-flash", "alias": "glm-5.3-flash-wb"},
                     {"name": "glm-5.4", "alias": "glm-5.4-wb"},
                 ],
@@ -2662,7 +2661,6 @@ except Exception as exc:
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {
-                "glm-5.3",
                 "glm-5.3-flash",
                 "glm-5.4",
             },
@@ -2672,21 +2670,6 @@ except Exception as exc:
             )
             self.assertEqual({model["name"] for model in provider["models"]}, expected)
             self.assertEqual({model["alias"] for model in provider["models"]}, expected)
-            glm = next(
-                model for model in provider["models"] if model["name"] == "glm-5.3"
-            )
-            self.assertEqual(
-                glm,
-                {
-                    "name": "glm-5.3",
-                    "alias": "glm-5.3",
-                    "input-modalities": ["text"],
-                    "max-context-length": 1000000,
-                    # Declared 2026-11-20 so the codex-surface client contract
-                    # (low/medium/high) cannot clamp a declared xhigh model.
-                    "thinking-levels": ["low", "medium", "high", "xhigh"],
-                },
-            )
             glm_flash = next(
                 model
                 for model in provider["models"]
@@ -2701,6 +2684,18 @@ except Exception as exc:
                     "thinking-levels": ["low", "medium", "high", "xhigh"],
                 },
             )
+            glm_54 = next(
+                model for model in provider["models"] if model["name"] == "glm-5.4"
+            )
+            self.assertEqual(
+                glm_54,
+                {
+                    "name": "glm-5.4",
+                    "alias": "glm-5.4",
+                    "max-context-length": 1000000,
+                    "thinking-levels": ["low", "medium", "high", "xhigh"],
+                },
+            )
         self.assertFalse(
             any(provider["slot"] == 3 for provider in route_manifest["providers"])
         )
@@ -2710,7 +2705,7 @@ except Exception as exc:
         )
         self.assertEqual(
             route_manifest["apply_patch_filter_models"],
-            ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
+            ["glm-5.3-flash", "glm-5.4"],
         )
         import runpy
 
@@ -2718,16 +2713,8 @@ except Exception as exc:
             str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
         )
         self.assertEqual(
-            policy["EXPECTED_PAYLOAD_TOOL_RULES"]["filter"][-3:],
+            policy["EXPECTED_PAYLOAD_TOOL_RULES"]["filter"][-2:],
             [
-                {
-                    "models": [{"name": "glm-5.3"}],
-                    "params": [
-                        'tools.#(type=="custom")',
-                        'input.#(type=="additional_tools")#.tools.#(name=="functions")#'
-                        '.tools.#(name=="apply_patch")#',
-                    ],
-                },
                 {
                     "models": [{"name": "glm-5.3-flash"}],
                     "params": [

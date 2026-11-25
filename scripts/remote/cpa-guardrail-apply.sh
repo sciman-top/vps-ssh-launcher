@@ -2980,7 +2980,7 @@ expected = {
         "gpt-6.1-terra",
         "gpt-6.2-sol",
     ],
-    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash", "glm-5.4"],
+    "zhipu-coding-plan": ["glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
@@ -2990,7 +2990,6 @@ expected = {
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
-        "glm-5.3-wb",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ],

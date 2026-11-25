@@ -80,7 +80,7 @@ def test_glm_provider_errors_forward_status_body_and_retry_after_unchanged(
     client = http.client.HTTPConnection(
         "127.0.0.1", admission.server_address[1], timeout=5
     )
-    request_body = b'{"model":"glm-5.3","input":"hello"}'
+    request_body = b'{"model":"glm-5.3-flash","input":"hello"}'
     try:
         client.request("POST", "/v1/responses", body=request_body)
         response = client.getresponse()

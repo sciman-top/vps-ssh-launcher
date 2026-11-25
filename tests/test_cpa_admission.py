@@ -3743,7 +3743,7 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
             client.request(
                 "POST",
                 "/v1/responses",
-                body=b'{"model":"glm-5.3","input":"hi"}',
+                body=b'{"model":"glm-5.3-flash","input":"hi"}',
                 headers={"Content-Type": "application/json"},
             )
             response = client.getresponse()
@@ -6947,7 +6947,7 @@ def test_proxy_rejects_text_only_user_images_before_upstream(
     loaded = config()
     loaded["upstream_port"] = upstream.server_port
     proxy = AdmissionProxy(loaded)
-    assert proxy.text_only_models == frozenset({"glm-5.3"})
+    proxy.text_only_models = frozenset({"glm-5.4"})
     before = {name: state.snapshot() for name, state in proxy.lanes.items()}
     server, thread = _serve_local(cast(Any, MODULE["Handler"]))
     server.proxy = proxy
@@ -6959,7 +6959,7 @@ def test_proxy_rejects_text_only_user_images_before_upstream(
             "/v1/responses",
             json.dumps(
                 {
-                    "model": "glm-5.3",
+                    "model": "glm-5.4",
                     "input": [
                         {
                             "role": "user",
@@ -6977,7 +6977,7 @@ def test_proxy_rejects_text_only_user_images_before_upstream(
             "/v1/chat/completions",
             json.dumps(
                 {
-                    "model": "glm-5.3(high)",
+                    "model": "glm-5.4(high)",
                     "messages": [
                         {
                             "role": "user",

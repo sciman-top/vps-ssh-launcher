@@ -746,7 +746,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "glm-5.3"
+            if model == "glm-5.4"
             else cpa_test_generation_response({"model": model})
             for model in models
         )
@@ -800,7 +800,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             )
         self.assertTrue(
             any(
-                line.startswith("GENERATION model=glm-5.3 status=502 latency_ms=")
+                line.startswith("GENERATION model=glm-5.4 status=502 latency_ms=")
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
             )
