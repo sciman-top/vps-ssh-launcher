@@ -286,8 +286,10 @@ Go RE2 编译执行，部署前在 WSL 按上游顺序实测；部署后管理�
   要改远端配置并做受控 A/B，属用户裁决。
 - 取舍：本栈 ChatGPT 车道的 agent 流量全部来自官方客户端，关 cloak 即透传各自
   真实且自洽的官方指纹；代价是探针类请求露出真实 UA（无 Originator 时仍回落
-  `codex-tui`）。维护者「保持开启」的建议面向第三方客户端。现状未改，
-  `cpa_policy.py` 仍把关闭判为违规。
+  `codex-tui`）。维护者「保持开启」的建议面向第三方客户端。**2026-11-26 更新**：
+  过载波持续超 48h 后经用户授权已通过 `upstream.codex.disable-codex-cloaking: true`
+  投影落地（`cpa_policy.py` 同步钉定），详见
+  [20261126 台账](../change-evidence/20261126-bwg-cpa-disable-codex-cloaking.md)。
 
 **官方客户端请求形状**（同一转储的 `REQUEST BODY`）：顶层键为
 `client_metadata / include / input / model / parallel_tool_calls / prompt_cache_key /

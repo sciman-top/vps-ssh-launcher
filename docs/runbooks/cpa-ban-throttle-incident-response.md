@@ -195,15 +195,17 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 > 处置仍按 L2：等可信窗口结束或切非 OAuth lane，**不改 `capacity_markers`、
 > 不清冷却、不缩短 `transient-error-cooldown-seconds`、不加账号**。
 
-> **2026-11-24 增补（Originator 分流与 cloaking 断言）**：上游
+> **2026-11-24 增补 / 2026-11-26 策略反转（Originator 分流与 cloaking 断言）**：上游
 > [#4679](https://github.com/router-for-me/CLIProxyAPI/issues/4679) 的 A/B 证明
 > OpenAI 在负载升高时优先自家客户端——同一请求 `Originator: codex_cli_rs`
-> 4/4 成功，`codex-tui` 立即流内 `server_is_overloaded`，只改 User-Agent 无效；
-> 维护者建议保持 cloaking 开启（v7.2.110 起默认）。本栈此前只靠上游默认值，
-> `cpa_policy.py` 现把 `disable-codex-cloaking` 的 `true`（v8 路径、
-> `oauth.providers.codex`、pre-v8 `codex` 段）判为 policy 违规；键缺省或显式
-> `false` 均通过，不投影该键，现役配置无需改动。当日流内过载波的实测与
-> 判读升级条件见 [上游台账](cpa-observed-baselines-and-upstream-log.md) 六节。
+> 4/4 成功，`codex-tui` 立即流内 `server_is_overloaded`，只改 User-Agent 无效。
+> 2026-11-25 实测确认本栈开启 cloaking 时实际出站正是 `codex-tui`（并将官方桌面端
+> 请求改写为矛盾的 macOS iTerm UA + Windows 桌面专属头），且 2026-11-24..26
+> 持续 >48h 触发高频 `server_is_overloaded`。2026-11-26 经用户授权已反转为
+> `upstream.codex.disable-codex-cloaking: true`（`cpa_policy.py` 钉定并投影，
+> 拒绝旧路径显式 `false`），让官方桌面客户端透传真实且自洽的 `Originator`/UA；
+> 过程与回滚见 [20261126 台账](../change-evidence/20261126-bwg-cpa-disable-codex-cloaking.md)
+> 及 [上游台账](cpa-observed-baselines-and-upstream-log.md) 六节。
 
 ## 分级处置
 
