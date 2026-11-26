@@ -440,6 +440,7 @@ class ScriptValidationMixin:
                 },
                 "upstream": {
                     "codex": {
+                        "disable-codex-cloaking": True,
                         "model-level-cooling": True,
                         "stream-bootstrap-buffering": False,
                         "stream-bootstrap-timeout": "0",

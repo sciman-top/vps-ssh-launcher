@@ -411,20 +411,23 @@ EXPECTED_CODEX = {
     # their measured behaviour. Not a ban/limit control.
     "upstream-request-compression": True,
     "upstream-request-compression-min-bytes": 1024,
+    # Disabled on 2026-11-26 after >48h of continuous `server_is_overloaded`
+    # waves (2026-11-24..26; 23x 502 + in-stream response.failed on 2026-11-26
+    # with Retry-After 306-374s). Upstream CLIProxyAPI #4679 A/B showed OpenAI
+    # sheds `Originator: codex-tui` first under load; with cloaking on, CPA
+    # unconditionally rewrote official Codex Desktop headers into `codex-tui` +
+    # macOS iTerm UA while forwarding Windows Desktop headers (`x-codex-window-id`,
+    # etc.). All agent traffic on this host's ChatGPT lane comes from official
+    # clients, so disabling cloaking lets them pass their own consistent
+    # Originator and User-Agent verbatim.
+    "disable-codex-cloaking": True,
 }
 
-# The executor sends the official Codex Originator and User-Agent by default
-# (applyCodexCloakingHeaders) and v8 reads the opt-out from three places
-# (config_v8.go). OpenAI sheds load ahead of its own clients: a request that is
-# not identified as an official client gets an in-stream
-# `server_is_overloaded` while the same request with the official Originator
-# succeeds (CLIProxyAPI #4679; the maintainer recommends leaving cloaking on).
-# An opt-out therefore turns upstream load bursts into lane-wide outages for the
-# single ChatGPT credential and changes its client fingerprint. The accepted
-# state is an absent key or an explicit false; the key is asserted rather than
-# projected because writing it would restart the container for no runtime gain.
-CODEX_CLOAKING_OPT_OUT_PATHS = (
-    ("upstream", "codex", "disable-codex-cloaking"),
+# `upstream.codex.disable-codex-cloaking` is pinned True in EXPECTED_CODEX.
+# Also reject explicit False overrides on the alternate/legacy v8 config paths
+# (`config_v8.go`) so a stray override cannot silently re-enable `codex-tui`
+# cloaking.
+CODEX_CLOAKING_LEGACY_PATHS = (
     ("oauth", "providers", "codex", "disable-codex-cloaking"),
     ("codex", "disable-codex-cloaking"),
 )
@@ -432,14 +435,14 @@ CODEX_CLOAKING_OPT_OUT_PATHS = (
 
 def _codex_cloaking_issues(config: Any) -> list[str]:
     issues: list[str] = []
-    for path in CODEX_CLOAKING_OPT_OUT_PATHS:
+    for path in CODEX_CLOAKING_LEGACY_PATHS:
         node: Any = config
         for key in path:
             node = node.get(key) if isinstance(node, dict) else None
-        if node is True:
+        if node is False:
             issues.append(
-                f"{'.'.join(path)}=True; expected unset or False "
-                "(official Codex identity stays on)"
+                f"{'.'.join(path)}=False; expected unset or True "
+                "(official Codex client headers pass through without codex-tui cloaking)"
             )
     return issues
 

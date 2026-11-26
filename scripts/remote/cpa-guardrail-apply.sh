@@ -1503,6 +1503,10 @@ config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
     # symptom directly. 1024-byte floor keeps health/canary probes plain.
     "upstream-request-compression": True,
     "upstream-request-compression-min-bytes": 1024,
+    # Pass official Codex Desktop Originator/User-Agent through verbatim instead
+    # of rewriting them into `codex-tui` + macOS iTerm UA (2026-11-26: mitigates
+    # >48h `server_is_overloaded` wave tied to `Originator: codex-tui` shedding).
+    "disable-codex-cloaking": True,
 })
 api_keys_after = config_after["api-keys"]
 api_keys_after["openai-compatibility"] = remaining_compatibility + target_providers
