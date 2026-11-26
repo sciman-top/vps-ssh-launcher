@@ -619,20 +619,26 @@ class RedactionTests(unittest.TestCase):
 
     def test_document_and_render_never_contain_secrets(self) -> None:
         secret = "super-secret-management-key-9876"
+        email = "real.person@example.com"
         doc = surfaces(
             auth_files={
                 "files": [
                     oauth_entry(
                         status_message=f"bad key sk-{secret} in echo",
-                        email="real.person@example.com",
+                        name=f"codex-123-{email}-plus.json",
+                        email=email,
                     )
                 ]
             }
         )
-        rendered = "\n".join(cpa_status.render(cpa_status.synthesize(doc, now=1000.0)))
-        self.assertNotIn(secret, rendered)
-        self.assertNotIn("real.person@example.com", rendered)
-        self.assertNotIn("sk-", rendered.replace("sk-***", ""))
+        document = cpa_status.synthesize(doc, now=1000.0)
+        for output in (
+            json.dumps(document),
+            "\n".join(cpa_status.render(document)),
+            cpa_status.render_html(document),
+        ):
+            self.assertNotIn(secret, output)
+            self.assertNotIn(email, output)
 
 
 class RenderTests(unittest.TestCase):
@@ -652,6 +658,44 @@ class RenderTests(unittest.TestCase):
 
 
 class MetricsTests(unittest.TestCase):
+    def test_plugin_client_alias_keeps_telemetry_on_the_correct_lane(self) -> None:
+        doc = surfaces()
+        manifest = doc["manifest"]
+        manifest["plugin_routes"] = [
+            {
+                "provider": "workbuddy-provider",
+                "admission_lane": "workbuddy-oauth",
+                "models": ["glm-5.4", "glm-5.3-flash"],
+            }
+        ]
+        manifest["oauth_model_aliases"] = {
+            "workbuddy-provider": [
+                {"name": "glm-5.4", "alias": "glm-5.4-wb"},
+                {"name": "glm-5.3-flash", "alias": "glm-5.3-flash-wb", "fork": True},
+            ]
+        }
+        manifest["providers"] = [
+            {
+                "name": "zhipu-plan",
+                "admission_lane": "zhipu-coding-plan",
+                "models": ["glm-5.4"],
+            }
+        ]
+        telemetry = telemetry_entry(samples=5)
+        doc["healthz"]["telemetry"]["models"]["glm-5.4-wb"] = telemetry
+        document = cpa_status.synthesize(doc, now=1000.0)
+        plugin_rows = [
+            row["model"]
+            for row in document["models"]
+            if row["lane"] == "workbuddy-oauth"
+        ]
+        self.assertCountEqual(
+            plugin_rows, ["glm-5.4-wb", "glm-5.3-flash", "glm-5.3-flash-wb"]
+        )
+        self.assertEqual(model_row(document, "glm-5.4")["lane"], "zhipu-coding-plan")
+        self.assertEqual(model_row(document, "glm-5.4-wb")["metrics"], telemetry)
+        self.assertNotIn("glm-5.4-wb", document["telemetry_only_models"])
+
     def test_telemetry_joins_on_model_name(self) -> None:
         document = cpa_status.synthesize(surfaces(), now=1000.0)
         metrics = model_row(document, "gpt-6-astra")["metrics"]

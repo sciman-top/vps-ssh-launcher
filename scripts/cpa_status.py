@@ -85,6 +85,7 @@ Exit codes: ``0`` a document was produced (surface errors are embedded),
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -466,13 +467,13 @@ def _admission_verdict(
 
 
 def _core_verdict(
-    credentials: list[dict[str, Any]], model: str
+    credentials: list[dict[str, Any]], model: str, source_model: str
 ) -> tuple[str | None, str]:
     if not credentials:
         return None, ""
     # CooldownSnapshotForAuth emits only *unexpired* timers, so any view here
     # is an active block. Model-scoped views name the blocked model directly.
-    for view in _cooldown_views_for_model(credentials, model):
+    for view in _cooldown_views_for_model(credentials, {model, source_model}):
         remaining = view.get("remaining_seconds")
         reason = mask_text(view.get("reason"), 60)
         if isinstance(remaining, int) and remaining > 0:
@@ -536,12 +537,12 @@ def _core_verdict(
 
 
 def _cooldown_views_for_model(
-    credentials: list[dict[str, Any]], model: str
+    credentials: list[dict[str, Any]], models: set[str]
 ) -> list[dict[str, Any]]:
     views: list[dict[str, Any]] = []
     for entry in credentials:
         for view in _cooldown_views(entry):
-            if str(view.get("model_key", "")) == model:
+            if str(view.get("model_key", "")) in models:
                 views.append(view)
     return views
 
@@ -627,6 +628,9 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
     settings_index = (
         _oauth_settings_index(manifest) if isinstance(manifest, dict) else {}
     )
+    oauth_aliases = (
+        manifest.get("oauth_model_aliases") if isinstance(manifest, dict) else None
+    )
     for record in routes:
         kind = str(record["kind"])
         route = record["route"]
@@ -637,7 +641,23 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
         model_list = route.get("models")
         if not isinstance(model_list, list):
             continue
-        route_aliases: list[str] = []
+        channel_aliases = (
+            oauth_aliases.get(provider)
+            if kind == "plugin" and isinstance(oauth_aliases, dict)
+            else None
+        )
+        aliases_by_model: dict[str, list[tuple[str, bool]]] = {}
+        if isinstance(channel_aliases, list):
+            for entry in channel_aliases:
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("name"), str)
+                    and isinstance(entry.get("alias"), str)
+                ):
+                    aliases_by_model.setdefault(entry["name"], []).append(
+                        (entry["alias"], entry.get("fork") is True)
+                    )
+        route_aliases: list[tuple[str, str]] = []
         for raw_model in model_list:
             alias = (
                 raw_model
@@ -650,8 +670,11 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                 )
             )
             if alias:
-                route_aliases.append(alias)
-        for alias in route_aliases:
+                mapped = aliases_by_model.get(alias, [])
+                if not mapped or any(fork for _, fork in mapped):
+                    route_aliases.append((alias, alias))
+                route_aliases.extend((target, alias) for target, _ in mapped)
+        for alias, source in route_aliases:
             seen_models.add(alias)
             # Dual-realm plugin routes legitimately list the same alias on one
             # lane; the row would be identical, so keep the first only.
@@ -669,7 +692,12 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                 )
             else:
                 credentials = _match_route_credentials(
-                    kind, route_name, provider, files, settings_index, route_aliases
+                    kind,
+                    route_name,
+                    provider,
+                    files,
+                    settings_index,
+                    [source_model for _, source_model in route_aliases],
                 )
                 candidates: list[tuple[str, str]] = []
                 admission_verdict = (
@@ -678,7 +706,7 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                 if admission_verdict[0] is not None:
                     candidates.append((admission_verdict[0], admission_verdict[1]))
                 core_verdict = (
-                    _core_verdict(credentials, alias) if files else (None, "")
+                    _core_verdict(credentials, alias, source) if files else (None, "")
                 )
                 if core_verdict[0] is not None:
                     candidates.append((core_verdict[0], core_verdict[1]))
@@ -753,6 +781,10 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
 
     channels: list[dict[str, Any]] = []
     for entry in files:
+        name = str(entry.get("name", ""))
+        email = entry.get("email")
+        if "@" in name or (isinstance(email, str) and email and email in name):
+            name = "credential-" + hashlib.sha256(name.encode()).hexdigest()[:12]
         views = _cooldown_views(entry)
         max_remaining = max(
             (
@@ -776,7 +808,7 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
         channels.append(
             {
                 "provider": str(entry.get("provider", "")),
-                "name": str(entry.get("name", "")),
+                "name": name,
                 "status": str(entry.get("status", "")),
                 "disabled": entry.get("disabled") is True,
                 "unavailable": entry.get("unavailable") is True,
@@ -832,7 +864,7 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
 
 
 def _metrics_text(metrics: Any) -> str:
-    """One-line telemetry summary; tokens/cost are deliberately absent."""
+    """Summarize observed cache and upstream first-text telemetry."""
     if not isinstance(metrics, dict):
         return ""
     bits: list[str] = []
