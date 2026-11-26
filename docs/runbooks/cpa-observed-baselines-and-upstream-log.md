@@ -354,3 +354,34 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
 - **上游抖动**：`TestAntigravityManagerExecuteAndStream_ToppedUpCreditsRecoverDuringQuotaCooldown`
   隔离重跑 6 次失败 1 次，纯净 v8.1.4、生产树、合并树三边同形；未报上游。
 - zcode-start-plan 已是最新（`zcode-proxy` 4.9.1），未动。
+
+### 2026-11-27：换到 v8.1.6，插件 0.21.32
+
+用户 2026-11-27 指令直接升级（沿 11-26 先例不等 soak）。生产现为
+`cli-proxy-api-fork:v8.1.6-gemini-raw-daily-cap-authiso-sigiso`（binary
+`b0d4b7f0…`，upstream 锚 `0aaf6d1c`），五叠层经三方合并重移植；WorkBuddy CN
+插件 0.21.32（失败即写盘禁用改默认关闭，`failover_disable_enabled` 显式开启）。
+事务、回滚与验收见
+[换代台账](../change-evidence/20261127-bwg-cpa-v816-five-overlay-swap.md)。
+
+- **v8.1.5/v8.1.6**（2026-11-26，v8.1.4 之后共 72 提交）：antigravity 执行器
+  修复波、签名缓存 TOCTOU（ff09fcb1）与 Home OAuth refresh 的 grant-scope 保持、
+  replay clean-EOF 提交（7fa46e9d）、codex websocket 读限心跳续期、
+  `requestId`/translator null 守卫大批；v8.1.6 新增 Home 本地插件执行器分发
+  （#8515，生产未启用该面）。
+- **crossauth 适配面扩大**：上游新增 `TestIssue6332Review7*` 两例（clean-EOF/
+  partial-EOF replay 提交语义）同样按无前缀键读缓存，读键改作用域键（与 11-25
+  `TestIssue6332ReasoningReplayTwoTurns` 适配同形）。上游对 replay KV 仍不按凭据
+  分域，跨号隔离叠层继续保留。
+- **三方合并冲突面收敛**：v8.1.6 与五叠层仅 1 文件冲突（replay：HEAD 的
+  `antigravityReplayAuthScope` vs 上游 thought-signature 剪枝函数，互为新增），
+  execute/stream/apply 三钩子自动合并且 delta 形状与上代逐行对齐
+  （18/18、16/16、67/67）。
+- **测试硬门基线更新**：108 包 ok，两失败均非换代引入——
+  `TestUnixPluginReloadAfterShutdownUsesReplacedFile` 纯净 v8.1.6 同样失败
+  （dlopen 句柄复用断言，环境抖动，三边同形）；CAQS 基线偏差同前。
+- **插件 0.21.32**（11-25T16:45Z，上代换芯后 1 小时被漏）：0.21.31+`19d4c5f2`
+  ——失败即写盘禁用链路默认关闭，改由 `failover_disable_enabled` 显式开启。
+  插件注册断言在隔离预检里需生产 `plugins.configs` 段（scratch 只验 binary）。
+- terra 已于 11-26 由并行会话退役（`540dec1`），探针集里用 `gpt-6.1-sol`
+  替代；400 `model_not_found` 对退役名是正确行为。
