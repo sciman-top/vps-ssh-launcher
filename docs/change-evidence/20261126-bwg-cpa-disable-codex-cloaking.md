@@ -36,7 +36,9 @@
 | 层级 | 执行内容 | 结论与关键回执 |
 | --- | --- | --- |
 | `repo_verified` | `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -RunParallel` | `CATALOG_CHECK=PASS`、`bandit` / `bandit-scripts` PASS、`ruff check` / `ruff format --check` PASS、`mypy`（165 source files, 0 issues）、`pytest` `1894 passed, 30 skipped, 899 subtests passed in 120.13s` |
+| `simulated`（隔离 `unshare --mount --net --fork`，零生产凭据、零出网） | 使用生产容器同版真二进制 `CLIProxyAPI`（`v8.1.4` fork）+ 私有 `/etc/hosts` + 自签 `chatgpt.com` mock 上游做 `disable-codex-cloaking` A/B | `cloaking_on`（`false`）`http_status=200` 实测出站 `Originator=codex-tui`、`User-Agent=codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 ...`、`x-codex-window-id=win-sim-1234`；<br>`cloaking_off`（`true`）`http_status=200` 实测出站 `Originator=Codex Desktop`、`User-Agent=Codex Desktop/0.171.0-alpha.13.2 (Windows 10.0.26200; x86_64)`、`x-codex-window-id=win-sim-1234`（临时目录已自动清理） |
 | `filesystem_projected` + `host_loaded` | 1) `scripts/cpa_bwg_guardrails.ps1 -Profile bwg -Apply`<br>2) strict doctor（`scripts/cpa_bwg_guardrails.ps1 -Profile bwg`）<br>3) `scripts/cpa_status.py --profile bwg` | 1) `GUARDRAILS_APPLIED`、`READY_STATUS=200`、`HEALTH_OK`、17/17 `PROJECTION_HASH_VERIFIED`<br>2) `DOCTOR_CONTRACT_OK`、`POLICY_OK`、`semantic-policy=OK`、`admission-integrity=OK`、`nginx-syntax=OK`、`lane-hold-chatgpt-oauth=OPEN`、`oauth_monitor=OK`（`oauth_days_left=6`）、`credential_ban_signals_7d=0`、`upstream.codex.disable-codex-cloaking: true` 已加载<br>3) 全部在役 OAuth 车道（含 `chatgpt-oauth` 4 模型）均为 `OK` |
+| `controlled_live`（仅非 OAuth 车道） | `python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash chat` | sample 1 `4114 in / 0 cached (0.0000)` -> sample 2 `4114 in / 4096 cached (0.9956 = 99.56%)`、`HEALTH_OK` |
 
 ## 未验证边界与后续观察
 
