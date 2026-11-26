@@ -9,7 +9,7 @@
 
 ## 追加验收
 
-2026-11-26 23:12 前后（北京时间），状态服务 JSON、HTML 和部署哈希复验通过。CPA strict doctor 退出 0，17 项投影匹配，`admission-integrity=OK`，`semantic-policy=OK`，`MODEL_IDS_UNKNOWN=none`。本地状态页、冷却、配额和 SSE 相关验证为 `141 passed`。该批测试包含工作区中并行修改的 admission 候选，生产 admission 以 doctor 匹配的已提交版本为准。
+2026-11-26 23:12 前后（北京时间），状态服务 JSON、HTML 和部署哈希复验通过。Nginx 状态页入口对未认证请求返回 `401`。CPA strict doctor 退出 0，17 项投影匹配，`admission-integrity=OK`，`semantic-policy=OK`，`MODEL_IDS_UNKNOWN=none`。使用提交 `73e764e` 的独立归档验证状态页、冷却、配额和 SSE，结果为 `140 passed`。
 
 受控实战经 BWG admission 回环入口执行。每个模型只发一个算术流式请求，发前检查目录、车道忙闲和冷却。验收要求可见文本为 `42`、SSE `[DONE]` 和 `finish_reason=stop`。
 
