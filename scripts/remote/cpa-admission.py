@@ -4425,6 +4425,16 @@ class LaneState:
                             # the next recheck slot instead of bouncing it for
                             # the whole window; the queue head rides the probe.
                             next_admission = min(next_admission, self._mirror_probe_at)
+                        # An upstream Retry-After can outlast the remaining
+                        # budget of a request already in the queue.
+                        if (
+                            queued
+                            and self._server_not_before >= deadline
+                            and next_admission >= deadline
+                        ):
+                            return lease(
+                                False, "cooldown", self._cooldown_retry_after(now)
+                            )
                         if not queued and (next_admission - now <= self._queue_timeout):
                             # A long local cooldown can still have an early
                             # probe inside the queue budget. Wait for that slot
