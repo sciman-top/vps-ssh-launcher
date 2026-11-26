@@ -54,39 +54,24 @@ def test_manifest_cn_plugin_pins_are_the_primary_and_glm54() -> None:
     assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
 
-def test_manifest_intl_pin_is_the_single_declared_upstream_id() -> None:
+def test_manifest_intl_pin_is_retired() -> None:
     routes = _manifest()["plugin_routes"]
     intl = [r for r in routes if r["realm"] == "intl"]
-    assert len(intl) == 1
-    assert intl[0]["provider"] == "workbuddy-ai-provider"
-    # deepseek-v4.1-flash-sg keeps the bare client name (fork alias rides on
-    # it). It is currently closed dark with the INTL plugin disabled but
-    # stays DECLARED for one-flag re-enabling; hy4flash-free retired
-    # 2026-11-17 (user directive) and must not return to the pin.
-    assert intl[0]["models"] == ["deepseek-v4.1-flash-sg"]
-    assert intl[0]["admission_lane"] == "workbuddy-intl-oauth"
+    assert intl == []
 
 
-def test_fork_bridge_maps_the_intl_client_alias_only() -> None:
+def test_fork_bridge_drops_intl_channel_and_keeps_cn_aliases() -> None:
     aliases = _manifest()["oauth_model_aliases"]
-    # The legacy single-plugin channel must stay gone.
     assert "workbuddy" not in aliases
-    entries = aliases["workbuddy-ai-provider"]
-    by_alias = {e["alias"]: e for e in entries}
-    assert set(by_alias) == {"deepseek-v4.1-flash-intl"}
-    # sg keeps its bare client name, so the intl alias is a fork alongside it.
-    assert by_alias["deepseek-v4.1-flash-intl"] == {
-        "name": "deepseek-v4.1-flash-sg",
-        "alias": "deepseek-v4.1-flash-intl",
-        "fork": True,
-    }
+    assert "workbuddy-ai-provider" not in aliases
+    cn_aliases = {e["alias"]: e for e in aliases["workbuddy-provider"]}
+    assert set(cn_aliases) == {"glm-5.3-flash-wb", "glm-5.4-wb"}
 
 
-def test_hy4flash_free_is_retired_and_sg_stays_declared() -> None:
-    """hy4flash-free retired 2026-11-17; sg/intl kept declared but closed."""
+def test_hy4flash_free_and_intl_are_retired() -> None:
+    """hy4flash-free and workbuddy-ai-provider (INTL) are retired."""
 
     routes = _manifest()
-    # Retired: not pooled, not pinned, not in any expectation list.
     assert "hy4flash-free" not in routes["pooled_aliases"]
     assert "hy4free" not in routes["pooled_aliases"]
     assert "hy4flash-free" not in json.dumps(
@@ -94,24 +79,16 @@ def test_hy4flash_free_is_retired_and_sg_stays_declared() -> None:
     )
     models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_MODELS
     admission_models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_ADMISSION_MODELS
-    assert "hy4flash-free" not in models["cn"] + models["intl"]
-    assert "hy4flash-free" not in admission_models["cn"] + admission_models["intl"]
-    assert "hy4free" not in models["cn"] + models["intl"]
-    assert "hy4free" not in admission_models["cn"] + admission_models["intl"]
-    # Closed-dark keepers: sg stays declared upstream-side and both client
-    # names stay on the admission lane for one-line re-enabling.
-    assert models["intl"] == ["deepseek-v4.1-flash-sg"]
-    assert admission_models["intl"] == [
-        "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
-    ]
+    assert "intl" not in models
+    assert "intl" not in admission_models
+    assert "hy4flash-free" not in models["cn"]
+    assert "hy4flash-free" not in admission_models["cn"]
 
 
 def test_legacy_workbuddy_provider_route_is_gone() -> None:
     routes = _manifest()["plugin_routes"]
     assert [r["provider"] for r in routes] == [
         "workbuddy-provider",
-        "workbuddy-ai-provider",
     ]
     assert not re.search(
         r'"provider":\s*"workbuddy"', MANIFEST.read_text(encoding="utf-8")

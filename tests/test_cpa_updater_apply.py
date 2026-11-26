@@ -3078,7 +3078,6 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     "scheduler_mode": "credits",
                     "retry_on_4xx": 10,
                 },
-                "workbuddy-ai-provider": {"enabled": False},
             },
         }
         route_manifest = policy["ROUTE_MANIFEST"]

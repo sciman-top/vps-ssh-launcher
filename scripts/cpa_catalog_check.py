@@ -49,7 +49,6 @@ LANE_SOURCES: dict[str, tuple[str, ...]] = {
     "zhipu-coding-plan": ("provider", "zhipu-plan"),
     "zcode-start-plan": ("provider", "zcode-start-plan"),
     "workbuddy-oauth": ("plugin", "workbuddy-provider", "cn"),
-    "workbuddy-intl-oauth": ("plugin", "workbuddy-ai-provider", "intl"),
 }
 
 TOMBSTONE_KEYS = (

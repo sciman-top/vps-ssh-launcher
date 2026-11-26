@@ -1195,19 +1195,10 @@ docker() {{
                 "plugins": {
                     "configs": {
                         "workbuddy-provider": cn_section,
-                        # 2026-11-17: the INTL lane is closed dark — the
-                        # plugin stays disabled while every declaration
-                        # (pin, bridge, admission lane) keeps its shape.
-                        "workbuddy-ai-provider": {
-                            "enabled": False,
-                            "token_keepalive": False,
-                        },
                     }
                 },
-                "oauth-model-alias": {"workbuddy-ai-provider": bridge_entries()},
                 "oauth-excluded-models": {
                     "workbuddy-provider": ["glm-5.3"],
-                    "workbuddy-ai-provider": ["grok-4.7"],
                 },
             }
 
@@ -1220,13 +1211,14 @@ docker() {{
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
         self.assertIn("workbuddy-retry_on_4xx=0", healthy.stdout)
         self.assertIn(
-            "workbuddy-intl-plugin=disabled keepalive=off note=closed_dark_20261117",
-            healthy.stdout,
+            "workbuddy-intl-plugin=absent note=uninstalled_20261126", healthy.stdout
         )
-        self.assertIn("workbuddy-alias-bridge=OK intl-only", healthy.stdout)
+        self.assertIn("workbuddy-intl-alias=absent", healthy.stdout)
         self.assertIn(
             "workbuddy-excluded-workbuddy-provider=PRESENT n=1", healthy.stdout
         )
+        self.assertIn("workbuddy-excluded-workbuddy-ai-provider=absent", healthy.stdout)
+        self.assertIn("workbuddy-intl-settings=absent", healthy.stdout)
 
         legacy = run_case(
             {
@@ -1253,8 +1245,6 @@ docker() {{
         self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
         self.assertIn("scheduler_mode:absent", wiped.stdout)
         self.assertIn("retry_on_4xx:absent", wiped.stdout)
-        self.assertIn("intl_plugin:not_disabled", wiped.stdout)
-        self.assertIn("oauth_model_alias:deepseek-v4.1-flash-intl", wiped.stdout)
         self.assertIn("oauth_excluded_models:workbuddy-provider", wiped.stdout)
 
         for mode in (None, "off", "selected", True, ["credits"]):
@@ -1289,50 +1279,29 @@ docker() {{
             "workbuddy-config=DRIFT rotation_enabled:true", rotation_flip.stdout
         )
 
-        # Closed-dark contract: the INTL plugin must stay disabled. Enabled
-        # while closed = drift (an accidental re-open would silently resurface
-        # the sg/intl client names).
-        intl_enabled = healthy_config()
-        intl_enabled["plugins"]["configs"]["workbuddy-ai-provider"] = {
-            "enabled": True,
+        # Uninstalled INTL contract: any leftover workbuddy-ai-provider section
+        # under plugins.configs, oauth.model-alias, or oauth.excluded-models is drift.
+        intl_present = healthy_config()
+        intl_present["plugins"]["configs"]["workbuddy-ai-provider"] = {
+            "enabled": False,
             "token_keepalive": False,
         }
-        result = run_case(intl_enabled)
+        result = run_case(intl_present)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn(
-            "workbuddy-intl-plugin=ENABLED expected=disabled note=closed_dark_20261117",
-            result.stdout,
-        )
+        self.assertIn("intl_plugin:config_present", result.stdout)
 
-        intl_keepalive = healthy_config()
-        intl_keepalive["plugins"]["configs"]["workbuddy-ai-provider"][
-            "token_keepalive"
-        ] = True
-        result = run_case(intl_keepalive)
+        intl_alias = healthy_config()
+        intl_alias["oauth-model-alias"] = {"workbuddy-ai-provider": bridge_entries()}
+        result = run_case(intl_alias)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn(
-            "workbuddy-intl-plugin=disabled keepalive=NOT_OFF expected=off",
-            result.stdout,
-        )
-
-        # The retired interim alias resurfacing on the bridge is drift under
-        # the post-rename contract: expected bridge is intl-only, and any
-        # extra alias on the channel fails alongside missing ones.
-        extra_alias_bridge = healthy_config()
-        extra_alias_bridge["oauth-model-alias"]["workbuddy-ai-provider"] = (
-            bridge_entries() + [{"name": "hy4flash-free", "alias": "hy4free"}]
-        )
-        result = run_case(extra_alias_bridge)
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn(
-            "workbuddy-alias-bridge=MISSING expected=intl-only", result.stdout
-        )
-        self.assertIn("oauth_model_alias:hy4free", result.stdout)
+        self.assertIn("oauth_model_alias:workbuddy-ai-provider_present", result.stdout)
 
         legacy_channel = healthy_config()
-        legacy_channel["oauth-model-alias"]["workbuddy"] = [
-            {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash-intl"}
-        ]
+        legacy_channel["oauth-model-alias"] = {
+            "workbuddy": [
+                {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash-intl"}
+            ]
+        }
         result = run_case(legacy_channel)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(
@@ -1350,7 +1319,6 @@ docker() {{
             "workbuddy-excluded-workbuddy-provider=ABSENT note=realm_discovery_reopened",
             result.stdout,
         )
-        self.assertIn("oauth_excluded_models:workbuddy-ai-provider", result.stdout)
 
         disabled = run_case(
             {
@@ -2618,13 +2586,6 @@ except Exception as exc:
                     {"name": "glm-5.3-flash", "alias": "glm-5.3-flash-wb"},
                     {"name": "glm-5.4", "alias": "glm-5.4-wb"},
                 ],
-                "workbuddy-ai-provider": [
-                    {
-                        "name": "deepseek-v4.1-flash-sg",
-                        "alias": "deepseek-v4.1-flash-intl",
-                        "fork": True,
-                    },
-                ],
             },
         )
         slot1_route = next(
@@ -3445,7 +3406,7 @@ except Exception as exc:
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
         self.assertIn("EXPECTED_CN=0.21.31", version_check)
-        self.assertIn("EXPECTED_INTL=0.1.40", version_check)
+        self.assertIn("INTL_SO_PRESENT", version_check)
         self.assertIn("LEGACY_SO_PRESENT", version_check)
         self.assertIn("current_container_process_only", version_check)
         self.assertIn("loading does not prove request behavior", version_check)
@@ -3471,7 +3432,6 @@ except Exception as exc:
             plugins = fixture / "cliproxyapi" / "plugins"
             plugins.mkdir(parents=True)
             (plugins / "workbuddy-provider.so").write_bytes(b"fixture")
-            (plugins / "workbuddy-ai-provider.so").write_bytes(b"fixture")
             payload = (
                 "docker() {\n"
                 '  case "$1" in\n'
@@ -3488,13 +3448,13 @@ except Exception as exc:
                     1,
                     "got=0.21.26",
                 ),
-                # Closed-dark healthy state: only the CN plugin registers.
+                # Uninstalled healthy state: only the CN plugin registers.
                 (
                     "plugin registered plugin_id=workbuddy-provider version=0.21.31",
                     0,
-                    "workbuddy-version=cn:0.21.31 intl:disabled_closed_dark_20261117",
+                    "workbuddy-version=cn:0.21.31 intl:uninstalled",
                 ),
-                # An INTL registration while the lane is closed = drift.
+                # An INTL registration after uninstall = drift.
                 (
                     "plugin registered plugin_id=workbuddy-provider version=0.21.31\n"
                     "plugin registered plugin_id=workbuddy-ai-provider version=0.1.40",

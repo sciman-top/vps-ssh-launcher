@@ -36,7 +36,13 @@ def _python_block() -> str:
 
 
 def _manifest_b64() -> str:
-    return base64.b64encode(MANIFEST.read_bytes()).decode("ascii")
+    import json
+
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest.setdefault("oauth_model_aliases", {})["workbuddy-ai-provider"] = (
+        BRIDGE_ENTRIES
+    )
+    return base64.b64encode(json.dumps(manifest).encode("utf-8")).decode("ascii")
 
 
 def _run(

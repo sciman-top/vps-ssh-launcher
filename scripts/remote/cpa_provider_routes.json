@@ -20,8 +20,6 @@
     "from_protocol": "responses",
     "models": [
       "deepseek-v4.1-flash",
-      "deepseek-v4.1-flash-intl",
-      "deepseek-v4.1-flash-sg",
       "glm-5.3-flash-wb",
       "glm-5.4-wb"
     ]
@@ -187,13 +185,6 @@
         "name": "glm-5.4",
         "alias": "glm-5.4-wb"
       }
-    ],
-    "workbuddy-ai-provider": [
-      {
-        "name": "deepseek-v4.1-flash-sg",
-        "alias": "deepseek-v4.1-flash-intl",
-        "fork": true
-      }
     ]
   },
   "plugin_exclusions_note": "A plugin channel registers whatever its upstream catalog serves at load time, so its pin holds only as an exclusion list. plugin_exclusions carries the names the deployed oauth.excluded-models lists had on 2026-11-25, so -Apply reproduces them. A model the upstream adds later is not listed: it surfaces as MODEL_IDS_UNKNOWN in the doctor client-model-catalog contract, and is then either recorded here or declared as a pin. glm-5.3-flash and glm-5.4 are opened as CN pins aliased to -wb by user directive on 2026-11-26, so they are not exclusions. Entries are appended, never removed, so a retirement recorded on the host survives a projection.",
@@ -213,31 +204,6 @@
       "minimax-m3.1-flash",
       "space-bunny",
       "step-5-preview"
-    ],
-    "workbuddy-ai-provider": [
-      "auto",
-      "default-model",
-      "gemini-3.8-flash",
-      "gemini-4-argon",
-      "gemini-4-carbon",
-      "glm-5.3",
-      "glm-5.3-flash",
-      "gpt-5.6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-6-astra",
-      "gpt-6-luna",
-      "gpt-6-sol",
-      "gpt-6.1-sol",
-      "grok-4.7",
-      "hy4flash",
-      "hy4std",
-      "kimi-k3",
-      "kimi-k3.1-pro",
-      "kimi-k3.1-pro-highspeed",
-      "max-model",
-      "minimax-m3.1-flash",
-      "hy4flash-free"
     ]
   },
   "codex_api_key_routes": [],
@@ -384,16 +350,6 @@
       "note": "2026-11-17 luode0320 cutover: the CN plugin registers as workbuddy-provider and its dynamic catalog is narrowed back to its declared pins via oauth-excluded-models. 2026-11-26 (user directive): glm-5.3-flash and glm-5.4 are opened on CN with non-fork -wb client aliases (glm-5.3-flash-wb, glm-5.4-wb) so bare glm-5.3-flash/glm-5.4 route exclusively to BigModel Coding Plan (zhipu-plan).",
       "shared_consumption": true,
       "admission_lane": "workbuddy-oauth"
-    },
-    {
-      "provider": "workbuddy-ai-provider",
-      "realm": "intl",
-      "models": [
-        "deepseek-v4.1-flash-sg"
-      ],
-      "note": "2026-11-17 luode0320 cutover: the INTL plugin registers as workbuddy-ai-provider. Its upstream pin is the one id its dynamic catalog serves: deepseek-v4.1-flash-sg keeps the bare client name (fork alias deepseek-v4.1-flash-intl rides on it). 2026-11-17 (user directive, second batch): hy4flash-free (x0.00 free tier, previously surfaced bare after the hy4free alias rename) is RETIRED — removed from this pin and tombstoned in the deployed oauth-excluded-models; the doctor client-model-catalog gate fails closed if it ever reappears. deepseek-v4.1-flash-sg is KEPT but CLOSED dark: it stays declared here and in the admission lane, while the workbuddy-ai-provider plugin itself is disabled in config.yaml (the doctor intl-plugin gate pins disabled), so both client names are invisible and unusable. Re-enabling = flip plugins.configs.workbuddy-ai-provider.enabled back to true (config reload brings both client names back).",
-      "shared_consumption": true,
-      "admission_lane": "workbuddy-intl-oauth"
     }
   ]
 }

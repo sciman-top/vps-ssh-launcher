@@ -1160,11 +1160,11 @@ def test_config_rejects_plugin_alias_lane_drift(tmp_path: Path) -> None:
     )
     manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
     cn = next(item for item in raw_config["lanes"] if item["name"] == "workbuddy-oauth")
-    intl = next(
-        item for item in raw_config["lanes"] if item["name"] == "workbuddy-intl-oauth"
+    chatgpt = next(
+        item for item in raw_config["lanes"] if item["name"] == "chatgpt-oauth"
     )
-    cn["models"].append("deepseek-v4.1-flash-intl")
-    intl["models"].remove("deepseek-v4.1-flash-intl")
+    cn["models"].remove("glm-5.4-wb")
+    chatgpt["models"].append("glm-5.4-wb")
     config_path = tmp_path / "cpa-admission.json"
     manifest_path = tmp_path / "cpa_provider_routes.json"
     config_path.write_text(json.dumps(raw_config), encoding="utf-8")
@@ -1183,13 +1183,21 @@ def test_shared_route_manifest_allows_a_reviewed_pooled_alias_in_one_lane(
     assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash"] == (
         "workbuddy-oauth"
     )
-    assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash-sg"] == (
-        "workbuddy-intl-oauth"
-    )
+    assert shared_route_model_lanes(manifest_path)["glm-5.4-wb"] == ("workbuddy-oauth")
 
 
 def test_workbuddy_lanes_use_distinct_circuit_state_files(tmp_path: Path) -> None:
     loaded = config()
+    if not any(item["name"] == "workbuddy-intl-oauth" for item in loaded["lanes"]):
+        cn_template = dict(lane(loaded, "workbuddy-oauth"))
+        cn_template["name"] = "workbuddy-intl-oauth"
+        cn_template["models"] = ("deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg")
+        loaded["lanes"] = (*loaded["lanes"], cn_template)
+        loaded["model_lanes"] = {
+            **loaded["model_lanes"],
+            "deepseek-v4.1-flash-intl": "workbuddy-intl-oauth",
+            "deepseek-v4.1-flash-sg": "workbuddy-intl-oauth",
+        }
     cn_path = tmp_path / "workbuddy-risk.json"
     intl_path = tmp_path / "workbuddy-intl-risk.json"
     initial = json.dumps({"version": 1, "not_before": 0, "hold_reason": None})
@@ -1213,10 +1221,15 @@ def test_shared_route_manifest_rejects_unreviewed_or_cross_lane_pooling(
     manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
     manifest_path = tmp_path / "cpa_provider_routes.json"
 
-    manifest["plugin_routes"][1]["admission_lane"] = "chatgpt-oauth"
-    # The intl settings channel is removed while the lane is closed dark
-    # (2026-11-17); pop it defensively for older manifest shapes.
-    manifest["oauth_settings"].pop("workbuddy-ai-provider", None)
+    manifest["plugin_routes"].append(
+        {
+            "provider": "workbuddy-ai-provider",
+            "realm": "intl",
+            "models": ["deepseek-v4.1-flash-sg"],
+            "shared_consumption": True,
+            "admission_lane": "chatgpt-oauth",
+        }
+    )
     manifest["pooled_aliases"] = []
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash-sg"] == (
@@ -1291,7 +1304,7 @@ def test_config_rejects_pooled_models_outside_the_lane(tmp_path: Path) -> None:
         ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
     )
     workbuddy = next(
-        item for item in raw_config["lanes"] if item["name"] == "workbuddy-intl-oauth"
+        item for item in raw_config["lanes"] if item["name"] == "workbuddy-oauth"
     )
     workbuddy["pooled_models"] = ["deepseek-v4.1-flash-typo"]
     config_path = tmp_path / "cpa-admission.json"
@@ -1331,7 +1344,6 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "zcode-start-plan",
         "antigravity-oauth",
         "workbuddy-oauth",
-        "workbuddy-intl-oauth",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
@@ -1339,7 +1351,6 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "zcode-start-plan": 1,
         "antigravity-oauth": 2,
         "workbuddy-oauth": 1,
-        "workbuddy-intl-oauth": 1,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
@@ -9230,7 +9241,7 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
     with _admission_stack(
         Upstream,
         config_loader=claude_lane_config,
-        proxy_overrides={"workbuddy_intl_state_path": path},
+        proxy_overrides={"workbuddy_state_path": path},
     ) as stack:
         proxy = stack["proxy"]
         client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
@@ -9238,19 +9249,19 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
             client.request(
                 "POST",
                 "/v1/chat/completions",
-                json.dumps({"model": "deepseek-v4.1-flash-intl"}),
+                json.dumps({"model": "deepseek-v4.1-flash"}),
             )
             response = client.getresponse()
             assert response.status == 200
             finish.set()
             assert response.read() == b'{"code":6003,"msg":"frequency limited"} '
             deadline = time.monotonic() + 2
-            while not proxy.lanes["workbuddy-intl-oauth"].snapshot()["cooldown_active"]:
+            while not proxy.lanes["workbuddy-oauth"].snapshot()["cooldown_active"]:
                 assert time.monotonic() < deadline, (
                     "ladder cooldown not armed after EOF"
                 )
                 time.sleep(0.005)
-            lane_state = proxy.lanes["workbuddy-intl-oauth"].snapshot()
+            lane_state = proxy.lanes["workbuddy-oauth"].snapshot()
             assert lane_state["hold_reason"] is None
             # 6003 is a credential/frequency signal. The CN/INTL split keeps
             # its lane-wide cooldown out of CN, while the model-specific

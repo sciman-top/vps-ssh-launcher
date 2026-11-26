@@ -552,10 +552,6 @@ expected = {
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ],
-    "workbuddy-intl-oauth": [
-        "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
-    ],
 }
 
 expected_max_inflight = {
@@ -564,7 +560,6 @@ expected_max_inflight = {
     "zcode-start-plan": 1,
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
-    "workbuddy-intl-oauth": 1,
 }
 expected_rpm = {
     "chatgpt-oauth": 24,
@@ -572,7 +567,6 @@ expected_rpm = {
     "zcode-start-plan": 20,
     "antigravity-oauth": 12,
     "workbuddy-oauth": 12,
-    "workbuddy-intl-oauth": 12,
 }
 if set(lanes) != set(expected):
     raise SystemExit(1)
@@ -598,7 +592,7 @@ for name, models in expected.items():
         or not isinstance(snapshot.get("model_cooldowns"), dict)
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "workbuddy-oauth", "workbuddy-intl-oauth"} and (
+    if name in {"antigravity-oauth", "workbuddy-oauth"} and (
         snapshot.get("strict_backoff") is not True
         or snapshot.get("state_persisted") is not True
         or snapshot.get("state_write_failed") is not False
@@ -612,7 +606,6 @@ for name, models in expected.items():
     if name in {
         "antigravity-oauth",
         "workbuddy-oauth",
-        "workbuddy-intl-oauth",
         "chatgpt-oauth",
     }:
         # Report the running breaker, not the write-ahead disk marker which
@@ -698,19 +691,10 @@ then
 else
   mark_fail workbuddy-risk-state-permissions
 fi
-if python3 - <<'PY'
-import grp, pathlib, pwd
-p = pathlib.Path('/var/lib/cpa-admission/workbuddy-intl-risk.json')
-uid = pwd.getpwnam('nobody').pw_uid
-gid = grp.getgrnam('nogroup').gr_gid
-assert not p.is_symlink() and p.is_file()
-assert p.stat().st_uid == uid and p.stat().st_gid == gid and p.stat().st_mode & 0o777 == 0o600
-assert p.parent.stat().st_uid == uid and p.parent.stat().st_gid == gid and p.parent.stat().st_mode & 0o777 == 0o700
-PY
-then
-  echo workbuddy-intl-risk-state-permissions=OK
+if [ -e /var/lib/cpa-admission/workbuddy-intl-risk.json ] || [ -L /var/lib/cpa-admission/workbuddy-intl-risk.json ]; then
+  mark_fail workbuddy-intl-risk-state-retired
 else
-  mark_fail workbuddy-intl-risk-state-permissions
+  echo workbuddy-intl-risk-state=ABSENT
 fi
 MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
 MGMT_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
@@ -3173,7 +3157,6 @@ from pathlib import Path
 STATE_FILES = {
     "chatgpt-oauth": "chatgpt-risk.json",
     "workbuddy-oauth": "workbuddy-risk.json",
-    "workbuddy-intl-oauth": "workbuddy-intl-risk.json",
     "antigravity-oauth": "antigravity-risk.json",
     "claude-oauth": "claude-risk.json",
 }
@@ -3393,19 +3376,14 @@ for key, expected in SWITCHES:
     if value != expected:
         drift.append(f"{key}:{str(value).lower()}")
 
-# 2026-11-17 (user directive): the INTL lane is CLOSED DARK — the plugin is
-# disabled so deepseek-v4.1-flash-sg / -intl are invisible and unusable while
-# every declaration (pin, bridge, admission lane, settings) stays in place.
-# Re-enabling = flip plugins.configs.workbuddy-ai-provider.enabled back to
-# true (config reload brings the names back). Enabled while closed = drift.
-if not isinstance(intl_section, dict) or intl_section.get("enabled") is not False:
-    drift.append("intl_plugin:not_disabled")
-    print("workbuddy-intl-plugin=ENABLED expected=disabled note=closed_dark_20261117")
-elif intl_section.get("token_keepalive") is False:
-    print("workbuddy-intl-plugin=disabled keepalive=off note=closed_dark_20261117")
+# 2026-11-26: workbuddy-ai-provider (INTL) is formally uninstalled/retired.
+# Config sections under plugins.configs, oauth.model-alias, oauth.excluded-models,
+# and oauth.settings must be absent while the preserved auth files stay disabled.
+if isinstance(intl_section, dict):
+    drift.append("intl_plugin:config_present")
+    print("workbuddy-intl-plugin=PRESENT expected=absent note=uninstalled_20261126")
 else:
-    drift.append("intl_plugin:token_keepalive_not_false")
-    print("workbuddy-intl-plugin=disabled keepalive=NOT_OFF expected=off")
+    print("workbuddy-intl-plugin=absent note=uninstalled_20261126")
 
 # The deployed config carries the bridge inside the oauth: block
 # (oauth.model-alias); the top-level spelling is a legacy fallback.
@@ -3415,26 +3393,11 @@ if isinstance(oauth_block, dict) and isinstance(oauth_block.get("model-alias"), 
     alias_map = oauth_block.get("model-alias")
 elif isinstance(config, dict) and isinstance(config.get("oauth-model-alias"), dict):
     alias_map = config.get("oauth-model-alias")
-raw_entries = alias_map.get("workbuddy-ai-provider") if isinstance(alias_map, dict) else None
-bridge = {}
-if isinstance(raw_entries, list):
-    for entry in raw_entries:
-        if isinstance(entry, dict) and isinstance(entry.get("alias"), str):
-            bridge[entry["alias"]] = entry.get("name")
-expect_bridge = {
-    "deepseek-v4.1-flash-intl": "deepseek-v4.1-flash-sg",
-}
-missing = sorted(a for a, name in expect_bridge.items() if bridge.get(a) != name)
-# 2026-11-17 user-directed rename, same-day retirement: the interim hy4free
-# alias and then hy4flash-free itself left the surface, so the only bridge
-# entry left is the intl fork alias over the declared-but-closed sg pin. Any
-# other alias on this channel is drift.
-extra = sorted(a for a in bridge if a not in expect_bridge)
-if missing or extra:
-    drift.append("oauth_model_alias:" + ",".join(missing + extra))
-    print("workbuddy-alias-bridge=MISSING expected=intl-only")
+if isinstance(alias_map, dict) and "workbuddy-ai-provider" in alias_map:
+    drift.append("oauth_model_alias:workbuddy-ai-provider_present")
+    print("workbuddy-intl-alias=PRESENT expected=absent")
 else:
-    print("workbuddy-alias-bridge=OK intl-only")
+    print("workbuddy-intl-alias=absent")
 if isinstance(alias_map, dict) and "workbuddy" in alias_map:
     drift.append("oauth_model_alias:legacy_workbuddy_channel_present")
     print("workbuddy-alias-legacy-channel=PRESENT note=remove")
@@ -3444,13 +3407,23 @@ if isinstance(oauth_block, dict) and isinstance(oauth_block.get("excluded-models
     excluded = oauth_block.get("excluded-models")
 elif isinstance(config, dict) and isinstance(config.get("oauth-excluded-models"), dict):
     excluded = config.get("oauth-excluded-models")
-for provider_key in ("workbuddy-provider", "workbuddy-ai-provider"):
-    lst = excluded.get(provider_key) if isinstance(excluded, dict) else None
-    if isinstance(lst, list) and lst:
-        print(f"workbuddy-excluded-{provider_key}=PRESENT n={len(lst)}")
-    else:
-        drift.append(f"oauth_excluded_models:{provider_key}")
-        print(f"workbuddy-excluded-{provider_key}=ABSENT note=realm_discovery_reopened")
+lst = excluded.get("workbuddy-provider") if isinstance(excluded, dict) else None
+if isinstance(lst, list) and lst:
+    print(f"workbuddy-excluded-workbuddy-provider=PRESENT n={len(lst)}")
+else:
+    drift.append("oauth_excluded_models:workbuddy-provider")
+    print("workbuddy-excluded-workbuddy-provider=ABSENT note=realm_discovery_reopened")
+if isinstance(excluded, dict) and "workbuddy-ai-provider" in excluded:
+    drift.append("oauth_excluded_models:workbuddy-ai-provider_present")
+    print("workbuddy-excluded-workbuddy-ai-provider=PRESENT expected=absent")
+else:
+    print("workbuddy-excluded-workbuddy-ai-provider=absent")
+settings_block = oauth_block.get("settings") if isinstance(oauth_block, dict) else None
+if isinstance(settings_block, dict) and "workbuddy-ai-provider" in settings_block:
+    drift.append("oauth_settings:workbuddy-ai-provider_present")
+    print("workbuddy-intl-settings=PRESENT expected=absent")
+else:
+    print("workbuddy-intl-settings=absent")
 
 # 2026-11-20 CN-lane protection. The INTL plugin is closed dark, but its seven
 # auth files stayed enabled and the plugin's periodic credit sweep kept reading

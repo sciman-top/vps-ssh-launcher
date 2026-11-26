@@ -114,9 +114,19 @@ def _run(
     upstream, upstream_thread = _serve(CreditsUpstream)
     loaded = config()
     # The test intentionally shortens both lane queues, but keeps their
-    # production routing and independent persistent circuit state. The intl
-    # lane carries no zero-cost model in production any more, so the bypass
-    # scenario rides the synthetic fixture name.
+    # production routing and independent persistent circuit state. Since
+    # workbuddy-intl-oauth is retired in production, inject a synthetic intl
+    # lane cloned from workbuddy-oauth for multi-lane isolation coverage.
+    if not any(item["name"] == "workbuddy-intl-oauth" for item in loaded["lanes"]):
+        cn_template = dict(lane(loaded, "workbuddy-oauth"))
+        cn_template["name"] = "workbuddy-intl-oauth"
+        cn_template["models"] = ("deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg")
+        loaded["lanes"] = (*loaded["lanes"], cn_template)
+        loaded["model_lanes"] = {
+            **loaded["model_lanes"],
+            "deepseek-v4.1-flash-intl": "workbuddy-intl-oauth",
+            "deepseek-v4.1-flash-sg": "workbuddy-intl-oauth",
+        }
     intl_configured = lane(loaded, "workbuddy-intl-oauth")
     intl_configured["models"] = list(intl_configured["models"]) + [ZERO_COST_FIXTURE]
     intl_configured["zero_cost_models"] = [ZERO_COST_FIXTURE]

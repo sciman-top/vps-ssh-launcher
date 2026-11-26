@@ -256,6 +256,11 @@ if [ -e "$RISK_STATE_DIR/workbuddy-intl-risk.json" ]; then
 else
   : > "$BK/workbuddy-intl-risk.json.missing"
 fi
+if [ -f "$DIR/plugins/workbuddy-ai-provider.so" ]; then
+  cp -a "$DIR/plugins/workbuddy-ai-provider.so" "$BK/workbuddy-ai-provider.so"
+else
+  : > "$BK/workbuddy-ai-provider.so.missing"
+fi
 if [ "$INTL_EXPECTED_DISABLED" -gt 0 ]; then
   mkdir -m 700 "$BK/intl-auth"
   intl_backup_index=0
@@ -468,6 +473,11 @@ restore_all() {
     cp -a "$BK/workbuddy-intl-risk.json" "$RISK_STATE_DIR/workbuddy-intl-risk.json" || mark_rollback_failed
   elif [ -f "$BK/workbuddy-intl-risk.json.missing" ]; then
     rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" || mark_rollback_failed
+  fi
+  if [ -f "$BK/workbuddy-ai-provider.so" ]; then
+    cp -a "$BK/workbuddy-ai-provider.so" "$DIR/plugins/workbuddy-ai-provider.so" || mark_rollback_failed
+  elif [ -f "$BK/workbuddy-ai-provider.so.missing" ]; then
+    rm -f "$DIR/plugins/workbuddy-ai-provider.so" || mark_rollback_failed
   fi
   # Restore each snapshot to its original filename. The snapshot copy exists
   # because the projection may rewrite an auth file's bytes (disabled flag);
@@ -2047,6 +2057,7 @@ for provider, models in plugin_exclusions_manifest.items():
             plugin_exclusions.append(model)
             present.add(model.strip().lower())
     oauth_exclusions[provider] = plugin_exclusions
+oauth_exclusions.pop("workbuddy-ai-provider", None)
 oauth_block_after["excluded-models"] = oauth_exclusions
 
 # Context-window metadata is pinned in the same manifest as the routes. The
@@ -2081,6 +2092,7 @@ for channel, entries in oauth_settings_manifest.items():
             f"REFUSE oauth_settings.{channel} contains duplicate model settings"
         )
     oauth_settings_after[channel.strip()] = normalized_entries
+oauth_settings_after.pop("workbuddy-ai-provider", None)
 oauth_block_after["settings"] = oauth_settings_after
 
 # OAuth model aliases rename an existing upstream model to the client-visible
@@ -2162,6 +2174,7 @@ for channel, entries in oauth_aliases_manifest.items():
             remaining_exclusions.append(pattern)
         oauth_exclusions[channel] = remaining_exclusions
     oauth_aliases_after[channel.strip()] = normalized_aliases
+oauth_aliases_after.pop("workbuddy-ai-provider", None)
 oauth_block_after["model-alias"] = oauth_aliases_after
 
 # OAuth request-scoped error rules (v8.0.79, oauth.request-scoped-errors):
@@ -2390,6 +2403,7 @@ if plugins_after is not None:
     if plugin_configs_after is not None and not isinstance(plugin_configs_after, dict):
         raise SystemExit("REFUSE plugins.configs must be a mapping")
     if isinstance(plugin_configs_after, dict):
+        plugin_configs_after.pop("workbuddy-ai-provider", None)
         for plugin, field, value in (
             ("workbuddy", "scheduler_priority_reclaim", True),
             ("workbuddy-provider", "retry_on_4xx", 0),
@@ -2990,10 +3004,6 @@ expected = {
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ],
-    "workbuddy-intl-oauth": [
-        "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
-    ],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
@@ -3001,7 +3011,6 @@ expected_max_inflight = {
     "zcode-start-plan": 1,
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
-    "workbuddy-intl-oauth": 1,
 }
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):
@@ -3025,8 +3034,7 @@ for lane in lanes:
     if lane.get("cooldown_cap_seconds") > config["retry_after_max_seconds"]:
         raise SystemExit(1)
     expected_rpm = {"chatgpt-oauth": 24, "zhipu-coding-plan": 30, "zcode-start-plan": 20,
-                    "antigravity-oauth": 12, "workbuddy-oauth": 12,
-                    "workbuddy-intl-oauth": 12}
+                    "antigravity-oauth": 12, "workbuddy-oauth": 12}
     if lane.get("requests_per_minute") != expected_rpm.get(lane.get("name")):
         raise SystemExit(1)
     if not ({429, 503} <= set(lane.get("capacity_statuses", []))):
@@ -3039,85 +3047,9 @@ then
   echo "ROLLBACK admission_config_contract"
   exit 1
 fi
-if ! python3 - "$RISK_STATE_DIR/workbuddy-intl-risk.json" <<'PY'
-import json
-import os
-import pwd
-import grp
-import stat
-import sys
-import tempfile
-from pathlib import Path
-
-path = Path(sys.argv[1])
-directory = path.parent
-if directory.is_symlink() or not directory.is_dir():
-    raise SystemExit("workbuddy-intl risk state directory is not a directory")
-owner = pwd.getpwnam("nobody").pw_uid
-group = grp.getgrnam("nogroup").gr_gid
-directory_stat = directory.stat()
-if (
-    directory_stat.st_uid != owner
-    or directory_stat.st_gid != group
-    or stat.S_IMODE(directory_stat.st_mode) != 0o700
-):
-    raise SystemExit("workbuddy-intl risk state directory permissions drift")
-
-if path.exists() or path.is_symlink():
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit("workbuddy-intl risk state is not a regular file")
-    file_stat = path.stat()
-    if (
-        file_stat.st_uid != owner
-        or file_stat.st_gid != group
-        or stat.S_IMODE(file_stat.st_mode) != 0o600
-    ):
-        raise SystemExit("workbuddy-intl risk state permissions drift")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        raise SystemExit("workbuddy-intl risk state is invalid JSON") from None
-    if (
-        not isinstance(value, dict)
-        or value.get("version") != 1
-        or type(value.get("not_before")) not in (int, float)
-        or (
-            "hold_reason" in value
-            and value["hold_reason"] is not None
-            and not isinstance(value["hold_reason"], str)
-        )
-    ):
-        raise SystemExit("workbuddy-intl risk state schema drift")
-    print("workbuddy-intl-risk-state=EXISTING")
-else:
-    payload = json.dumps(
-        {"version": 1, "not_before": 0, "hold_reason": None},
-        separators=(",", ":"),
-    )
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(directory))
-    try:
-        os.fchmod(fd, 0o600)
-        os.fchown(fd, owner, group)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if fd != -1:
-            os.close(fd)
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-    print("workbuddy-intl-risk-state=INITIALIZED")
-PY
-then
-  restore_all
-  echo "ROLLBACK workbuddy-intl-risk_state"
-  exit 1
-fi
+rm -f "$DIR/plugins/workbuddy-ai-provider.so"
+rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json"
+echo "WORKBUDDY_INTL_UNINSTALLED plugin=removed risk_state=removed"
 if ! grep -Fq 'ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh' "$ADMISSION_UNIT" ||
    ! grep -Fq 'VPS_SSH_LAUNCHER_ADMISSION_TARGET=/opt/cliproxyapi/cpa-admission.py' "$ADMISSION_LAUNCHER" ||
    ! grep -Fq 'VPS_SSH_LAUNCHER_ADMISSION_CONFIG=/opt/cliproxyapi/cpa-admission.json' "$ADMISSION_LAUNCHER"; then

@@ -165,19 +165,12 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         host_lists: dict[str, Any] = {
             "workbuddy-provider": [*cn_expected, "operator-retired-model"],
-            "workbuddy-ai-provider": list(
-                manifest["plugin_exclusions"]["workbuddy-ai-provider"]
-            ),
         }
         block_after = run(manifest, host_lists)
         # The host retirement keeps its place; the missing entry is appended.
         self.assertEqual(
             host_lists["workbuddy-provider"],
             [*cn_expected, "operator-retired-model", "glm-9.9"],
-        )
-        self.assertEqual(
-            host_lists["workbuddy-ai-provider"],
-            manifest["plugin_exclusions"]["workbuddy-ai-provider"],
         )
         self.assertIs(block_after["excluded-models"], host_lists)
         settled = list(host_lists["workbuddy-provider"])
@@ -200,22 +193,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             ),
             ("workbuddy-provider", "glm-5.4", "blocks a declared plugin model"),
             ("workbuddy-provider", "glm-5.4-wb", "blocks a declared plugin model"),
-            # The INTL pin and the alias that renames it.
-            (
-                "workbuddy-ai-provider",
-                "deepseek-v4.1-flash-sg",
-                "blocks a declared plugin model",
-            ),
-            (
-                "workbuddy-ai-provider",
-                "deepseek-v4.1-flash-intl",
-                "blocks a declared plugin model",
-            ),
         ):
             clashing = json.loads(json.dumps(manifest))
             clashing["plugin_exclusions"][provider].append(bad_manifest)
             with self.assertRaises(SystemExit) as clash_exc:
-                run(clashing, {"workbuddy-provider": [], "workbuddy-ai-provider": []})
+                run(clashing, {"workbuddy-provider": []})
             self.assertIn(
                 "REFUSE plugin exclusion " + message, str(clash_exc.exception)
             )
@@ -230,7 +212,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
 
         with self.assertRaises(SystemExit) as shape_exc:
-            run(manifest, {"workbuddy-provider": "auto", "workbuddy-ai-provider": []})
+            run(manifest, {"workbuddy-provider": "auto"})
         self.assertIn(
             "REFUSE oauth.excluded-models.workbuddy-provider must be a list of strings",
             str(shape_exc.exception),
@@ -246,10 +228,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(policy["validate_config"](config), [])
         # A model the upstream adds is a wider lane until its exclusion is
         # recorded and projected.
-        for provider, model in (
-            ("workbuddy-provider", "step-5-preview"),
-            ("workbuddy-ai-provider", "hy4flash-free"),
-        ):
+        for provider, model in (("workbuddy-provider", "step-5-preview"),):
             mutated = json.loads(json.dumps(config))
             mutated["oauth"]["excluded-models"][provider].remove(model)
             issues = policy["validate_config"](mutated)
@@ -283,7 +262,6 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         for provider, model, message in (
             ("workbuddy-provider", "deepseek-v4.1-flash", "pin or alias"),
             ("workbuddy-provider", "glm-5.4", "pin or alias"),
-            ("workbuddy-ai-provider", "deepseek-v4.1-flash-intl", "pin or alias"),
             ("codex", "gpt-5.5", "declared plugin channel"),
         ):
             bad_manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
@@ -759,13 +737,13 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             json.dumps(route_manifest["oauth_settings"]["codex"])
         )
         self.assertEqual(
-            config["oauth"]["model-alias"]["workbuddy-ai-provider"],
-            route_manifest["oauth_model_aliases"]["workbuddy-ai-provider"],
+            config["oauth"]["model-alias"]["workbuddy-provider"],
+            route_manifest["oauth_model_aliases"]["workbuddy-provider"],
         )
-        config["oauth"]["model-alias"]["workbuddy-ai-provider"][0]["fork"] = False
+        config["oauth"]["model-alias"]["workbuddy-provider"][0]["alias"] = "glm-drift"
         self.assertTrue(
             any(
-                "oauth.model-alias.workbuddy-ai-provider rename drift" in issue
+                "oauth.model-alias.workbuddy-provider rename drift" in issue
                 for issue in policy["validate_config"](config)
             )
         )
@@ -1285,8 +1263,8 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["oauth_model_aliases"]["workbuddy-ai-provider"][0]["name"] = (
-            "deepseek-v4.1-flash-unknown"
+        manifest["oauth_model_aliases"]["workbuddy-provider"][0]["name"] = (
+            "glm-5.3-unknown"
         )
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(

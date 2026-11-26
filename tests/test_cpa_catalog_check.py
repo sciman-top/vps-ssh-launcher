@@ -38,21 +38,12 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     assert cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-provider", "cn"
     ) == ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4"]
-    intl_models = cpa_catalog_check.plugin_lane_models(
-        manifest, "workbuddy-ai-provider", "intl"
-    )
-    assert intl_models == ["deepseek-v4.1-flash-sg"]
-    # The fork bridge unfolds to the client names: sg keeps its bare name
-    # (fork=true adds the alias alongside it). hy4flash-free retired
-    # 2026-11-17 (user directive); deepseek-v4.1-flash-sg stays declared but
-    # is closed dark with the INTL plugin disabled in config.yaml.
-    assert cpa_catalog_check.plugin_lane_aliases(
-        manifest, "workbuddy-ai-provider", intl_models
-    ) == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg"]
     assert (
-        cpa_catalog_check.plugin_lane_models(
-            manifest, "workbuddy-ai-provider", "missing"
-        )
+        cpa_catalog_check.plugin_lane_models(manifest, "workbuddy-ai-provider", "intl")
+        == []
+    )
+    assert (
+        cpa_catalog_check.plugin_lane_models(manifest, "workbuddy-provider", "missing")
         == []
     )
     errors: list[str] = []
@@ -63,10 +54,30 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ]
-    assert derived["workbuddy-intl-oauth"] == [
-        "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
+    assert "workbuddy-intl-oauth" not in derived
+    # Synthetic multi-realm isolation check (fork alias unfolding).
+    synthetic = json.loads(json.dumps(manifest))
+    synthetic["plugin_routes"].append(
+        {
+            "provider": "workbuddy-ai-provider",
+            "realm": "intl",
+            "models": ["deepseek-v4.1-flash-sg"],
+        }
+    )
+    synthetic["oauth_model_aliases"]["workbuddy-ai-provider"] = [
+        {
+            "name": "deepseek-v4.1-flash-sg",
+            "alias": "deepseek-v4.1-flash-intl",
+            "fork": True,
+        }
     ]
+    intl_models = cpa_catalog_check.plugin_lane_models(
+        synthetic, "workbuddy-ai-provider", "intl"
+    )
+    assert intl_models == ["deepseek-v4.1-flash-sg"]
+    assert cpa_catalog_check.plugin_lane_aliases(
+        synthetic, "workbuddy-ai-provider", intl_models
+    ) == ["deepseek-v4.1-flash-intl", "deepseek-v4.1-flash-sg"]
 
 
 def test_missing_lane_source_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:

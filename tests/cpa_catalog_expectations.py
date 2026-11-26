@@ -117,10 +117,6 @@ ADMISSION_LANE_MODELS = {
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
     ],
-    "workbuddy-intl-oauth": [
-        "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
-    ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
@@ -131,29 +127,15 @@ ADMISSION_LANE_MODELS = {
 # route manifest so a CN/INTL swap is caught instead of silently accepted by
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
-    # 2026-11-17 luode0320 cutover: pins are the upstream ids each realm's
-    # dynamic catalog actually serves. 2026-11-17 (user directive, second
-    # batch): hy4flash-free (the x0.00 free tier that surfaced bare after the
-    # hy4free alias rename) is RETIRED — removed from the pin and tombstoned
-    # in the deployed oauth-excluded-models; the doctor client-model-catalog
-    # gate fails closed if it ever reappears. deepseek-v4.1-flash-sg stays
-    # DECLARED but closed dark: the workbuddy-ai-provider plugin is disabled
-    # in config.yaml (doctor intl-plugin gate pins disabled), so re-enabling
-    # is one flag flip that brings back both the sg bare name and the
-    # deepseek-v4.1-flash-intl fork alias. The CN pool still carries only the
-    # paid primary.
+    # 2026-11-26: workbuddy-ai-provider (INTL) is formally uninstalled/retired;
+    # only workbuddy-provider (CN) remains active.
     "cn": ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4"],
-    "intl": ["deepseek-v4.1-flash-sg"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
     "cn": [
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
-    ],
-    "intl": [
-        "deepseek-v4.1-flash-intl",
-        "deepseek-v4.1-flash-sg",
     ],
 }
 

@@ -112,9 +112,8 @@ def test_zero_cost_models_are_absent_after_hy4flash_free_retirement(
     loaded = admission.load_config(
         Path(__file__).resolve().parent.parent / "scripts/remote/cpa-admission.json"
     )
-    lane = next(
-        item for item in loaded["lanes"] if item["name"] == "workbuddy-intl-oauth"
-    )
+    assert all(item["name"] != "workbuddy-intl-oauth" for item in loaded["lanes"])
+    lane = next(item for item in loaded["lanes"] if item["name"] == "workbuddy-oauth")
     assert not lane.get("zero_cost_models")
 
 
