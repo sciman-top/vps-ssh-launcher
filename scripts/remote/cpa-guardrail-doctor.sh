@@ -547,8 +547,6 @@ expected = {
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
         "gemini-4-hydrogen-xhigh",
-        "claude-opus-5-5-high",
-        "claude-sonnet-5-5-high",
     ],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",

@@ -129,14 +129,6 @@
         {
           "name": "gemini-4-hydrogen-xhigh",
           "alias": "gemini-4-hydrogen-xhigh"
-        },
-        {
-          "name": "claude-opus-5-5-high",
-          "alias": "claude-opus-5-5-high"
-        },
-        {
-          "name": "claude-sonnet-5-5-high",
-          "alias": "claude-sonnet-5-5-high"
         }
       ]
     }
@@ -176,14 +168,6 @@
       {
         "name": "gemini-4-hydrogen-xhigh",
         "max-context-length": 1048576
-      },
-      {
-        "name": "claude-opus-5-5-high",
-        "max-context-length": 1000000
-      },
-      {
-        "name": "claude-sonnet-5-5-high",
-        "max-context-length": 1000000
       }
     ],
     "workbuddy-provider": [
@@ -283,7 +267,9 @@
     "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
+    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
+    "claude-sonnet-5-5-high",
     "gpt-oss-120b-medium",
     "gemini-4-carbon-high"
   ],

@@ -4854,7 +4854,7 @@ def test_collapse_antigravity_retry_user_turns_works_after_history() -> None:
     collapse = MODULE["collapse_antigravity_retry_user_turns"]
     body = json.dumps(
         {
-            "model": "claude-sonnet-5-5-high",
+            "model": "gemini-3.8-flash-high",
             "input": [
                 {"role": "user", "content": "initial task"},
                 {"role": "assistant", "content": "partial result"},
@@ -5219,7 +5219,7 @@ def test_omit_antigravity_historical_user_images_replaces_answered_images_only()
     omit = MODULE["omit_antigravity_historical_user_images"]
     raw = json.dumps(
         {
-            "model": "claude-sonnet-5-5-high",
+            "model": "gemini-3.8-flash-high",
             "input": [
                 {
                     "type": "message",
@@ -5289,7 +5289,7 @@ def test_omit_antigravity_historical_user_images_keeps_unanswered_and_other_lane
     omit = MODULE["omit_antigravity_historical_user_images"]
     unanswered = json.dumps(
         {
-            "model": "claude-sonnet-5-5-high",
+            "model": "gemini-3.8-flash-high",
             "input": [
                 {
                     "type": "message",
@@ -5675,7 +5675,7 @@ def test_antigravity_generic_429_only_cools_requested_model() -> None:
         client.request(
             "POST",
             "/v1/responses",
-            b'{"model":"claude-opus-5-5-high","stream":false}',
+            b'{"model":"gemini-4-hydrogen-xhigh","stream":false}',
         )
         response = client.getresponse()
         response.read()
@@ -5684,7 +5684,7 @@ def test_antigravity_generic_429_only_cools_requested_model() -> None:
             assert state._condition.wait_for(lambda: state.inflight == 0, timeout=2)
         snapshot = state.snapshot()
         assert snapshot["cooldown_scope"] == "model"
-        assert snapshot["model_cooldowns"]["claude-opus-5-5-high"] > 0
+        assert snapshot["model_cooldowns"]["gemini-4-hydrogen-xhigh"] > 0
         assert not snapshot["cooldown_active"]
     finally:
         client.close()
@@ -5875,7 +5875,7 @@ def test_antigravity_rate_limit_envelope_stays_lane_scoped(tmp_path: Path) -> No
     account-level signal: it keeps the shared lane breaker -- siblings are
     refused too -- instead of the model-first default, and it is exempt from
     the lane-to-model narrowing in release()."""
-    opus = "claude-opus-5-5-high"
+    opus = "gemini-4-hydrogen-xhigh"
     flash = "gemini-3.8-flash-high"
     body = json.dumps(
         {
@@ -6070,7 +6070,7 @@ def test_generic_huge_retry_hint_is_bounded_to_the_recheck_slot(
     Retry-After header claims 17504s must leave the lane open (no lane mirror
     on disk, sibling traffic 200) while the requested model is parked at the
     mirror cadence's recheck slot, not the advertised end."""
-    opus = "claude-opus-5-5-high"
+    opus = "gemini-4-hydrogen-xhigh"
     flash = "gemini-3.8-flash-high"
     body = json.dumps(
         {

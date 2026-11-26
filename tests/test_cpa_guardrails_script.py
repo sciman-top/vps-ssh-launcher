@@ -5372,7 +5372,7 @@ foreach ($case in @(
             self.assertIn(b"antigravity_lane=OK", result.stdout)
             before = list(candidate["oauth"]["excluded-models"]["antigravity"])
             candidate["oauth"]["excluded-models"]["antigravity"].append(
-                "claude-opus-5-5-high"
+                "gemini-3.8-flash-high"
             )
             self.assertNotEqual(run().returncode, 0)
             # The quarantine marker must name every configured lane alias
@@ -5380,7 +5380,7 @@ foreach ($case in @(
             # projects all of them into the provider exclusions.
             aliases = list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES)
             candidate["oauth"]["excluded-models"]["antigravity"].extend(
-                alias for alias in aliases if alias != "claude-opus-5-5-high"
+                alias for alias in aliases if alias != "gemini-3.8-flash-high"
             )
             marker = {
                 "version": 1,

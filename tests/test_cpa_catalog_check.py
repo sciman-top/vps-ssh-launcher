@@ -250,7 +250,7 @@ def test_context_overrides_must_match_live_manifest_windows(
     manifest["oauth_settings"]["antigravity"] = [
         entry
         for entry in manifest["oauth_settings"]["antigravity"]
-        if entry.get("name") != "claude-sonnet-5-5-high"
+        if entry.get("name") != "gemini-4-hydrogen-xhigh"
     ]
     unpinned = tmp_path / "cpa_provider_routes.json"
     unpinned.write_text(json.dumps(manifest), encoding="utf-8")
@@ -258,7 +258,7 @@ def test_context_overrides_must_match_live_manifest_windows(
     monkeypatch.setattr(cpa_catalog_check, "MANIFEST", unpinned)
     errors = cpa_catalog_check.check()
     assert any(
-        "claude-sonnet-5-5-high" in error and "no max-context-length" in error
+        "gemini-4-hydrogen-xhigh" in error and "no max-context-length" in error
         for error in errors
     ), errors
 

@@ -51,8 +51,6 @@ OAUTH_ROUTE_ALIASES = [
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     "gemini-3.8-flash-high",
     "gemini-4-hydrogen-xhigh",
-    "claude-opus-5-5-high",
-    "claude-sonnet-5-5-high",
 ]
 
 # Antigravity-exposed models retired from the lane on 2026-10-14, plus
@@ -92,7 +90,9 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
+    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
+    "claude-sonnet-5-5-high",
     "gpt-oss-120b-medium",
 ]
 

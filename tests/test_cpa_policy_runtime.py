@@ -74,7 +74,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             oauth_exclusions: dict[str, Any] = {
                 "antigravity": [
                     *manifest["antigravity_oauth_exclusions"],
-                    "claude-opus-5-5-high",
+                    "gemini-3.8-flash-high",
                 ]
             }
             scope: dict[str, Any] = {
@@ -87,11 +87,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 oauth_exclusions["antigravity"],
                 manifest["antigravity_oauth_exclusions"],
             )
-            self.assertNotIn("claude-opus-5-5-high", oauth_exclusions["antigravity"])
+            self.assertNotIn("gemini-3.8-flash-high", oauth_exclusions["antigravity"])
 
             clashing_manifest = json.loads(json.dumps(manifest))
             clashing_manifest["antigravity_oauth_exclusions"].append(
-                "claude-opus-5-5-high"
+                "gemini-3.8-flash-high"
             )
             with self.assertRaises(SystemExit) as clash_exc:
                 exec(
@@ -1466,7 +1466,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             previous = config["oauth"]["excluded-models"]["antigravity"]
             config["oauth"]["excluded-models"]["antigravity"] = [
                 *previous,
-                "claude-opus-5-5-high",
+                "gemini-3.8-flash-high",
             ]
             self.assertTrue(
                 validate(config), "blocking an active model requires a marker"
@@ -1522,7 +1522,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["antigravity_oauth_exclusions"].append("claude-opus-5-5-high")
+        manifest["antigravity_oauth_exclusions"].append("gemini-3.8-flash-high")
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(
             any("cannot be both routed and excluded" in issue for issue in issues),
