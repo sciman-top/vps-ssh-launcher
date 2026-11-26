@@ -45,3 +45,31 @@
 - 遵守外部 API 探测纪律，本次未向 `chatgpt-oauth` 发送额外合成请求；关闭 `codex-cloaking` 对 `server_is_overloaded` 频次的实际改善需通过接下来的自然桌面流量与 `cpa-admission` 日志观察验证。
 - 若关闭 cloaking 后官方桌面端自然流量仍高频复现 `server_is_overloaded`，则说明该波过载来自 OpenAI 侧全局容量或单账号软限流，届时按 L2 runbook 等待恢复或临时切换非 OAuth 渠道（如 `gpt-6.2-astra` API key 路由）。
 - `aliyun` 上的 `qq-codex-bot-provider-watchdog` 属于跨仓 `qq-astrbot-stack`，本次未跨仓修改；若希望彻底消除其周期性探测触发共享 `chatgpt-oauth` 冷却的噪音，可在 `qq-astrbot-stack` 仓单独降低其探测频次或停用对 OAuth 车道的探活。
+
+## 后续增补：修复 `cpa-admission` 早探时序错配与排队快拒（2026-11-26 晚）
+
+### 触发依据（上线后 14 分钟自然流量实证）
+
+- `disable-codex-cloaking: true` 上线后，22:36:51（`14:36:51Z`）官方桌面端 `gpt-6-luna` 仍触发上游 `502 server_is_overloaded`（`retry-after=354s`），说明本波过载来自 OpenAI 上游侧而非 cloaking 单因。
+- 同时捕获到两项网关侧放大器：
+  1. `14:36:59Z` 流内 `response.failed` 后仅 10s（`14:37:09Z`），`cpa-admission` 按 `early_probe_interval_seconds=10` 放行早探，直接撞上 CPA 核心 `transient-error-cooldown-seconds=30` 返回内部 `503`（13ms 零出网），二次升级退避阶梯。
+  2. 已在排队中的请求若遇到新到达的上游 `Retry-After` 超过其剩余排队截止时间，此前会继续空等满 120s 才报 `queue_timeout`。
+
+### 改动提交与远端投影回执
+
+- **`f20f1a4`** — `fix(cpa-admission): raise early_probe_interval_seconds from 10 to 35 past core 30s cooldown`
+  - `scripts/remote/cpa-admission.json`：`early_probe_interval_seconds` 从 `10` 提升至 `35`（严格大于 CPA 核心 `30s` 瞬时冷却）。
+  - `scripts/remote/cpa_policy.py`：在 `_admission_config_issues()` 中钉定 `early_probe_interval_seconds > EXPECTED_CONFIG_PATHS[("routing", "cooldown", "transient-error-cooldown-seconds")]`。
+  - `tests/test_cpa_admission.py`、`docs/runbooks/cpa-gateway.md`：同步更新单测与说明。
+- **`38b37aa`** — `fix(cpa-admission): fast-fail queued requests when server Retry-After exceeds deadline`
+  - `scripts/remote/cpa-admission.py` + `scripts/remote/cpa-admission-integrity-pin.txt`（新 pin `261a95eba2c31a34dcc1671d318a8ddf806ff763087ce9a02dfab9a16872c35d`）：当 `queued` 且 `self._server_not_before >= deadline and next_admission >= deadline` 时立即返回 `cooldown`。
+- **分层验证**：
+  - `repo_verified`：`scripts/run_gates.ps1 -RunParallel` 全绿（`CATALOG_CHECK=PASS`、`bandit`、`ruff`、`mypy` 165 files 0 issues、`pytest` `1896 passed, 30 skipped, 899 subtests passed in 101.36s`）；`scripts/check_docs.py` `DOCS_CHECK=PASS (42 documents)`。
+  - `filesystem_projected` + `host_loaded`（仅 `bwg`）：
+    1. 原子轮换（`outputs/deploy-admission-early-probe-fastfail-20261126.ps1`，先 `-DryRun` 后正式切换）：`DRY_RUN_OK` → `PREFLIGHT_OK`、`REQUEST_GUARD_EXCLUSIVE_OK`、`ADMISSION_IDLE_OK`、`ADMISSION_PIN_ROTATED old=dd49bd2c... new=261a95eb... config=ca018e92...`、`ADMISSION_INTEGRITY_OK`、`DEPLOY_OK`。
+       - 远端备份：`/opt/cliproxyapi/backups/20261126T160529.134871342Z-admission-early-probe-fastfail-20261126`。
+    2. 全量守卫投影（`scripts/cpa_bwg_guardrails.ps1 -Profile bwg -Apply`）：`GUARDRAILS_APPLIED`、`READY_STATUS=200`、`HEALTH_OK`、17/17 `PROJECTION_HASH_VERIFIED`。
+       - 远端备份：`/root/cpa-guardrails-backup-20261126T160608.269100610Z`。
+       - 校验和：`/opt/cliproxyapi/cpa-admission.py` `261a95eba2c31a34dcc1671d318a8ddf806ff763087ce9a02dfab9a16872c35d`、`/opt/cliproxyapi/cpa-admission.json` `ca018e92af69edb3c02600268ecee7f6d13a08082685b3245bbf13857b8fe0b9`、`/opt/cliproxyapi/cpa_policy.py` `ce30847a183f988c8c546dc3720b7830607d81d8a2aad18aec4e31bc1093612e`。
+    3. strict doctor：`DOCTOR_CONTRACT_OK`、`nginx-syntax=OK`；`cpa_status.py --profile bwg` 全部在役 OAuth 车道 `OK`。
+  - `controlled_live`（仅非 OAuth 车道）：`python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash chat` 通过（`4114/0 (0.0000)` → `4114/4096 (0.9956)`、`HEALTH_OK`）。
