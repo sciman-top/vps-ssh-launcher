@@ -134,3 +134,34 @@ gpt-6.1-terra 了？如果不支持，就去掉；……直接更新/升级 CPA/
 `/root/cpa-v814-build/rollback/workbuddy-provider-0.21.30.so` 还原为 0.21.30；随后把
 `scripts/remote/fork-binary.sha256` 改回 `de6169b8…` 并 `-Apply`。配置与投影回到
 `/root/cpa-guardrails-backup-20261125T172148.260268819Z`。
+
+## 附：alias-scope 切片的投影与验收（同日，提交 984a935+c9ec040）
+
+并行会话的两份已提交改动（zhipu 摘 glm-5.3 上 glm-5.4、CN WorkBuddy 走
+`glm-5.4-wb` fork 别名、重开 `gemini-4-hydrogen-xhigh`、admission 换代）由本会话
+按「门禁 → 投影 → doctor → 受控实战 → 推送」收口：
+
+- **门禁**：Full receipt 复用其 22:09:03Z 的 PASS（tree `5fc3475e…`，即 c9ec040
+  内容树），`gate_exit=0`。
+- **投影**：admission 换代不能混进批量 -Apply（`REFUSE
+  admission_pin_transition_pending` 是既有契约），走专用五件同换事务
+  `outputs/deploy-admission-alias-scope-20261126.ps1`：
+  `ADMISSION_PIN_ROTATED 3dd64909→dd49bd2c`、json `61550caf→cf51f4c6`、
+  routes `640656a0→88a6bad1`、`ADMISSION_INTEGRITY_OK`×2、
+  `ADMISSION_IDENTITY_NEUTRALIZE_FUNCTIONAL_OK`、`DEPLOY_OK`
+  （00:31:53Z，备份 `/opt/cliproxyapi/backups/20261126T003153.686036989Z-admission-alias-scope-20261126`）。
+  新 admission 的 `load_config` 会把车道表与 routes 清单交叉校验，所以 manifest
+  必须与 admission 同事务换（CN/INTL 拆分「manifest 缺一拒启」的先例重现），
+  且暂存校验要用 `route_manifest_path=` 指向暂存 routes 而非活体旧文件。
+  随后批量 `-Apply`：17 项 `PROJECTION_HASH_VERIFIED`、`HEALTH_OK`、
+  `READY_STATUS=200`（备份 `/root/cpa-guardrails-backup-20261126T004146.698446825Z`）。
+- **doctor**：`DOCTOR_CONTRACT_OK`，17/17 MATCH，目录 13 名（`glm-5.4`、
+  `glm-5.4-wb`、`gemini-4-hydrogen-xhigh` 在列，`glm-5.3` 已摘，
+  `MODEL_IDS_UNKNOWN=none`）。
+- **受控实战**（`outputs/accept-alias-scope-20261126.ps1`，五发全过，终态三车道
+  空闲）：zhipu `glm-5.4` 200/`GLM54_ZHIPU_OK`；zhipu `glm-5.3-flash` 200/OK（摘名
+  回归干净）；CN `glm-5.4-wb` 200/PONG（served `glm-5.4`，fork 别名解析正确）；
+  CN `deepseek-v4.1-flash` 200/PONG；`gemini-4-hydrogen-xhigh` 200/PONG
+  （served `gemini-4-hydrogen`——已知的同族名变体替换形态，非新回归）。
+- doctor 的投影 `want` 锚运行时 HEAD：`984a935`→`c9ec040` 相隔 4 分钟内的两次
+  doctor 读数会给出不同的 json want（`ebc00571`/`cf51f4c6`），均为正常瞬时态。
