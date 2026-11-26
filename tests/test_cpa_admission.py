@@ -1373,7 +1373,7 @@ def test_config_freezes_shared_official_account_lanes() -> None:
             480,
             900,
         )
-        assert loaded_lane["early_probe_interval_seconds"] == 10
+        assert loaded_lane["early_probe_interval_seconds"] == 35
     health = AdmissionProxy(loaded).health()
     assert health["retry_after_max_seconds"] == 86400
     assert health["retired_readers"] == 0
@@ -1456,6 +1456,10 @@ def test_policy_accepts_admission_contract_and_rejects_lane_drift() -> None:
     drifted_interval["early_probe_interval_seconds"] = "60"
     issues = policy["_admission_config_issues"](manifest, drifted_interval)
     assert any("early_probe_interval_seconds" in issue for issue in issues)
+
+    drifted_interval["early_probe_interval_seconds"] = 30
+    issues = policy["_admission_config_issues"](manifest, drifted_interval)
+    assert any("transient-error-cooldown-seconds" in issue for issue in issues)
 
 
 def test_requested_lane_only_admits_shared_generation_routes() -> None:
@@ -1936,16 +1940,16 @@ def test_lane_early_probe_respects_model_retry_after(monkeypatch: Any) -> None:
     for _ in range(2):
         failed = state.acquire(model="gpt-6.1-sol")
         state.release(failed, capacity_error=True, retry_after=None)
-    clock[0] += 11
+    clock[0] += 36
     blocked = state.acquire(model="gpt-6-luna")
     assert not blocked.admitted and blocked.reason == "model_cooldown"
-    assert blocked.retry_after == 3589
+    assert blocked.retry_after == 3564
     assert state.inflight == 0 and not state.probe_inflight
     sibling = state.acquire(model="gpt-6.1-sol")
     assert sibling.admitted and sibling.reason == "early_probe"
     state.release(sibling, capacity_error=False, retry_after=None)
     assert not state.acquire(model="gpt-6-luna").admitted
-    clock[0] += 3590
+    clock[0] += 3565
     recovered = state.acquire(model="gpt-6-luna")
     assert recovered.admitted
     state.release(recovered, capacity_error=False, retry_after=None)
@@ -2611,11 +2615,11 @@ def test_unsuccessful_probe_preserves_cooldown(monkeypatch: Any) -> None:
     for _ in range(2):
         lease = state.acquire()
         state.release(lease, capacity_error=True, retry_after=None)
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire()
     assert probe.probe
     state.release(probe, capacity_error=False, retry_after=None, successful=False)
-    assert state.snapshot()["cooldown_remaining"] == 49
+    assert state.snapshot()["cooldown_remaining"] == 24
     assert state.snapshot()["failure_streak"] == 2
     # The remaining cooldown exceeds this lane's queue budget, so the arrival
     # is refused outright instead of being held.
@@ -2648,7 +2652,7 @@ def test_successful_probe_does_not_clear_newer_retry_after(monkeypatch: Any) -> 
     state.release(first, capacity_error=True, retry_after=None)
     second = state.acquire()
     state.release(second, capacity_error=True, retry_after=None)
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire()
     assert probe.admitted and probe.probe
     state.release(concurrent, capacity_error=True, retry_after=60)
@@ -2712,6 +2716,32 @@ def test_queued_request_is_not_admitted_after_its_deadline(monkeypatch: Any) -> 
         state.release(acquired, capacity_error=False, retry_after=None)
 
 
+def test_queued_request_leaves_when_new_cooldown_exceeds_deadline(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded_lane = lane(config(), "chatgpt-oauth")
+    state = LaneState(loaded_lane)
+    held = [state.acquire() for _ in range(loaded_lane["max_inflight"])]
+
+    def open_cooldown(timeout: float) -> None:
+        if held:
+            clock[0] += 10
+            state.release(held.pop(), capacity_error=True, retry_after=306)
+            state.release(held.pop(), capacity_error=False, retry_after=None)
+        else:
+            clock[0] = 220.0
+
+    monkeypatch.setattr(state._condition, "wait", open_cooldown)
+    rejected = state.acquire(model="gpt-6.1-sol")
+    assert not rejected.admitted
+    assert rejected.reason == "cooldown"
+    assert rejected.retry_after == 306
+    assert rejected.waited_ms == 10_000
+    assert state.pending == 0
+
+
 def test_shed_rejection_advertises_the_next_lane_recheck(monkeypatch: Any) -> None:
     """A shed must not advertise a 1s retry.
 
@@ -2725,7 +2755,7 @@ def test_shed_rejection_advertises_the_next_lane_recheck(monkeypatch: Any) -> No
     state = LaneState(lane(config(), "chatgpt-oauth"))
 
     # Healthy lane, nothing scheduled: the probe cadence is the floor.
-    assert state._shed_retry_after(clock[0]) == 10
+    assert state._shed_retry_after(clock[0]) == 35
 
     # A cooldown longer than the cadence is the honest answer.
     state.open_until = clock[0] + 45
@@ -2733,8 +2763,8 @@ def test_shed_rejection_advertises_the_next_lane_recheck(monkeypatch: Any) -> No
 
     # A pending probe slot beyond the cooldown also delays the next recheck.
     state.open_until = clock[0] + 5
-    state._next_probe_at = clock[0] + 30
-    assert state._shed_retry_after(clock[0]) == 30
+    state._next_probe_at = clock[0] + 40
+    assert state._shed_retry_after(clock[0]) == 40
 
 
 def test_capacity_classifier_ignores_generated_text_and_routing_errors() -> None:
@@ -2933,7 +2963,7 @@ def test_model_cooldown_parks_only_the_named_model(monkeypatch: Any) -> None:
     assert state.snapshot()["model_cooldowns"] == {"gpt-6-luna": 60}
 
     # One probe per interval re-tests the parked model.
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire(model="gpt-6-luna")
     assert probe.admitted and probe.probe and probe.model_probe
     assert probe.reason == "model_half_open"
@@ -2943,7 +2973,7 @@ def test_model_cooldown_parks_only_the_named_model(monkeypatch: Any) -> None:
     assert state.snapshot()["model_cooldowns"]["gpt-6-luna"] == 120
     assert state.snapshot()["cooldown_remaining"] == 0
 
-    clock[0] = 122.0
+    clock[0] = 172.0
     healed = state.acquire(model="gpt-6-luna")
     assert healed.admitted and healed.model_probe
     state.release(healed, capacity_error=False, retry_after=None)
@@ -3004,7 +3034,7 @@ def test_model_probe_success_cannot_clear_a_newer_model_failure(
             lease, capacity_error=True, retry_after=None, capacity_scope="model"
         )
 
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire(model="gpt-6-luna")
     assert probe.model_probe
     # A newer failure for the same model lands while the probe is in flight, so
@@ -3027,7 +3057,7 @@ def test_lane_probe_answered_with_a_model_marker_releases_the_lane(
         state.release(lease, capacity_error=True, retry_after=None)
     assert state.snapshot()["cooldown_remaining"] > 0
 
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire(model="gpt-6-luna")
     assert probe.admitted and probe.probe and not probe.model_probe
     # The probe was answered with a model marker: the account is reachable, so
@@ -3104,7 +3134,7 @@ def test_lane_scoped_failures_build_a_per_model_streak(monkeypatch: Any) -> None
     assert state.snapshot()["model_cooldowns"] == {"gpt-6-luna": 59}
 
     # One probe per interval re-tests the parked model; success clears it.
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire(model="gpt-6-luna")
     assert probe.admitted and probe.probe and probe.model_probe
     state.release(probe, capacity_error=False, retry_after=None)
@@ -3128,7 +3158,7 @@ def test_lane_probe_success_clears_the_probing_models_streak(
     assert state.snapshot()["cooldown_remaining"] > 0
     assert state.snapshot()["model_cooldowns"] == {"gpt-6.1-sol": 60}
 
-    clock[0] = 111.0
+    clock[0] = 136.0
     probe = state.acquire(model="gpt-6-luna")
     assert probe.admitted and probe.probe and not probe.model_probe
     state.release(probe, capacity_error=False, retry_after=None)

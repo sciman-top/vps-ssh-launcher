@@ -1627,9 +1627,18 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         elif type(max_body_bytes) is int and stream_probe_bytes > max_body_bytes:
             issues.append("admission stream_probe_bytes must not exceed max_body_bytes")
     early_probe_interval = admission.get("early_probe_interval_seconds")
+    core_transient_cooldown = EXPECTED_CONFIG_PATHS[
+        ("routing", "cooldown", "transient-error-cooldown-seconds")
+    ]
     if type(early_probe_interval) not in (int, float) or early_probe_interval <= 0:
         issues.append(
             "admission early_probe_interval_seconds must be a positive number"
+        )
+    elif early_probe_interval <= core_transient_cooldown:
+        issues.append(
+            f"admission early_probe_interval_seconds={early_probe_interval!r} must "
+            f"exceed core transient-error-cooldown-seconds ({core_transient_cooldown}) "
+            "so half-open early probes do not collide with CPA's internal 503 cooldown"
         )
 
     lanes = admission.get("lanes")
