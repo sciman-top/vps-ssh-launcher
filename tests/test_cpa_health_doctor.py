@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 from cpa_catalog_expectations import (
     ALL_OAUTH_ROUTE_ALIASES,
-    ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
     PROVIDER_MATRIX_TAIL,
 )
@@ -177,7 +176,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         catalog = {
             "data": [
                 {"id": model}
-                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+                for model in ["gemini-4-hydrogen-xhigh", *HEALTH_FIXTURE_CATALOG_IDS]
             ]
         }
         response = mock.MagicMock()
@@ -227,7 +226,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         catalog = {
             "data": [
                 {"id": model}
-                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+                for model in ["gemini-4-hydrogen-xhigh", *HEALTH_FIXTURE_CATALOG_IDS]
             ]
         }
         malformed = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
@@ -1022,62 +1021,83 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
     def test_antigravity_accepts_only_its_exact_catalog_echo(self) -> None:
         """The legal -n echo passes while a prefix-like substitution fails."""
 
+        import json
         import runpy
+        import tempfile
 
-        health = runpy.run_path(
-            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        repo_remote = Path(__file__).parents[1] / "scripts/remote"
+        manifest = json.loads(
+            (repo_remote / "cpa_provider_routes.json").read_text(encoding="utf-8")
         )
         alias = "gemini-3.8-flash-high"
-        self.assertEqual(alias, ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0])
-        echo_map = health["_ANTIGRAVITY_ECHO_MODEL"]
-        self.assertIsInstance(echo_map, dict)
-        echo_set = echo_map[alias]
-        self.assertIsInstance(echo_set, set)
-        self.assertIn("gemini-3.8-flash-n", echo_set)
-        self.assertIn("gemini-3.8-flash-control", echo_set)
-        self.assertNotIn("gemini-3.8-flash-n-plus", echo_set)
-        self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
+        for route in manifest["oauth_routes"]:
+            if route.get("name") == "antigravity-oauth":
+                route["models"] = [{"name": alias, "alias": alias}]
+        manifest["antigravity_oauth_exclusions"] = [
+            name
+            for name in manifest.get("antigravity_oauth_exclusions", [])
+            if name != alias
+        ]
 
-        catalog = {
-            "data": [
-                {"id": model}
-                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
-            ]
-        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            health_copy = tmp_dir / "cpa-health.py"
+            health_copy.write_text(
+                (repo_remote / "cpa-health.py").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (tmp_dir / "cpa_provider_routes.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            health = runpy.run_path(str(health_copy))
+            echo_map = health["_ANTIGRAVITY_ECHO_MODEL"]
+            self.assertIsInstance(echo_map, dict)
+            echo_set = echo_map[alias]
+            self.assertIsInstance(echo_set, set)
+            self.assertIn("gemini-3.8-flash-n", echo_set)
+            self.assertIn("gemini-3.8-flash-control", echo_set)
+            self.assertNotIn("gemini-3.8-flash-n-plus", echo_set)
+            self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
 
-        def request(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-            if path == "models":
-                return catalog
-            assert body is not None
-            if body["model"] != alias:
-                content = (
-                    '{"sum":42,"word":"canary"}'
-                    if "19 + 23" in body["messages"][0]["content"]
-                    else "OK"
-                )
-                return {
-                    "model": CPA_TEST_PROVIDER_ALIASES.get(
-                        body["model"], body["model"]
-                    ),
-                    "choices": [
-                        {"message": {"content": content}, "finish_reason": "stop"}
-                    ],
-                }
-            return {
-                "model": "gemini-3.8-flash-n",
-                "choices": [
-                    {
-                        "message": {"content": '{"sum":42,"word":"canary"}'},
-                        "finish_reason": "stop",
-                    }
-                ],
+            catalog = {
+                "data": [
+                    {"id": model} for model in [alias, *HEALTH_FIXTURE_CATALOG_IDS]
+                ]
             }
 
-        with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
-            check = runpy.run_path(
-                str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
-            )["check"]
-            self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
+            def request(
+                path: str, body: dict[str, Any] | None = None
+            ) -> dict[str, Any]:
+                if path == "models":
+                    return catalog
+                assert body is not None
+                if body["model"] != alias:
+                    content = (
+                        '{"sum":42,"word":"canary"}'
+                        if "19 + 23" in body["messages"][0]["content"]
+                        else "OK"
+                    )
+                    return {
+                        "model": CPA_TEST_PROVIDER_ALIASES.get(
+                            body["model"], body["model"]
+                        ),
+                        "choices": [
+                            {"message": {"content": content}, "finish_reason": "stop"}
+                        ],
+                    }
+                return {
+                    "model": "gemini-3.8-flash-n",
+                    "choices": [
+                        {
+                            "message": {"content": '{"sum":42,"word":"canary"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+
+            with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
+                check = runpy.run_path(str(health_copy))["check"]
+                self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
 
     def test_oauth_monitor_reports_target_provider_metadata_without_codex(self) -> None:
         import json

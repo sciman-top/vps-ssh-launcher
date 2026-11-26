@@ -114,7 +114,6 @@
     {
       "name": "antigravity-oauth",
       "models": [
-        "gemini-3.8-flash-high",
         "gemini-4-hydrogen-xhigh"
       ],
       "max_inflight": 2,

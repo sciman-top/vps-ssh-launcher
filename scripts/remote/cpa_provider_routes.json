@@ -123,10 +123,6 @@
       "admission_lane": "antigravity-oauth",
       "models": [
         {
-          "name": "gemini-3.8-flash-high",
-          "alias": "gemini-3.8-flash-high"
-        },
-        {
           "name": "gemini-4-hydrogen-xhigh",
           "alias": "gemini-4-hydrogen-xhigh"
         }
@@ -161,10 +157,6 @@
       }
     ],
     "antigravity": [
-      {
-        "name": "gemini-3.8-flash-high",
-        "max-context-length": 1048576
-      },
       {
         "name": "gemini-4-hydrogen-xhigh",
         "max-context-length": 1048576
@@ -262,6 +254,7 @@
     "gemini-3.1-flash-image",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash-high",
     "gemini-3.8-flash-tiered",
     "gemini-4-argon-high",
     "gemini-4-neon-xhigh",

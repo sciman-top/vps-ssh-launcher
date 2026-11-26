@@ -2983,7 +2983,6 @@ expected = {
     "zhipu-coding-plan": ["glm-5.3-flash", "glm-5.4"],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": [
-        "gemini-3.8-flash-high",
         "gemini-4-hydrogen-xhigh",
     ],
     "workbuddy-oauth": [

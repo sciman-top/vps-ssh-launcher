@@ -49,7 +49,6 @@ OAUTH_ROUTE_ALIASES = [
 # admission: cpa_policy.py rejects a shared subscription OAuth route missing
 # its reviewed lane.
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
-    "gemini-3.8-flash-high",
     "gemini-4-hydrogen-xhigh",
 ]
 
@@ -79,6 +78,7 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3.1-flash-image",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash-high",
     # 2026-11-11 tombstone: the upstream catalog re-discovery surfaced the
     # tiered routing alias after the stabilization restart; the lane posture
     # stays flash-high-only (user decision), so the alias is pinned out of

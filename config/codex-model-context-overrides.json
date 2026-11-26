@@ -68,12 +68,6 @@
       "auto_compact_token_limit": 320000
     },
     {
-      "slug": "gemini-3.8-flash-high",
-      "context_window": 1048576,
-      "max_context_window": 1048576,
-      "auto_compact_token_limit": 320000
-    },
-    {
       "slug": "gemini-4-hydrogen-xhigh",
       "context_window": 1048576,
       "max_context_window": 1048576,
