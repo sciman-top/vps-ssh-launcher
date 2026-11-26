@@ -4,8 +4,7 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live names `gpt-6-luna` and
-`gpt-6.1-sol` / `gpt-6.1-terra` (`gpt-5.6-luna` served again from the
+The live names `gpt-6-luna`, `gpt-6.1-sol`, and `gpt-6.2-sol` (`gpt-5.6-luna` served again from the
 2026-10-02 restoration until its final retirement on 2026-11-20, tombstone
 in `oauth_exclusions`) (terra adopted 2026-10-27; both 6.1 names
 retired 2026-11-13 when the ChatGPT-Codex upstream rejected them with
@@ -119,7 +118,8 @@ ChatGPT Plus OAuth lane serves `gpt-6-luna` (restored on
 2026-10-02 after the 2026-10-01 retirement; `gpt-5.6-luna` rode the same
 restoration until its 2026-11-20 retirement) and `gpt-6.1-sol` /
 `gpt-6.1-terra` (retired 2026-11-13 on upstream model_not_found, restored
-2026-11-14 after the upstream catalog re-advertised both);
+2026-11-14 after the upstream catalog re-advertised both, retired again
+2026-11-26 by user directive);
 `gpt-6-sol` remains retired (2026-09-30).
 A second OAuth route, `antigravity-oauth` (Google AI Pro) is **in service**
 (user decision 2026-10-17, reverting the same-day quarantine note from 1e56b44

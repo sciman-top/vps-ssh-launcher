@@ -21,12 +21,12 @@ literals.
 # gpt-6.1-sol / gpt-6.1-terra retired 2026-11-13 after the upstream catalog
 # dropped both names (400 model_not_found); restored 2026-11-14 (user
 # directive) after a GET /backend-api/codex/models probe served both slugs
-# again. Catalog retirement now requires an explicit user directive
+# again. gpt-6.1-terra retired on user directive on 2026-11-26.
+# Catalog retirement now requires an explicit user directive
 # (docs/runbooks/cpa-catalog-change-checklist.md 前置铁律).
 OAUTH_ROUTE_ALIASES = [
     "gpt-6-luna",
     "gpt-6.1-sol",
-    "gpt-6.1-terra",
     "gpt-6.2-sol",
 ]
 

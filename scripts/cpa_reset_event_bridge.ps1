@@ -30,7 +30,7 @@ param(
   # set is derived from the manifest by scripts/cpa_catalog_check.py, which
   # fails the gate when either list drifts. The unattended default must stay a
   # name the current upstream serves.
-  [ValidateSet("gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol")]
+  [ValidateSet("gpt-6-luna", "gpt-6.1-sol", "gpt-6.2-sol")]
   [string]$RecoveryModel = "gpt-6-luna"
 )
 

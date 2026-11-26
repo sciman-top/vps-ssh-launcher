@@ -367,7 +367,6 @@ def main(argv: list[str] | None = None) -> int:
         choices=(
             "gpt-6-luna",
             "gpt-6.1-sol",
-            "gpt-6.1-terra",
             "gpt-6.2-sol",
         ),
         required=True,

@@ -23,8 +23,8 @@
 - **实例清单**（模型管理列表，值=manifest；CPA 暂不提供的模型保留行，
   回归后自动跟随）：gpt-6.1-sol 500K/450K；glm-5.3、glm-5.3-flash、
   deepseek-v4.1-flash、gemini-3.8-flash-high 1M/900K（按需）；
-  gpt-6-astra、gpt-6-luna、gpt-6.1-terra、
-  gpt-5.6-terra 272K/244,800（gpt-5.6-luna 已于 2026-11-20 退役）。
+  gpt-6-astra、gpt-6-luna、gpt-5.6-terra 272K/244,800（gpt-5.6-luna 已于
+  2026-11-20 退役；gpt-6.1-terra 已于 2026-11-26 按用户指令再次退役）。
   gemini-4-*（argon/hydrogen/neon）已于 2026-11-24 随第四例 TOS 退役，
   实例行可删；gemini-3.8-flash-high 同日先行退役后经用户指令复名保留
   （车道唯一 flash 档，上游无裸名 gemini-3.8-flash）。默认模型按操作者偏好（参考机为 gpt-6-luna）。
@@ -74,7 +74,7 @@ pwsh -NoProfile -File scripts/verify-codex-model-context.ps1
   `oauth_exclusions` + `codex_api_key_exclusions`，与 `gpt-6-sol` /
   `codex-auto-review` 同批永久排除），不再出现在 CPA 目录，校验脚本应将其视为
   `CONTEXT_SKIPPED`。
-- 另核：指针=托管名；meta hash 一致；config 四钉值在位；desktop picker 可见
-  gpt-6.1-terra（272K）。
+- 另核：指针=托管名；meta hash 一致；config 四钉值在位；desktop picker 不含
+  gpt-6.1-terra。
 - runbook 勘误或新坑位按两机闭环（fetch→review→integrate→work→focused
   verify→commit→…→push）回写本仓；本机桌面配置本身不入库。
