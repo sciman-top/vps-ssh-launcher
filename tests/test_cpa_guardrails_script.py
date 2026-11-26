@@ -3405,7 +3405,7 @@ except Exception as exc:
         version_check = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("EXPECTED_CN=0.21.31", version_check)
+        self.assertIn("EXPECTED_CN=0.21.32", version_check)
         self.assertIn("INTL_SO_PRESENT", version_check)
         self.assertIn("LEGACY_SO_PRESENT", version_check)
         self.assertIn("current_container_process_only", version_check)
@@ -3450,13 +3450,13 @@ except Exception as exc:
                 ),
                 # Uninstalled healthy state: only the CN plugin registers.
                 (
-                    "plugin registered plugin_id=workbuddy-provider version=0.21.31",
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.32",
                     0,
-                    "workbuddy-version=cn:0.21.31 intl:uninstalled",
+                    "workbuddy-version=cn:0.21.32 intl:uninstalled",
                 ),
                 # An INTL registration after uninstall = drift.
                 (
-                    "plugin registered plugin_id=workbuddy-provider version=0.21.31\n"
+                    "plugin registered plugin_id=workbuddy-provider version=0.21.32\n"
                     "plugin registered plugin_id=workbuddy-ai-provider version=0.1.40",
                     1,
                     "workbuddy-version=UNEXPECTED_REGISTRATION plugin=workbuddy-ai-provider got=0.1.40",
