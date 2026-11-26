@@ -2994,11 +2994,12 @@ expected = {
         "gpt-6.1-terra",
         "gpt-6.2-sol",
     ],
-    "zhipu-coding-plan": ["glm-5.3-flash", "glm-5.4"],
-    "zcode-start-plan": ["glm-5.3-flash-start"],
-    "antigravity-oauth": [
-        "gemini-4-hydrogen-xhigh",
+    "zhipu-coding-plan": [
+        "glm-5.3-flash",
+        "glm-5.4",
     ],
+    "zcode-start-plan": ["glm-5.3-flash-start"],
+    "antigravity-oauth": ["gemini-4-hydrogen-xhigh"],
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",

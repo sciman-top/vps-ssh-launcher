@@ -342,3 +342,68 @@ def test_context_overrides_compact_threshold_must_be_int_within_ceiling(
         "claude-sonnet-5-5-high" in error and "auto_compact_token_limit" in error
         for error in errors
     ), errors
+
+
+def test_sync_repairs_drifted_derived_files_in_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
+    manifest_copy = tmp_path / "cpa_provider_routes.json"
+    manifest_copy.write_text(json.dumps(manifest), encoding="utf-8")
+
+    admission = json.loads(
+        cpa_catalog_check.ADMISSION_CONFIG.read_text(encoding="utf-8")
+    )
+    admission["lanes"][0]["models"] = ["drifted-model"]
+    admission_copy = tmp_path / "cpa-admission.json"
+    admission_copy.write_text(json.dumps(admission), encoding="utf-8")
+
+    overrides = json.loads(
+        cpa_catalog_check.CONTEXT_OVERRIDES.read_text(encoding="utf-8")
+    )
+    overrides["models"].append(
+        {
+            "slug": "retired-phantom",
+            "context_window": 128000,
+            "max_context_window": 128000,
+            "auto_compact_token_limit": 64000,
+        }
+    )
+    overrides_copy = tmp_path / "codex-model-context-overrides.json"
+    overrides_copy.write_text(json.dumps(overrides), encoding="utf-8")
+
+    apply_copy = tmp_path / "cpa-guardrail-apply.sh"
+    apply_copy.write_text(
+        cpa_catalog_check.DEPLOYED_LANE_TABLES[0]
+        .read_text(encoding="utf-8")
+        .replace("gpt-6-luna", "drifted-model"),
+        encoding="utf-8",
+    )
+    doctor_copy = tmp_path / "cpa-guardrail-doctor.sh"
+    doctor_copy.write_text(
+        cpa_catalog_check.DEPLOYED_LANE_TABLES[1]
+        .read_text(encoding="utf-8")
+        .replace("gpt-6-luna", "drifted-model"),
+        encoding="utf-8",
+    )
+    expectations_copy = tmp_path / "cpa_catalog_expectations.py"
+    expectations_copy.write_text(
+        cpa_catalog_check.EXPECTATIONS.read_text(encoding="utf-8").replace(
+            "gpt-6-luna", "drifted-model"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cpa_catalog_check, "MANIFEST", manifest_copy)
+    monkeypatch.setattr(cpa_catalog_check, "ADMISSION_CONFIG", admission_copy)
+    monkeypatch.setattr(cpa_catalog_check, "CONTEXT_OVERRIDES", overrides_copy)
+    monkeypatch.setattr(
+        cpa_catalog_check, "DEPLOYED_LANE_TABLES", (apply_copy, doctor_copy)
+    )
+    monkeypatch.setattr(cpa_catalog_check, "EXPECTATIONS", expectations_copy)
+
+    assert cpa_catalog_check.check() != []
+    changed = cpa_catalog_check.sync()
+    assert len(changed) == 5
+    assert cpa_catalog_check.check() == []
+    assert cpa_catalog_check.sync() == []

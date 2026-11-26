@@ -688,6 +688,40 @@ for ($chunkIndex = 1; $chunkIndex -le 2; $chunkIndex++) {
 if ($global:captured[3][-1] -notlike "test `"`$(wc -c < '/tmp/framed-window-*.b64')`" -eq $($windowPayload) || { rm -f -- '/tmp/framed-window-*.b64'; exit 21; }; set -o pipefail; base64 -d -- '/tmp/framed-window-*.b64' | bash; rc=`$?; rm -f -- '/tmp/framed-window-*.b64'; exit `$rc") {
   throw "window staged commit missing"
 }
+
+$global:captured = @()
+$global:stdinSnapshot = $null
+function Invoke-LauncherPython {
+  param(
+    [hashtable]$Python,
+    [string]$ProjectRoot,
+    [string]$EntryPointPath = "",
+    [string[]]$LauncherArgs,
+    [switch]$CaptureOutput
+  )
+  $global:captured += ,@($LauncherArgs)
+  $idx = [Array]::IndexOf($LauncherArgs, "--stdin-file")
+  if ($idx -ge 0 -and ($idx + 1) -lt $LauncherArgs.Count) {
+    $global:stdinSnapshot = [IO.File]::ReadAllBytes($LauncherArgs[$idx + 1])
+  }
+  if ($CaptureOutput) {
+    return @{ ExitCode = $global:stubExitCode; Lines = @("captured-out") }
+  }
+  return $global:stubExitCode
+}
+$streamScript = ("echo stream`r`n" * 1500)
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $streamScript -StreamStdin
+if ($global:captured.Count -ne 1) { throw "StreamStdin must invoke once, got $($global:captured.Count)" }
+if ($global:captured[0] -notcontains "--stdin-file") { throw "StreamStdin missing --stdin-file" }
+$stdinIdx = [Array]::IndexOf($global:captured[0], "--stdin-file")
+$tempGzPath = $global:captured[0][$stdinIdx + 1]
+if (Test-Path -LiteralPath $tempGzPath) { throw "StreamStdin leaked temp file: $tempGzPath" }
+$ms = [IO.MemoryStream]::new($global:stdinSnapshot)
+$gz = [IO.Compression.GzipStream]::new($ms, [IO.Compression.CompressionMode]::Decompress)
+$sr = [IO.StreamReader]::new($gz, [Text.Encoding]::UTF8)
+$roundTrip = $sr.ReadToEnd()
+$sr.Dispose(); $gz.Dispose(); $ms.Dispose()
+if ($roundTrip -ne $streamScript.Replace("`r`n", "`n")) { throw "StreamStdin gzip round-trip mismatch" }
 $global:stubExitCode = 0
 Write-Output "TRANSPORT_CONTRACT_OK"
 """

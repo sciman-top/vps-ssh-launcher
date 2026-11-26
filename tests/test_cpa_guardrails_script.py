@@ -5331,16 +5331,15 @@ foreach ($case in @(
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(b"antigravity_lane=OK", result.stdout)
             before = list(candidate["oauth"]["excluded-models"]["antigravity"])
-            candidate["oauth"]["excluded-models"]["antigravity"].append(
-                "gemini-4-hydrogen-xhigh"
-            )
+            first_ag = ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0]
+            candidate["oauth"]["excluded-models"]["antigravity"].append(first_ag)
             self.assertNotEqual(run().returncode, 0)
             # The quarantine marker must name every configured lane alias
             # (cpa_policy.load_quarantine_aliases), and a quarantined apply
             # projects all of them into the provider exclusions.
             aliases = list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES)
             candidate["oauth"]["excluded-models"]["antigravity"].extend(
-                alias for alias in aliases if alias != "gemini-4-hydrogen-xhigh"
+                alias for alias in aliases if alias != first_ag
             )
             marker = {
                 "version": 1,

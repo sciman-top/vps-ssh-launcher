@@ -25,14 +25,8 @@ literals.
 # (docs/runbooks/cpa-catalog-change-checklist.md 前置铁律).
 OAUTH_ROUTE_ALIASES = [
     "gpt-6-luna",
-    # gpt-5.6-luna retired 2026-11-20 (user directive); it stays in
-    # oauth_exclusions and codex_api_key_exclusions as a tombstone.
     "gpt-6.1-sol",
     "gpt-6.1-terra",
-    # gpt-6.2-sol opened 2026-11-18 (user directive): the ChatGPT OAuth
-    # credential auto-registered the upstream slug and the user opted in.
-    # gpt-6.2-astra stays undeclared on this lane (oauth_exclusions tombstone)
-    # and is pre-opened on the ai.input.im channel instead.
     "gpt-6.2-sol",
 ]
 
@@ -79,13 +73,7 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash-high",
-    # 2026-11-11 tombstone: the upstream catalog re-discovery surfaced the
-    # tiered routing alias after the stabilization restart; the lane posture
-    # stays flash-high-only (user decision), so the alias is pinned out of
-    # the client catalog instead of being admitted past lane admission.
     "gemini-3.8-flash-tiered",
-    # 2026-11-24 retirement tombstones (user directive; see the route alias
-    # comment above).
     "gemini-4-argon-high",
     "gemini-4-neon-xhigh",
     "claude-haiku-5-5",
@@ -94,6 +82,7 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "claude-sonnet-4-6",
     "claude-sonnet-5-5-high",
     "gpt-oss-120b-medium",
+    "gemini-4-carbon-high",
 ]
 
 # Claude (Anthropic Pro) OAuth lane aliases: declared 2026-10-17, retired
@@ -118,7 +107,10 @@ ADMISSION_LANE_MODELS = {
         "glm-5.4-wb",
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
-    "zhipu-coding-plan": ["glm-5.3-flash", "glm-5.4"],
+    "zhipu-coding-plan": [
+        "glm-5.3-flash",
+        "glm-5.4",
+    ],
     "zcode-start-plan": ["glm-5.3-flash-start"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
 }

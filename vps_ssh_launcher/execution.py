@@ -273,6 +273,7 @@ def execute_remote_capture(
     stdout_writer: Callable[[str], Any] | None = None,
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
+    stdin_data: bytes | None = None,
 ) -> CaptureResult:
     """Execute one command, streaming or capturing its output under a hard cap."""
     command_timeout = _coerce_timeout(command_timeout, context="Command timeout")
@@ -296,6 +297,15 @@ def execute_remote_capture(
     channel = stdout.channel
     stdin_closed = False
     try:
+        if stdin_data is not None:
+            if command_timeout > 0:
+                channel.settimeout(command_timeout)
+            view = memoryview(stdin_data)
+            for offset in range(0, len(view), 32768):
+                channel.sendall(view[offset : offset + 32768])
+            shutdown_write = getattr(channel, "shutdown_write", None)
+            if callable(shutdown_write):
+                shutdown_write()
         stdin.close()  # Prevent hangs on commands that read stdin
         stdin_closed = True
         if command_timeout > 0:
@@ -423,6 +433,7 @@ def run_command(
     *,
     command_timeout: int = CMD_TIMEOUT,
     command_hard_timeout: int = 0,
+    stdin_data: bytes | None = None,
 ) -> int:
     """Execute command, stream output. Returns exit code."""
     code, _out, _err, _stdout_truncated, _stderr_truncated = execute_remote_capture(
@@ -433,6 +444,7 @@ def run_command(
         stdout_writer=lambda text: write_stream(sys.stdout, text),
         stderr_writer=lambda text: write_stream(sys.stderr, text),
         capture_limit=0,
+        stdin_data=stdin_data,
     )
     logger.debug("Exit code: %d", code)
     return code

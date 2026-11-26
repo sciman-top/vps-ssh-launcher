@@ -11,17 +11,17 @@
   回环单发）+ 报告证据 + 等用户裁决，不得自动摘名或加墓碑。恢复/增补
   同样由用户发起。
 
-## 先跑本地校验（零成本）
+## 先跑本地校验与一键派生同步（零成本）
 
 ```
-./.venv/Scripts/python.exe scripts/cpa_catalog_check.py --print-derived
+./.venv/Scripts/python.exe scripts/cpa_catalog_check.py --sync --print-derived
 ```
 
-改完真源后立刻跑一次：它比对 `cpa-admission.json` 的 lane 名单、测试预言机
-`tests/cpa_catalog_expectations.py`、以及仍把退役名当活别名对外提供的入口
-（`cpa_recovery_workflow.ps1`、`cpa_reset_event_bridge.ps1`、`hg03_contract.py`、
-`cpa_stream_acceptance.py`）。`CATALOG_CHECK=PASS` 才继续下面的手改同步；
-`--print-derived` 直接打印应填的 lane 名单与路由表，不必手抄。
+改完真源 `scripts/remote/cpa_provider_routes.json` 后直接运行 `--sync`：它会自动同步
+`cpa-admission.json` 的 lane 名单、`config/codex-model-context-overrides.json`、
+`cpa-guardrail-apply.sh` / `cpa-guardrail-doctor.sh` 的内嵌 `expected` 表以及
+`tests/cpa_catalog_expectations.py`，随后执行完整校验。`CATALOG_CHECK=PASS` 后只需检查
+是否有额外手改点（如新增 provider 路由或自定义 test fixture）。
 
 同一检查已接入 `scripts/run_gates.ps1` 的 `contract:catalog` 腿（毫秒级）。
 

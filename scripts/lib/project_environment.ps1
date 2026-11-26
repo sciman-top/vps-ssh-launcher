@@ -247,7 +247,11 @@ function Invoke-LauncherPython {
     # of streaming it to the host: returns @{ ExitCode; Lines } and never
     # throws on a non-zero remote exit. The default streaming path is
     # byte-for-byte unchanged.
-    [switch]$CaptureOutput
+    [switch]$CaptureOutput,
+    # Single-connection compressed stdin stream via ssh_tool.py --stdin-file:
+    # avoids hundreds of sequential SSH handshakes on large payloads such as
+    # cpa-guardrail-apply.sh while keeping secrets out of remote /proc/*/cmdline.
+    [switch]$StreamStdin
   )
 
   $pythonScript = if ([string]::IsNullOrWhiteSpace($EntryPointPath)) {
@@ -379,7 +383,11 @@ function Invoke-LauncherRemoteCommand {
     # streaming to the host and without throwing on its non-zero exit, so
     # wrappers keep full exit-code fidelity. Intermediate temp-file steps
     # still fail fast with the standard throw.
-    [switch]$CaptureOutput
+    [switch]$CaptureOutput,
+    # Single-connection compressed stdin stream via ssh_tool.py --stdin-file:
+    # avoids hundreds of sequential SSH handshakes on large payloads such as
+    # cpa-guardrail-apply.sh while keeping secrets out of remote /proc/*/cmdline.
+    [switch]$StreamStdin
   )
 
   # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR in the
@@ -411,11 +419,18 @@ function Invoke-LauncherRemoteCommand {
     $runArgs += @("--command-hard-timeout", "$HardTimeoutSeconds")
   }
   $invoke = {
-    param([string]$RemoteCommand, [bool]$IsFinalStep = $false)
+    param(
+      [string]$RemoteCommand,
+      [bool]$IsFinalStep = $false,
+      [string]$StdinFilePath = ""
+    )
     # Each child starts with a fresh native status. In particular a launcher
     # that writes a file but does not print an exit code must not inherit 0.
     $global:LASTEXITCODE = 0
     $launcherArgs = $commonArgs + $runArgs + @("--command", $RemoteCommand)
+    if (-not [string]::IsNullOrWhiteSpace($StdinFilePath)) {
+      $launcherArgs += @("--stdin-file", $StdinFilePath)
+    }
     if ($CaptureOutput) {
       $result = if ([string]::IsNullOrWhiteSpace($EntryPointPath)) {
         Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
@@ -442,6 +457,45 @@ function Invoke-LauncherRemoteCommand {
     $exitCode = Invoke-LauncherPython @launcherArguments
     if ($exitCode -ne 0) {
       throw "Remote command failed with exit code $exitCode."
+    }
+  }
+
+  if ($StreamStdin) {
+    $rawBytes = [Text.Encoding]::UTF8.GetBytes($normalizedCommand)
+    $tempGzFile = Join-Path ([IO.Path]::GetTempPath()) (
+      "vps-launcher-stdin-" + [guid]::NewGuid().ToString("N") + ".gz"
+    )
+    try {
+      $fs = [IO.File]::Open(
+        $tempGzFile,
+        [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write,
+        [IO.FileShare]::None
+      )
+      try {
+        $gz = [System.IO.Compression.GzipStream]::new(
+          $fs,
+          [System.IO.Compression.CompressionLevel]::Optimal,
+          $false
+        )
+        try {
+          $gz.Write($rawBytes, 0, $rawBytes.Length)
+        } finally {
+          $gz.Dispose()
+        }
+      } finally {
+        $fs.Dispose()
+      }
+      $streamCmd = "set -o pipefail; gzip -dc | bash"
+      if ($CaptureOutput) {
+        return & $invoke $streamCmd $true $tempGzFile
+      }
+      & $invoke $streamCmd $false $tempGzFile
+      return
+    } finally {
+      if (Test-Path -LiteralPath $tempGzFile) {
+        Remove-Item -LiteralPath $tempGzFile -Force -ErrorAction SilentlyContinue
+      }
     }
   }
 

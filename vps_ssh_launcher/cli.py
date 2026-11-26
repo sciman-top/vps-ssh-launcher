@@ -14,6 +14,7 @@ import logging
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 from .batch import run_on_all
 from .batch import ProfileRunResult as ProfileRunResult
@@ -112,6 +113,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--command", required=True)
     run.add_argument(
+        "--stdin-file",
+        help="Local file whose raw bytes are streamed to remote command stdin.",
+    )
+    run.add_argument(
         "--command-timeout",
         type=int,
         default=CMD_TIMEOUT,
@@ -187,6 +192,8 @@ def _open_main_client(args: argparse.Namespace) -> MainConnectionResult:
 def _run_main_action(
     args: argparse.Namespace,
     client: RemoteCommandClient,
+    *,
+    stdin_data: bytes | None = None,
 ) -> int:
     try:
         if args.action == "check":
@@ -200,6 +207,7 @@ def _run_main_action(
             args.command,
             command_timeout=command_timeout,
             command_hard_timeout=command_hard_timeout,
+            stdin_data=stdin_data,
         )
     except TimeoutError as exc:
         print(f"Command timed out: {exc}", file=sys.stderr)
@@ -241,12 +249,19 @@ def main() -> int:
 
     # --all: parallel execution across all profiles
     if getattr(args, "run_all", False):
+        if getattr(args, "stdin_file", None):
+            print(
+                "Config error: --stdin-file cannot be combined with --all.",
+                file=sys.stderr,
+            )
+            return EXIT_CONFIG_ERROR
         return _run_all_main_action(args)
 
     # Validate command timeouts before opening any connection: a config-class
     # input error must not pay a full SSH auth session, and it must be
     # reported as a configuration error, not a command failure. The --all
     # path already rejects these in batch.run_on_all before connecting.
+    stdin_data: bytes | None = None
     if args.action == "run":
         try:
             command_timeout_arg(args)
@@ -254,6 +269,23 @@ def main() -> int:
         except ValueError as exc:
             print(f"Config error: {exc}", file=sys.stderr)
             return EXIT_CONFIG_ERROR
+        stdin_file = getattr(args, "stdin_file", None)
+        if stdin_file is not None:
+            stdin_path = Path(stdin_file)
+            if not stdin_path.is_file():
+                print(
+                    f"Config error: --stdin-file does not exist: {stdin_file}",
+                    file=sys.stderr,
+                )
+                return EXIT_CONFIG_ERROR
+            try:
+                stdin_data = stdin_path.read_bytes()
+            except OSError as exc:
+                print(
+                    f"Config error: cannot read --stdin-file {stdin_file}: {exc}",
+                    file=sys.stderr,
+                )
+                return EXIT_CONFIG_ERROR
 
     connection = _open_main_client(args)
     if connection.exit_code is not None:
@@ -265,7 +297,7 @@ def main() -> int:
         print("Connection failed: SSH client was not created.", file=sys.stderr)
         return EXIT_SSH_ERROR
     try:
-        return _run_main_action(args, connection.client)
+        return _run_main_action(args, connection.client, stdin_data=stdin_data)
     finally:
         # A close failure is cleanup noise; it must not mask the command's
         # exit code or turn a completed run into an uncaught traceback.

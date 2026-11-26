@@ -71,10 +71,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
+            first_ag = ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0]
             oauth_exclusions: dict[str, Any] = {
                 "antigravity": [
                     *manifest["antigravity_oauth_exclusions"],
-                    "gemini-4-hydrogen-xhigh",
+                    first_ag,
                 ]
             }
             scope: dict[str, Any] = {
@@ -87,12 +88,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 oauth_exclusions["antigravity"],
                 manifest["antigravity_oauth_exclusions"],
             )
-            self.assertNotIn("gemini-4-hydrogen-xhigh", oauth_exclusions["antigravity"])
+            self.assertNotIn(first_ag, oauth_exclusions["antigravity"])
 
             clashing_manifest = json.loads(json.dumps(manifest))
-            clashing_manifest["antigravity_oauth_exclusions"].append(
-                "gemini-4-hydrogen-xhigh"
-            )
+            clashing_manifest["antigravity_oauth_exclusions"].append(first_ag)
             with self.assertRaises(SystemExit) as clash_exc:
                 exec(
                     snippet,
@@ -1444,7 +1443,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             previous = config["oauth"]["excluded-models"]["antigravity"]
             config["oauth"]["excluded-models"]["antigravity"] = [
                 *previous,
-                "gemini-4-hydrogen-xhigh",
+                ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0],
             ]
             self.assertTrue(
                 validate(config), "blocking an active model requires a marker"
@@ -1500,7 +1499,9 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             issues,
         )
         manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
-        manifest["antigravity_oauth_exclusions"].append("gemini-4-hydrogen-xhigh")
+        manifest["antigravity_oauth_exclusions"].append(
+            ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0]
+        )
         issues = policy["_route_manifest_issues"](manifest)
         self.assertTrue(
             any("cannot be both routed and excluded" in issue for issue in issues),

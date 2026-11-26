@@ -91,6 +91,57 @@ def _relative(path: Path) -> str:
         return path.as_posix()
 
 
+def _manifest_contexts(manifest: dict[str, Any]) -> dict[str, int]:
+    """Resolve max-context-length pins per client-facing alias from manifest."""
+    contexts: dict[str, int] = {}
+    for provider in manifest.get("providers", []) or []:
+        if not isinstance(provider, dict):
+            continue
+        for model in provider.get("models", []) or []:
+            if not isinstance(model, dict):
+                continue
+            alias = model.get("alias") or model.get("name")
+            window = model.get("max-context-length")
+            if isinstance(alias, str) and alias and type(window) is int:
+                contexts[alias] = window
+    oauth_settings = manifest.get("oauth_settings")
+    oauth_aliases_map = manifest.get("oauth_model_aliases") or {}
+    if isinstance(oauth_settings, dict):
+        for channel, entries in oauth_settings.items():
+            if not isinstance(entries, list):
+                continue
+            channel_aliases = (
+                oauth_aliases_map.get(channel, [])
+                if isinstance(oauth_aliases_map, dict)
+                else []
+            )
+            alias_by_source: dict[str, list[tuple[str, bool]]] = {}
+            if isinstance(channel_aliases, list):
+                for a_entry in channel_aliases:
+                    if (
+                        isinstance(a_entry, dict)
+                        and isinstance(a_entry.get("name"), str)
+                        and isinstance(a_entry.get("alias"), str)
+                    ):
+                        alias_by_source.setdefault(a_entry["name"].strip(), []).append(
+                            (a_entry["alias"].strip(), bool(a_entry.get("fork")))
+                        )
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                alias = entry.get("alias") or entry.get("name")
+                window = entry.get("max-context-length")
+                if isinstance(alias, str) and alias and type(window) is int:
+                    if alias in alias_by_source:
+                        for target_alias, forked in alias_by_source[alias]:
+                            contexts[target_alias] = window
+                            if forked:
+                                contexts[alias] = window
+                    else:
+                        contexts[alias] = window
+    return contexts
+
+
 def _load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -280,15 +331,8 @@ def read_expectations(path: Path) -> tuple[dict[str, Any], list[str]]:
     return dict(vars(module)), []
 
 
-def _embedded_lane_table(text: str) -> dict[str, list[str]] | None:
-    """Extract the lane table from a shell script's embedded Python block.
-
-    The table is a Python dict literal inside a heredoc, so it is parsed with
-    ast rather than imported: the surrounding script is a deploy transaction and
-    must never be executed to check its contents. The block is located by the
-    first lane *name* it must contain, because the same scripts also carry
-    unrelated `expected = {...}` tables (port bindings, for example).
-    """
+def _embedded_lane_table_span(text: str) -> tuple[int, int] | None:
+    """Locate the ``expected = {...}`` lane table literal span in a script."""
     anchor = f'expected = {{\n    "{LANE_SOURCES and next(iter(LANE_SOURCES))}":'
     start = text.find(anchor)
     if start < 0:
@@ -306,6 +350,22 @@ def _embedded_lane_table(text: str) -> dict[str, list[str]] | None:
             if depth == 0:
                 end = index + 1
                 break
+    return (start, end) if depth == 0 and end > start else None
+
+
+def _embedded_lane_table(text: str) -> dict[str, list[str]] | None:
+    """Extract the lane table from a shell script's embedded Python block.
+
+    The table is a Python dict literal inside a heredoc, so it is parsed with
+    ast rather than imported: the surrounding script is a deploy transaction and
+    must never be executed to check its contents. The block is located by the
+    first lane *name* it must contain, because the same scripts also carry
+    unrelated `expected = {...}` tables (port bindings, for example).
+    """
+    span = _embedded_lane_table_span(text)
+    if span is None:
+        return None
+    start, end = span
     literal = text[start + len("expected = ") : end]
     try:
         parsed = ast.literal_eval(literal)
@@ -478,52 +538,7 @@ def check() -> list[str]:
 
     # 7. Desktop context overrides must only name live CPA aliases and agree
     # with the manifest's max-context-length pins.
-    manifest_contexts: dict[str, int] = {}
-    for provider in manifest.get("providers", []) or []:
-        if not isinstance(provider, dict):
-            continue
-        for model in provider.get("models", []) or []:
-            if not isinstance(model, dict):
-                continue
-            alias = model.get("alias") or model.get("name")
-            window = model.get("max-context-length")
-            if isinstance(alias, str) and alias and type(window) is int:
-                manifest_contexts[alias] = window
-    oauth_settings = manifest.get("oauth_settings")
-    oauth_aliases_map = manifest.get("oauth_model_aliases") or {}
-    if isinstance(oauth_settings, dict):
-        for channel, entries in oauth_settings.items():
-            if not isinstance(entries, list):
-                continue
-            channel_aliases = (
-                oauth_aliases_map.get(channel, [])
-                if isinstance(oauth_aliases_map, dict)
-                else []
-            )
-            alias_by_source: dict[str, list[tuple[str, bool]]] = {}
-            if isinstance(channel_aliases, list):
-                for a_entry in channel_aliases:
-                    if (
-                        isinstance(a_entry, dict)
-                        and isinstance(a_entry.get("name"), str)
-                        and isinstance(a_entry.get("alias"), str)
-                    ):
-                        alias_by_source.setdefault(a_entry["name"].strip(), []).append(
-                            (a_entry["alias"].strip(), bool(a_entry.get("fork")))
-                        )
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                alias = entry.get("alias") or entry.get("name")
-                window = entry.get("max-context-length")
-                if isinstance(alias, str) and alias and type(window) is int:
-                    if alias in alias_by_source:
-                        for target_alias, forked in alias_by_source[alias]:
-                            manifest_contexts[target_alias] = window
-                            if forked:
-                                manifest_contexts[alias] = window
-                    else:
-                        manifest_contexts[alias] = window
+    manifest_contexts = _manifest_contexts(manifest)
     overrides = _load_json(CONTEXT_OVERRIDES, errors)
     override_models = overrides.get("models")
     override_slugs: set[str] = set()
@@ -572,6 +587,193 @@ def check() -> list[str]:
     return errors
 
 
+def _format_lane_table(derived: dict[str, list[str]], key_order: list[str]) -> str:
+    ordered_keys = [k for k in key_order if k in derived] + [
+        k for k in derived if k not in key_order
+    ]
+    lines = ["expected = {"]
+    for lane in ordered_keys:
+        models = derived[lane]
+        if len(models) == 1 and len(lane) + len(models[0]) < 56:
+            lines.append(f'    "{lane}": ["{models[0]}"],')
+        else:
+            lines.append(f'    "{lane}": [')
+            for model in models:
+                lines.append(f'        "{model}",')
+            lines.append("    ],")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _format_py_list(name: str, items: list[str]) -> str:
+    if not items:
+        return f"{name}: list[str] = []"
+    lines = [f"{name} = ["]
+    for item in items:
+        lines.append(f'    "{item}",')
+    lines.append("]")
+    return "\n".join(lines)
+
+
+def _replace_python_assignment(text: str, name: str, replacement: str) -> str:
+    tree = ast.parse(text)
+    for node in tree.body:
+        target_id: str | None = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            if isinstance(node.targets[0], ast.Name):
+                target_id = node.targets[0].id
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target_id = node.target.id
+        if target_id == name and node.end_lineno is not None:
+            lines = text.splitlines(keepends=True)
+            prefix = "".join(lines[: node.lineno - 1])
+            suffix = "".join(lines[node.end_lineno :])
+            return prefix + replacement + "\n" + suffix
+    return text
+
+
+def sync() -> list[Path]:
+    """Synchronize derived catalog targets from the route manifest."""
+    errors: list[str] = []
+    manifest = _load_json(MANIFEST, errors)
+    if errors or not manifest:
+        raise ValueError("; ".join(errors) or "manifest is empty")
+    derived = derive_lanes(manifest, errors)
+    if errors:
+        raise ValueError("; ".join(errors))
+    live = live_aliases(manifest, derived)
+    manifest_contexts = _manifest_contexts(manifest)
+    changed: list[Path] = []
+
+    def _write_if_changed(path: Path, new_text: str) -> None:
+        old_text = path.read_text(encoding="utf-8")
+        if new_text != old_text:
+            path.write_text(new_text, encoding="utf-8", newline="\n")
+            changed.append(path)
+
+    # 1. scripts/remote/cpa-admission.json
+    admission = _load_json(ADMISSION_CONFIG, errors)
+    if not errors and isinstance(admission.get("lanes"), list):
+        for lane in admission["lanes"]:
+            if isinstance(lane, dict) and lane.get("name") in derived:
+                lane["models"] = list(derived[lane["name"]])
+        _write_if_changed(
+            ADMISSION_CONFIG,
+            json.dumps(admission, indent=2, ensure_ascii=False) + "\n",
+        )
+
+    # 2. config/codex-model-context-overrides.json
+    if CONTEXT_OVERRIDES.exists():
+        overrides = _load_json(CONTEXT_OVERRIDES, errors)
+        existing_entries = {
+            e["slug"]: e
+            for e in (overrides.get("models") or [])
+            if isinstance(e, dict) and isinstance(e.get("slug"), str)
+        }
+        ordered_slugs = [
+            slug
+            for slug in existing_entries
+            if slug in live and slug in manifest_contexts
+        ] + sorted((set(manifest_contexts) & live) - set(existing_entries))
+        new_models: list[dict[str, Any]] = []
+        for slug in ordered_slugs:
+            window = manifest_contexts[slug]
+            ceiling = (window * 9) // 10
+            prev = existing_entries.get(slug, {})
+            prev_compact = prev.get("auto_compact_token_limit")
+            compact = (
+                prev_compact
+                if type(prev_compact) is int and 0 < prev_compact <= ceiling
+                else min(320000, ceiling)
+            )
+            new_models.append(
+                {
+                    "slug": slug,
+                    "context_window": window,
+                    "max_context_window": window,
+                    "auto_compact_token_limit": compact,
+                }
+            )
+        overrides["models"] = new_models
+        _write_if_changed(
+            CONTEXT_OVERRIDES,
+            json.dumps(overrides, indent=2, ensure_ascii=False) + "\n",
+        )
+
+    # 3. Deployed guardrail lane tables
+    for path in DEPLOYED_LANE_TABLES:
+        text = path.read_text(encoding="utf-8")
+        span = _embedded_lane_table_span(text)
+        current = _embedded_lane_table(text)
+        if span is not None and current is not None:
+            start, end = span
+            formatted = _format_lane_table(derived, list(current.keys()))
+            _write_if_changed(path, text[:start] + formatted + text[end:])
+
+    # 4. tests/cpa_catalog_expectations.py
+    if EXPECTATIONS.exists():
+        exp_text = EXPECTATIONS.read_text(encoding="utf-8")
+        oauth_by_name = _by_name(manifest.get("oauth_routes"))
+        if "chatgpt-plus-oauth" in oauth_by_name:
+            exp_text = _replace_python_assignment(
+                exp_text,
+                "OAUTH_ROUTE_ALIASES",
+                _format_py_list(
+                    "OAUTH_ROUTE_ALIASES",
+                    _aliases(oauth_by_name["chatgpt-plus-oauth"]),
+                ),
+            )
+        if "antigravity-oauth" in oauth_by_name:
+            exp_text = _replace_python_assignment(
+                exp_text,
+                "ANTIGRAVITY_OAUTH_ROUTE_ALIASES",
+                _format_py_list(
+                    "ANTIGRAVITY_OAUTH_ROUTE_ALIASES",
+                    _aliases(oauth_by_name["antigravity-oauth"]),
+                ),
+            )
+        ag_excl = [
+            str(x) for x in manifest.get("antigravity_oauth_exclusions", []) or []
+        ]
+        exp_text = _replace_python_assignment(
+            exp_text,
+            "ANTIGRAVITY_OAUTH_EXCLUSIONS",
+            _format_py_list("ANTIGRAVITY_OAUTH_EXCLUSIONS", ag_excl),
+        )
+        oracle, _ = read_expectations(EXPECTATIONS)
+        prev_lanes = oracle.get("ADMISSION_LANE_MODELS")
+        lane_order = (
+            list(prev_lanes.keys()) if isinstance(prev_lanes, dict) else list(derived)
+        )
+        ordered_lane_keys = [k for k in lane_order if k in derived] + [
+            k for k in derived if k not in lane_order
+        ]
+        lane_lines = ["ADMISSION_LANE_MODELS = {"]
+        for lane in ordered_lane_keys:
+            if lane == "chatgpt-oauth":
+                lane_lines.append('    "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),')
+            elif lane == "antigravity-oauth":
+                lane_lines.append(
+                    '    "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),'
+                )
+            else:
+                models = derived[lane]
+                if len(models) == 1 and len(lane) + len(models[0]) < 56:
+                    lane_lines.append(f'    "{lane}": ["{models[0]}"],')
+                else:
+                    lane_lines.append(f'    "{lane}": [')
+                    for model in models:
+                        lane_lines.append(f'        "{model}",')
+                    lane_lines.append("    ],")
+        lane_lines.append("}")
+        exp_text = _replace_python_assignment(
+            exp_text, "ADMISSION_LANE_MODELS", "\n".join(lane_lines)
+        )
+        _write_if_changed(EXPECTATIONS, exp_text)
+
+    return changed
+
+
 def render(manifest: dict[str, Any]) -> str:
     derived = derive_lanes(manifest, [])
     lines = ["CATALOG_LANES (derived from the manifest):"]
@@ -593,7 +795,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print the manifest-derived lanes and routes after the check",
     )
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="synchronize derived admission, overrides, guardrail tables, and test expectations from the manifest",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.sync:
+        try:
+            changed = sync()
+        except (OSError, ValueError) as exc:
+            print(f"CATALOG_SYNC=ERROR {exc}")
+            return 2
+        print(f"CATALOG_SYNC=OK ({len(changed)} files updated)")
     try:
         errors = check()
     except OSError as exc:  # pragma: no cover - defensive

@@ -422,6 +422,55 @@ class ExecutionTests(unittest.TestCase):
                 argparse.Namespace(command_hard_timeout=-1)
             )
 
+    def test_execute_remote_capture_streams_stdin_data_and_shuts_down_write(
+        self,
+    ) -> None:
+        class StdinChannel(FakeChannel):
+            def __init__(self) -> None:
+                super().__init__(stdout_chunks=[b"streamed\n"], exit_status=0)
+                self.sent = bytearray()
+                self.write_shut_down = False
+
+            def sendall(self, data: bytes | memoryview) -> None:
+                self.sent.extend(data)
+
+            def shutdown_write(self) -> None:
+                self.write_shut_down = True
+
+        channel = StdinChannel()
+        client = FakeClient(channel)
+        payload = b"x" * 70000
+        code, out, err, _, _ = execution.execute_remote_capture(
+            client,
+            "gzip -dc | bash",
+            stdin_data=payload,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "streamed\n")
+        self.assertEqual(err, "")
+        self.assertEqual(bytes(channel.sent), payload)
+        self.assertTrue(channel.write_shut_down)
+
+    def test_cli_stdin_file_argument_rejects_all_flag(self) -> None:
+        parser = ssh_tool.build_parser()
+        args = parser.parse_args(
+            ["run", "--command", "bash", "--stdin-file", "payload.gz"]
+        )
+        self.assertEqual(args.stdin_file, "payload.gz")
+        with mock.patch(
+            "sys.argv",
+            [
+                "ssh_tool",
+                "run",
+                "--all",
+                "--command",
+                "bash",
+                "--stdin-file",
+                "payload.gz",
+            ],
+        ):
+            self.assertEqual(ssh_tool.main(), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

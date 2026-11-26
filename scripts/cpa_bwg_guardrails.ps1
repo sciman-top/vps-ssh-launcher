@@ -867,6 +867,8 @@ function Invoke-BwgRemoteScript {
   }
   if (-not [string]::IsNullOrWhiteSpace($LauncherEntryPointOverride)) {
     $transport.EntryPointPath = $LauncherEntryPointOverride
+  } else {
+    $transport.StreamStdin = $true
   }
   Invoke-LauncherRemoteCommand @transport
 }
