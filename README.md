@@ -675,11 +675,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 
 | 准入泳道 (Lane) | 承载模型标识 | 并发控制 (Inflight / Queue) | 熔断机制与冷却策略 |
 |---|---|:---:|---|
-| **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.2-sol` | `max_inflight=2`<br>`max_pending=4` (120s) | 区分**模型级容量**与**账号级容量**：单个模型超载仅熔断该模型，同账号其他模型仍可服务；支持 `60-900s` 指数退避 |
-| **`zhipu-coding-plan`** | `glm-5.3`, `glm-5.3-flash` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
-| **`antigravity-oauth`** | `gemini-3.8-flash-high` | `max_inflight=2`<br>`max_pending=4` (120s) | 首创严格冷却机制：无提前探测，精确对齐 `RetryInfo.retryDelay` 最长窗口；`401/403` 自动触发停流保护 |
-| **`workbuddy-oauth`**（CN） | `deepseek-v4.1-flash` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
-| **`workbuddy-intl-oauth`**（INTL，**关闭暗置**） | `deepseek-v4.1-flash-intl`, `deepseek-v4.1-flash-sg`（声明保留；INTL 插件已禁用，不可见不可用；重启用=翻回 `enabled: true`） | `max_inflight=1`<br>`max_pending=4` (120s) | 与 CN lane 独立状态文件与冷却窗口；`hy4flash-free` 已于 2026-11-17 退役删除（doctor 目录门 fail-closed 墓碑） |
+| **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.2-sol` | `max_inflight=2`<br>`max_pending=4` (120s) | 区分**模型级容量**与**账号级容量**：单个模型超载仅熔断该模型，同账号其他模型仍可服务；支持 `60-900s` 指数退避与 `35s` 半开恢复探测 |
+| **`zhipu-coding-plan`** | `glm-5.3-flash`, `glm-5.4` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱付费 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
+| **`zcode-start-plan`** | `glm-5.3-flash-start` | `max_inflight=1`<br>`max_pending=4` (120s) | 对接宿主 `zcode-proxy` 桥接边车（`172.17.0.1:18082`），物理隔离夜间/周末免费 Start Plan 与付费 Coding Plan |
+| **`antigravity-oauth`** | `gemini-4-hydrogen-xhigh` | `max_inflight=2`<br>`max_pending=4` (120s) | 严格冷却机制：对齐 `RetryInfo.retryDelay` 最长窗口（`mirror_probe=600s`）；叠加单凭据日上限 150、TOS 2h 池级急停与重复拒绝局部暂停 |
+| **`workbuddy-oauth`**（CN） | `deepseek-v4.1-flash`, `glm-5.3-flash-wb`, `glm-5.4-wb` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流（`RPM=12`），杜绝并发突发；INTL `workbuddy-ai-provider` 已卸载且凭据保持 `disabled` 暗置，`claude-oauth` 保持退役封存 |
 
 > [!NOTE]
 > 泳道与模型清单的真源是 `scripts/remote/cpa-admission.json` 的 `lanes` 段；本表为判读速查，变更泳道时随 JSON 一并更新。

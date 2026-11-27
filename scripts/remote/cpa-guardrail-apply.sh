@@ -1852,8 +1852,9 @@ antigravity_provider_after["sensitive-words-replace"] = {
 antigravity_provider_after["sensitive-patterns-replace"] = [
     {
         "pattern": (
-            r"(?i)\byou are claude code, anthropic['\x{2019}]s official cli"
-            r" for claude\b\.?"
+            r"(?i)\byou are (?:claude code, anthropic['\x{2019}]s official cli"
+            r" for claude(?:,\s*running within the claude agent sdk)?|"
+            r"a claude agent,\s*built on anthropic['\x{2019}]s claude agent sdk)\b\.?"
         ),
         "replacement": "You are a coding assistant.",
     },

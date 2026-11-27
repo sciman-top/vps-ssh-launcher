@@ -204,8 +204,9 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("oauth", "providers", "antigravity", "sensitive-patterns-replace"): [
         {
             "pattern": (
-                r"(?i)\byou are claude code, anthropic['\x{2019}]s official cli"
-                r" for claude\b\.?"
+                r"(?i)\byou are (?:claude code, anthropic['\x{2019}]s official cli"
+                r" for claude(?:,\s*running within the claude agent sdk)?|"
+                r"a claude agent,\s*built on anthropic['\x{2019}]s claude agent sdk)\b\.?"
             ),
             "replacement": "You are a coding assistant.",
         },

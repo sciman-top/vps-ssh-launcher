@@ -147,7 +147,6 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
         "zcode-start-plan",
         "antigravity-oauth",
         "workbuddy-oauth",
-        "workbuddy-intl-oauth",
     }
     lanes = snapshot.get("lanes")
     if not isinstance(lanes, dict) or set(lanes) != required:
@@ -166,7 +165,6 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
         "zcode-start-plan": 20,
         "antigravity-oauth": 12,
         "workbuddy-oauth": 12,
-        "workbuddy-intl-oauth": 12,
     }
     for name in sorted(required):
         lane = lanes[name]

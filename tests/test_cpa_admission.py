@@ -3902,6 +3902,23 @@ def test_usage_numbers_reads_allowlisted_counts_only() -> None:
     ) == (2, 1, 6)
     # A truncated body prefix must read as absent, never raise.
     assert usage_from_body(b'{"usage":{"input_tok') == (None, None, None)
+    usage_cost_from_body = cast(Any, MODULE["usage_cost_from_body"])
+    assert (
+        usage_cost_from_body(
+            b'{"usage":{"input_tokens":4,"output_tokens":2,"cost":0.00042}}'
+        )
+        == 0.00042
+    )
+    assert (
+        usage_cost_from_body(
+            b'{"response":{"usage":{"input_tokens":4,"total_cost_usd":0.0015}}}'
+        )
+        == 0.0015
+    )
+    assert usage_cost_from_body(b'{"usage":{"cost":true}}') is None
+    assert usage_cost_from_body(b'{"usage":{"cost":-0.1}}') is None
+    assert usage_cost_from_body(b'{"usage":{"cost') is None
+    assert usage_cost_from_body(b"[1, 2, 3]") is None
 
 
 def test_stream_probe_merges_usage_across_events() -> None:
@@ -4975,6 +4992,19 @@ def test_neutralize_agent_identity_sentences_keeps_paths_and_product_mentions() 
         == "You are a coding assistant. You help."
     )
     assert (
+        neutralize_sentences(
+            "You are Claude Code, Anthropic's official CLI for Claude, "
+            "running within the Claude Agent SDK. You help."
+        )
+        == "You are a coding assistant. You help."
+    )
+    assert (
+        neutralize_sentences(
+            "You are a Claude agent, built on Anthropic\u2019s Claude Agent SDK."
+        )
+        == "You are a coding assistant."
+    )
+    assert (
         neutralize_sentences("You are DeepSeek Harness, a coding agent.")
         == "You are Assistant Framework, a coding agent."
     )
@@ -5174,6 +5204,38 @@ def test_neutralize_agent_identity_text_covers_workbuddy_and_start_plan_lanes() 
         "You are a coding assistant, an interactive agent. "
         r"See C:\Users\u\.zcode\skills\a\SKILL.md"
     )
+    # Responses top-level `instructions` and string `input` are covered by the
+    # lane's role set (system+user on WorkBuddy/Start Plan; user-only on
+    # Antigravity, where CPA itself cleans systemInstruction).
+    responses_top = json.dumps(
+        {
+            "model": "glm-5.3-flash-wb",
+            "instructions": (
+                "You are Claude Code, Anthropic's official CLI for Claude, "
+                "running within the Claude Agent SDK."
+            ),
+            "input": "You are ZCode, an interactive agent.",
+        },
+        ensure_ascii=False,
+    ).encode()
+    normalized_top, stats_top = neutralize(
+        "/v1/responses", responses_top, "workbuddy-oauth"
+    )
+    parsed_top = json.loads(normalized_top)
+    assert stats_top == {"system_parts": 1, "user_parts": 1}
+    assert parsed_top["instructions"] == "You are a coding assistant."
+    assert parsed_top["input"] == "You are a coding assistant, an interactive agent."
+
+    normalized_agy_top, stats_agy_top = neutralize(
+        "/v1/responses", responses_top, "antigravity-oauth"
+    )
+    parsed_agy_top = json.loads(normalized_agy_top)
+    assert stats_agy_top == {"user_parts": 1}
+    assert parsed_agy_top["instructions"].startswith("You are Claude Code")
+    assert (
+        parsed_agy_top["input"] == "You are a coding assistant, an interactive agent."
+    )
+
     # The official-client lane, unlisted lanes, and non-chat routes keep their
     # bytes.
     assert neutralize("/v1/responses", chat, "chatgpt-oauth") == (chat, {})

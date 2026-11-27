@@ -2003,6 +2003,17 @@ def _event_usage_cost(event: dict[str, Any]) -> float | None:
     return None
 
 
+def usage_cost_from_body(payload: bytes) -> float | None:
+    """Provider-reported USD cost from a non-stream JSON body."""
+    try:
+        data = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return _event_usage_cost(data)
+
+
 # Event names are deliberately allowlisted: upstream event types are not
 # trusted logging data and may contain user/provider-controlled strings.
 SAFE_SSE_EVENT_TYPES = frozenset(
@@ -3336,8 +3347,14 @@ def normalize_antigravity_image_detail(
 # own shape there.
 AGENT_IDENTITY_SENTENCES = (
     (
+        # Claude Code Desktop appends ", running within the Claude Agent SDK."
+        # and Agent SDK hosts emit the standalone "You are a Claude agent, ..."
+        # line (#7904). Consuming the optional SDK clause prevents leaving a
+        # dangling ", running within the Claude Agent SDK." fragment behind.
         re.compile(
-            r"\byou are claude code, anthropic['\u2019]s official cli for claude\b\.?",
+            r"\byou are (?:claude code, anthropic['\u2019]s official cli for claude"
+            r"(?:,\s*running within the claude agent sdk)?|"
+            r"a claude agent,\s*built on anthropic['\u2019]s claude agent sdk)\b\.?",
             re.IGNORECASE,
         ),
         "You are a coding assistant.",
@@ -3447,11 +3464,15 @@ def neutralize_agent_identity_text(
 
     route = urlsplit(path).path.rstrip("/")
     if route.endswith("/responses"):
+        if "system" in roles and isinstance(payload.get("instructions"), str):
+            payload["instructions"] = swap(payload["instructions"], "system")
         items = payload.get("input")
-        if not isinstance(items, list):
-            return body, {}
-        for item in items:
-            rewrite_message(item)
+        if isinstance(items, str):
+            if "user" in roles:
+                payload["input"] = swap(items, "user")
+        elif isinstance(items, list):
+            for item in items:
+                rewrite_message(item)
     elif route.endswith("/chat/completions"):
         messages = payload.get("messages")
         if not isinstance(messages, list):
@@ -6431,7 +6452,7 @@ class Handler(BaseHTTPRequestHandler):
                 usage_cost_usd = stream_probe.usage_cost_usd
             else:
                 usage_in, usage_cached, usage_out = usage_from_body(bytes(probe))
-                usage_cost_usd = usage_cost(bytes(probe))
+                usage_cost_usd = usage_cost_from_body(bytes(probe))
             terminal_delivered = (
                 forward_upstream_stream
                 and stream_probe is not None

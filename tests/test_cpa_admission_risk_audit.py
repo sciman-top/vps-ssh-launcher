@@ -412,18 +412,6 @@ class ContractTests(unittest.TestCase):
                         "model_cooldowns": {},
                     },
                 },
-                "workbuddy-intl-oauth": {
-                    "requests_per_minute": 12,
-                    "state": {
-                        "inflight": 0,
-                        "pending": 0,
-                        "rpm_window_used": 0,
-                        "hold_reason": None,
-                        "cooldown_active": False,
-                        "cooldown_remaining": 0,
-                        "model_cooldowns": {},
-                    },
-                },
             },
         }
 
@@ -450,6 +438,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn(
             "live-health-lane-set",
             codes(audit_live_health(missing), SEVERITY_FAIL),
+        )
+        stale_intl = self._health_snapshot()
+        stale_intl["lanes"]["workbuddy-intl-oauth"] = dict(
+            stale_intl["lanes"]["workbuddy-oauth"]
+        )
+        self.assertIn(
+            "live-health-lane-set",
+            codes(audit_live_health(stale_intl), SEVERITY_FAIL),
         )
 
     def test_clean_configuration_has_no_findings(self) -> None:
