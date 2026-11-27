@@ -439,3 +439,15 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
   所以**未常驻开启 debug**：下次该车道再出 502 或开始有稳定流量时，临时以 `serve debug`
   跑一轮定位。重登入口（需本人在浏览器完成授权）：
   `zcode-proxy auth login zai_cn`（带 `/etc/zcode-start-plan.env` 的加密种子）。
+- **`chatgpt-oauth` 后台 `gpt-6-luna` 过载连坐 `gpt-6.1-sol` 根治（同日四续）**：
+  Codex Desktop 硬编码后台标题/建议请求走 `gpt-6-luna`，当上游在 HTTP 200 SSE 流内返回
+  `response.failed`（`code: "server_is_overloaded"`，内嵌 `headers.retry-after: 317`）
+  时，CPA 核心（#7600）仅冷却 `gpt-6-luna` 模型分片；但 `cpa-admission` 此前既未把
+  `server_is_overloaded` 列入 `chatgpt-oauth.model_capacity_markers`，也未解析流内 JSON
+  的 `headers.retry-after`，导致排队的第 2 笔 `gpt-6-luna` 打穿到 CPA 核心拿到顶层 503
+  + `Retry-After: 317` 后将**整条 `chatgpt-oauth` 车道**锁死 317 秒，连坐拒绝用户的
+  `gpt-6.1-sol` 主请求。现已将 `server_is_overloaded` 纳入 `chatgpt-oauth` 模型级容量标记，
+  并由 `codex_overload_retry_after()` 提取流内/响应体内嵌 `headers.retry-after(-ms)` 直写
+  `model_retry_after`，首笔流内过载即单独冷却 `gpt-6-luna`，保障 `gpt-6.1-sol` /
+  `gpt-6.2-sol` 正常放行。详见
+  [模型级过载隔离台账](../change-evidence/20261127-bwg-cpa-codex-model-scoped-overload.md)。
