@@ -50,5 +50,20 @@ stream disconnected before completion: Shared upstream lane chatgpt-oauth is coo
   - `scripts/cpa_bwg_guardrails.ps1 -Profile bwg -Apply`：17/17 `PROJECTION_HASH_VERIFIED`，`HEALTH_OK`，`READY_STATUS=200`，备份 `/root/cpa-guardrails-backup-20261127T105844.119533839Z`。
   - `scripts/cpa_bwg_guardrails.ps1 -Profile bwg`：`DOCTOR_CONTRACT_OK`。
   - `scripts/cpa_status.py --profile bwg`：`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.2-sol` 状态均为 `OK`。
+- **三层模拟与实战验收（`live_accepted`）**：
+  1. **远端真源模块 18:30 并发队列重放模拟**（直接加载 `bwg` `/opt/cliproxyapi/cpa-admission.py` + `/opt/cliproxyapi/cpa-admission.json`）：
+     - 构造 2 笔在途 `gpt-6-luna` 占满 `max_inflight=2`，第 3 笔 `gpt-6-luna` 与用户主请求 `gpt-6.1-sol` 依次排队；
+     - 首笔 `gpt-6-luna` 收到 HTTP 200 SSE `response.failed`（`server_is_overloaded` + 内嵌 `retry-after: 317`）释放槽位后：
+       - 队首第 3 笔 `gpt-6-luna` 即刻以 `Lease(admitted=False, reason='model_cooldown', retry_after=317)` 拒绝，零穿透 CPA 核心；
+       - 排在后面的 `gpt-6.1-sol` 主请求即刻以 `Lease(admitted=True, reason='admitted', retry_after=0)` 获槽放行；
+       - 车道快照保持 `cooldown_active=False`、`cooldown_scope='model'`、`model_cooldowns={'gpt-6-luna': 317}`。
+  2. **部署后真实自然流量命中验证（`11:20:29Z` – `11:25:58Z`）**：
+     - `11:20:29.424Z`：自然流量 `4b198a60`（`model=gpt-6-luna`）在 HTTP 200 SSE 第 4 帧触发上游 `server_is_overloaded`（内嵌 `retry-after: 316`），`cpa-admission` 立即将 `gpt-6-luna` 单独置入 316s `model_cooldown`（零 503 级联）；
+     - `11:21:48Z` – `11:21:51Z`：后续 5 笔后台 `gpt-6-luna` 请求（`003495d5`、`508f09d5`、`c1346253`、`8b3aedbe`、`38acd18b`）均在 `waited_ms=0` 被 `reason=model_cooldown retry_after=237..234` 拦截，车道保持 `cooldown_active=false`；
+     - `11:25:46.575Z`（316s 窗口到期后 1 秒）：`80102273`（`model=gpt-6-luna`）准入并成功完成（`status=200 protocol_result=completed usage_in=34195 usage_cached=34048 usage_out=146`）。
+  3. **受控实战端到端流式验收（`scripts/cpa_stream_acceptance.py`）**：
+     - 当 `gpt-6-luna`（剩余 229s）与 `gpt-6.1-sol`（`11:27:35Z` 命中上游 `server_is_overloaded` 内嵌 `retry-after: 372`，剩余 324s）同时处于各自独立的 `model_cooldowns` 时，`chatgpt-oauth` 车道仍保持 `cooldown_active=false`；
+     - 执行 `./.venv/Scripts/python.exe scripts/cpa_stream_acceptance.py --model gpt-6.2-sol --expect-response-model gpt-6.2-sol`，请求 `7e7c894db3fb4e60a9742d36eefdea0f` 在 `waited_ms=11` 直接准入并通过公网网关端到端流式返回 `pong`：
+       `STREAM_ACCEPTANCE={"attempt": 1, "capacity_marker": false, "completed_ms": 7310.23, "data_event_count": 9, "failures": [], "http_status": 200, "model": "gpt-6.2-sol", "request_id": "7e7c894db3fb4e60a9742d36eefdea0f", "result": "PASS", "text_matches": true, "total_ms": 7318.993}`。
 - **回滚命令**：
   如需回滚远端 `cpa-admission`，在维护锁下将 `/opt/cliproxyapi/backups/20261127T105835.266045974Z-admission-codex-model-overload-20261127` 中的 `cpa-admission.py`、`cpa-admission.json`、`cpa_request_guard.py`、`cpa-admission.sha256` 考回原路径并执行 `systemctl restart cpa-admission`。
