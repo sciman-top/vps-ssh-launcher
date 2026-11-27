@@ -408,3 +408,34 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
   三大 OAuth 车道受控单发探针（`gemini-4-hydrogen-xhigh` / `deepseek-v4.1-flash` /
   `gpt-6.1-sol`）全 200，`zhipu-coding-plan`（`glm-5.4`）遇 5h 窗口 429 `code=1308`
   后 admission 即时冷却、零重试 fail-closed。
+
+### 2026-11-27（同日三续）：全面深审的实测结论
+
+- **astra 缓存未命中是冷启动型，不是固定渠道上限**：606 发（输入 ≥20K）里 554 发命中
+  ≥80%，34 发全未命中（每发 37K–170K token），集中在 UTC 14–15 时。OpenAI 官方
+  [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching) 写明
+  GPT-5.6 起 `prompt_cache_key` 只用于缓存记账、不再影响路由，且缓存不跨组织共享，所以
+  网关注入 cache key 无效；保持 `support-prompt-cache-key: false`。
+- **身份句规则覆盖实测**：见
+  [封号 runbook 2026-11-27 段](cpa-ban-throttle-incident-response.md)与
+  [identity-suffix 台账](../change-evidence/20261127-bwg-admission-identity-suffix.md)。
+  上游 [#8521](https://github.com/router-for-me/CLIProxyAPI/issues/8521) 证实 OpenCode V2
+  注入 `systemInstruction` 的 `tools.opencode.session_move` 是独立触发，上游只落了文档
+  提交 `0e19e8e`（不在 v8.1.7 内）。
+- **不适用于本部署的上游 open issue**：#8538（`disable-cooling` 下 429 凭据被立即重发；
+  本仓 `disable-cooling: false`）、#8530（Claude OAuth 约 4 周登录上限；本仓 Claude 车道无
+  凭据）。**留观**：#8539（auth 文件原地重写，崩溃或满盘可能留下截断凭据；Antigravity
+  两凭据约每 25 分钟重写一次，`RefreshLead=30m`）。
+- **WorkBuddy 凭据池（管理 API 实测，标签为文件名 sha256[:8]）**：`scheduler_mode:
+  credits` 下流量落在积分最高的凭据；11-27 04:39Z 与 04:59Z 两个凭据因积分低于
+  `low_credit_disable_below=20` 被插件自动禁用（其中一次伴随 `glm-5.4` 的上游
+  `429 code=14018 额度已用尽`）。这是插件的低积分下线设计，admission 的 12 RPM 车道帽
+  仍生效，不因集中而突破 14003 风险区间。
+- **zcode-start-plan 502 根因未证实**：边车 `auth status` 报 `Logged in: bigmodel`
+  （凭据文件在、可解密），`/health` 正常；`/quota` 的 coding 平面回
+  `1001 Header中未收到Authorization`，但该边车是 `plan: start-plan`，不能据此判定 LLM
+  请求必然失败。边车以普通 `serve` 运行，每请求只留一行表格日志；`zcode-proxy` 支持
+  `serve debug`（逐请求诊断）。该单元不受仓库投影管理，且 journald 只留约 21 小时，
+  所以**未常驻开启 debug**：下次该车道再出 502 或开始有稳定流量时，临时以 `serve debug`
+  跑一轮定位。重登入口（需本人在浏览器完成授权）：
+  `zcode-proxy auth login zai_cn`（带 `/etc/zcode-start-plan.env` 的加密种子）。
