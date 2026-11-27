@@ -755,14 +755,12 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。
-- **容量信号分两个作用域。** `model_capacity_markers`（本栈 = `selected model
-  is at capacity`、`model_at_capacity`）里的文本说的是**单个模型**，只停该模型：
-  `chatgpt-oauth` 一条凭据承载 `gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol`，
-  2026-10-10 实测 `gpt-6-luna` 的容量事件把整条 lane 冷却后，紧接着的
-  `gpt-6.1-sol` 请求被本地拒绝并回 `retry_after=471` —— 桌面侧就是"重试次数
-  耗尽"的 429，而那个模型从未容量不足。其余文本（`server_is_overloaded`、
-  `usage_limit_reached`、`rate limit`、`too many requests`）与"无标记的
-  `429/503`"描述的是**凭据/账号**，仍然停整条 lane。模型级窗口同样走
+- **容量信号分两个作用域。** `model_capacity_markers`（本栈 `chatgpt-oauth` = `selected model
+  is at capacity`、`model_at_capacity`、`server_is_overloaded`）里的文本按**单个模型**冷却，只停该模型：
+  `chatgpt-oauth` 一条凭据承载 `gpt-6-luna` / `gpt-6.1-sol` / `gpt-6.2-sol`，
+  2026-10-10 与 2026-11-27 实测 `gpt-6-luna` 的容量/过载事件（包括 Codex Desktop 新建线程时后台派生的两路 `ephemeralGenerationModel="gpt-6-luna"` 标题/建议生成撞上流内 `server_is_overloaded`）把整条 lane 冷却后，紧接着的主对话
+  `gpt-6.1-sol` 请求被本地拒绝并回 `retry_after=314..471` —— 桌面侧直接断流，而主模型本身与 CPA 核心该模型的 shard 从未进入冷却。其余文本（`usage_limit_reached`、`rate limit`、`usage limit`）与"无标记的
+  `429/503`"描述的是**凭据/账号**，仍然停整条 lane。流内 `response.failed` / `error` 事件嵌套的 `headers.retry-after`（或 `retry-after-ms`）由 `codex_overload_retry_after` 提取入 `model_retry_after`，使该模型首击即对齐 CPA 核心的模型级冷却窗口而不污染 `chatgpt-risk.json`。模型级窗口同样走
   `60/120/240/480/900` 阶梯、同样尊重上游 `Retry-After`（期间不提前探针）、
   同样只放一个探针并按代际校验成功；不同点是它只影响被点名的模型，并发预算
   仍由整条 lane 共享。运行态可从 `/healthz` 的 `cooldown_scope`

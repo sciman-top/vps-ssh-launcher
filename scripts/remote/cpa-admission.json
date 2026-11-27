@@ -35,7 +35,8 @@
       ],
       "model_capacity_markers": [
         "selected model is at capacity",
-        "model_at_capacity"
+        "model_at_capacity",
+        "server_is_overloaded"
       ],
       "capacity_markers": [
         "selected model is at capacity",

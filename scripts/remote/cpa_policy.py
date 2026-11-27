@@ -556,7 +556,13 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
 # lanes carry no model-named marker, and their capacity text stays
 # credential-wide.
 EXPECTED_MODEL_CAPACITY_MARKERS = {
-    "chatgpt-oauth": frozenset({"selected model is at capacity", "model_at_capacity"}),
+    "chatgpt-oauth": frozenset(
+        {
+            "selected model is at capacity",
+            "model_at_capacity",
+            "server_is_overloaded",
+        }
+    ),
 }
 
 # Runtime state written by the guardrail quarantine transaction. It lives next

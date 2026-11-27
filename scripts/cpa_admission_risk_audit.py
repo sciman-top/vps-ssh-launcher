@@ -74,7 +74,11 @@ STRICT_COOLDOWN_LANES = frozenset(
 # markers are model-scoped is therefore a reviewed contract, not a config value
 # someone may quietly move back to the lane-wide set.
 REQUIRED_MODEL_CAPACITY_MARKERS: dict[str, tuple[str, ...]] = {
-    "chatgpt-oauth": ("selected model is at capacity", "model_at_capacity"),
+    "chatgpt-oauth": (
+        "selected model is at capacity",
+        "model_at_capacity",
+        "server_is_overloaded",
+    ),
 }
 
 # Non-stream bodies use a bounded prefix; SSE streams inspect every event with

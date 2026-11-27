@@ -1102,6 +1102,92 @@ def workbuddy_6004_retry_after(
     return WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS
 
 
+def codex_overload_retry_after(
+    status: int,
+    body: bytes,
+    lane: dict[str, Any],
+    now: float | None = None,
+) -> int | None:
+    """Extract nested retry-after from a model-scoped chatgpt-oauth capacity event.
+
+    When stream-bootstrap-buffering is false, CPA relays Codex's in-stream
+    ``response.failed`` / ``error`` overload payload inside an HTTP 200 SSE
+    stream with no HTTP ``Retry-After`` response header. The upstream deadline
+    lives inside ``response.error.headers.retry-after`` (or ``retry-after-ms``),
+    and CPA core simultaneously arms a model-level cooldown for that exact
+    duration (CLIProxyAPI #7600). Extracting it into ``model_retry_after``
+    parks only the overloaded model for the upstream-advertised window without
+    triggering ``record_risk``'s lane-wide ``open_until`` / ``chatgpt-risk.json``
+    lockout across healthy sibling models.
+    """
+
+    if lane.get("name") != "chatgpt-oauth":
+        return None
+    if capacity_scope(status, body, None, lane) != "model":
+        return None
+    current = time.time() if now is None else now
+    text = body.decode("utf-8", errors="ignore")
+    candidates = [text] + [
+        line[5:].strip() for line in text.splitlines() if line.startswith("data:")
+    ]
+    delays: list[int] = []
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        response = payload.get("response")
+        error = payload.get("error")
+        resp_error = response.get("error") if isinstance(response, dict) else None
+        for headers in (
+            payload.get("headers"),
+            error.get("headers") if isinstance(error, dict) else None,
+            resp_error.get("headers") if isinstance(resp_error, dict) else None,
+        ):
+            if not isinstance(headers, dict):
+                continue
+            found_for_node = False
+            for key, value in headers.items():
+                if not isinstance(key, str) or key.strip().lower() != "retry-after":
+                    continue
+                raw = (
+                    str(value).strip()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                    else (value.strip() if isinstance(value, str) else "")
+                )
+                parsed = (
+                    None
+                    if not raw or raw.startswith(("-", "+"))
+                    else parse_retry_after(raw, current)
+                )
+                if parsed is not None:
+                    delays.append(parsed)
+                    found_for_node = True
+            if not found_for_node:
+                for key, value in headers.items():
+                    if (
+                        not isinstance(key, str)
+                        or key.strip().lower() != "retry-after-ms"
+                    ):
+                        continue
+                    raw = (
+                        str(value).strip()
+                        if isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                        else (value.strip() if isinstance(value, str) else "")
+                    )
+                    if raw and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw):
+                        ms = float(raw)
+                        if math.isfinite(ms) and ms > 0:
+                            delays.append(max(1, math.ceil(ms / 1000.0)))
+                            found_for_node = True
+            if found_for_node:
+                break
+    return max(delays, default=None)
+
+
 def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
     """Use the longest explicit provider deadline, never a guessed quota window."""
 
@@ -2344,7 +2430,7 @@ class StreamErrorProbe:
                         self.scope = scope
                     model_retry = workbuddy_6004_retry_after(
                         self.status, payload, self.lane
-                    )
+                    ) or codex_overload_retry_after(self.status, payload, self.lane)
                     if model_retry is not None:
                         self.model_retry_after = max(
                             self.model_retry_after or 0, model_retry
@@ -6331,11 +6417,13 @@ class Handler(BaseHTTPRequestHandler):
                 if stream_probe.model_retry_after is not None:
                     retry_after = max(retry_after or 0, stream_probe.model_retry_after)
             elif (
-                lane_name in WORKBUDDY_LANES
+                lane_name in {"chatgpt-oauth", *WORKBUDDY_LANES}
                 and capacity_kind == "model"
                 and retry_after is None
             ):
                 retry_after = workbuddy_6004_retry_after(
+                    response.status, bytes(probe), lane_config
+                ) or codex_overload_retry_after(
                     response.status, bytes(probe), lane_config
                 )
             if antigravity_quota_check:

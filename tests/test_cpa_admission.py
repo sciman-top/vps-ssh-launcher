@@ -101,6 +101,7 @@ requested_model = cast(Any, MODULE["requested_model"])
 requested_stream = cast(Any, MODULE["requested_stream"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
 workbuddy_6004_retry_after = cast(Any, MODULE["workbuddy_6004_retry_after"])
+codex_overload_retry_after = cast(Any, MODULE["codex_overload_retry_after"])
 completed_response_text_state = cast(Any, MODULE["completed_response_text_state"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
@@ -1631,7 +1632,7 @@ def test_stream_probe_bounds_oversized_event_and_resumes_at_next_event() -> None
     assert len(probe.data) <= 128
     probe.feed(b'\n\ndata: {"error":"server_is_overloaded"}\n\n')
     probe.finish()
-    assert probe.scope == "lane"
+    assert probe.scope == "model"
     assert probe.has_error
     assert not probe.complete
 
@@ -2802,14 +2803,14 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
     )
     assert (
         capacity_scope(503, b'{"error":{"code":"server_is_overloaded"}}', None, chatgpt)
-        == "lane"
+        == "model"
     )
     # Mixed evidence must fail closed to the credential scope: a model marker
-    # cannot override an account-level overload marker in the same response.
+    # cannot override an account-level quota/rate-limit marker in the same response.
     assert (
         capacity_scope(
-            503,
-            b'{"error":{"code":"server_is_overloaded",'
+            429,
+            b'{"error":{"code":"usage_limit_reached",'
             b'"message":"Selected model is at capacity"}}',
             None,
             chatgpt,
@@ -8164,7 +8165,7 @@ def test_lane_reject_survives_a_client_that_left_before_the_429_landed() -> None
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
             self.rfile.read(length)
-            body = b'{"error":{"code":"server_is_overloaded"}}'
+            body = b'{"error":{"code":"usage_limit_reached"}}'
             self.send_response(503)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -9063,6 +9064,96 @@ def test_workbuddy_6004_stream_deadline_keeps_model_scope() -> None:
     assert probe.scope == "model"
     assert probe.model_retry_after == 60
     assert probe.retry_after is None
+
+
+def test_codex_overload_nested_retry_after_keeps_model_scope_and_spares_sibling() -> (
+    None
+):
+    chatgpt = lane(config(), "chatgpt-oauth")
+    failed_event = json.dumps(
+        {
+            "type": "response.failed",
+            "response": {
+                "error": {
+                    "type": "service_unavailable_error",
+                    "code": "server_is_overloaded",
+                    "message": "Our servers are currently overloaded. Please try again later.",
+                    "headers": {
+                        "retry-after": "317",
+                        "retry-after-ms": "317000",
+                    },
+                }
+            },
+            "sequence_number": 3,
+        }
+    ).encode()
+    assert codex_overload_retry_after(200, failed_event, chatgpt) == 317
+
+    ms_only_event = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "service_unavailable_error",
+                "code": "server_is_overloaded",
+                "headers": {"retry-after-ms": "305200"},
+            },
+        }
+    ).encode()
+    assert codex_overload_retry_after(200, ms_only_event, chatgpt) == 306
+
+    # Top-level headers outrank nested error.headers (matching CLIProxyAPI #7600).
+    precedence_event = json.dumps(
+        {
+            "type": "error",
+            "headers": {"retry-after": "326"},
+            "error": {
+                "type": "service_unavailable_error",
+                "code": "server_is_overloaded",
+                "headers": {"retry-after": "1"},
+            },
+        }
+    ).encode()
+    assert codex_overload_retry_after(200, precedence_event, chatgpt) == 326
+
+    # Account-level usage_limit_reached remains lane-scoped and returns None here.
+    quota_event = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "usage_limit_reached",
+                "code": "usage_limit_reached",
+                "headers": {"retry-after": "3600"},
+            },
+        }
+    ).encode()
+    assert codex_overload_retry_after(429, quota_event, chatgpt) is None
+
+    probe = StreamErrorProbe(4096, chatgpt, 200, "/v1/responses")
+    probe.feed(b"event: response.failed\ndata: " + failed_event + b"\n\n")
+    assert probe.has_error
+    assert probe.scope == "model"
+    assert probe.model_retry_after == 317
+    assert probe.retry_after is None
+
+    state = LaneState(chatgpt)
+    luna_lease = state.acquire(model="gpt-6-luna")
+    assert luna_lease.admitted
+    state.release(
+        luna_lease,
+        capacity_error=True,
+        retry_after=probe.model_retry_after,
+        successful=False,
+        capacity_scope=probe.scope,
+    )
+    snap = state.snapshot()
+    assert snap["cooldown_active"] is False
+    assert snap["cooldown_scope"] == "model"
+    assert snap["model_cooldowns"].get("gpt-6-luna", 0) >= 316
+
+    # Sibling gpt-6.1-sol is admitted immediately without lane cooldown collateral.
+    sol_lease = state.acquire(model="gpt-6.1-sol")
+    assert sol_lease.admitted
+    state.release(sol_lease, capacity_error=False, retry_after=None, successful=True)
 
 
 @pytest.mark.parametrize("status", [200, 429, 500])

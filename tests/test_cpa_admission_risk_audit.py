@@ -82,7 +82,11 @@ def admission_config(
                     "usage_limit_reached",
                 ],
                 "model_capacity_markers": (
-                    ["selected model is at capacity", "model_at_capacity"]
+                    [
+                        "selected model is at capacity",
+                        "model_at_capacity",
+                        "server_is_overloaded",
+                    ]
                     if model_markers is None
                     else model_markers
                 ),
@@ -531,6 +535,7 @@ class ContractTests(unittest.TestCase):
                 "model_capacity_markers": [
                     "selected model is at capacity",
                     "model_at_capacity",
+                    "server_is_overloaded",
                 ],
             }
         ]
@@ -629,11 +634,12 @@ class ContractTests(unittest.TestCase):
             for finding in findings
             if finding.code == "lane-model-capacity-scope-missing"
         ]
-        self.assertEqual(len(failed), 2)
+        self.assertEqual(len(failed), 3)
         self.assertTrue(all(item.severity == SEVERITY_FAIL for item in failed))
         joined = " ".join(item.message for item in failed)
         self.assertIn("'selected model is at capacity'", joined)
         self.assertIn("'model_at_capacity'", joined)
+        self.assertIn("'server_is_overloaded'", joined)
 
     def test_model_marker_outside_the_capacity_markers_fails(self) -> None:
         # A credential-level marker smuggled into the model scope would stop
