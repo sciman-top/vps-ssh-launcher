@@ -178,6 +178,7 @@ def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
     retired = set(policy["retired_models"])
     assert {
         "gpt-reserve",
+        "gpt-6.1-terra",
         "gpt-6.1-sol-input",
         "gpt-6-astra",
         "gpt-5.6-terra",

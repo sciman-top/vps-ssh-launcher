@@ -435,21 +435,46 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
         "oauth_routes",
         "codex_api_key_routes",
         "claude_api_key_routes",
-        "plugin_routes",
     ):
         for route in routes.get(group) or []:
             if not isinstance(route, dict):
                 continue
             for model in route.get("models") or []:
-                alias = (
-                    model
-                    if group == "plugin_routes" and isinstance(model, str)
-                    else model.get("alias")
-                    if isinstance(model, dict)
-                    else None
-                )
+                alias = model.get("alias") if isinstance(model, dict) else None
                 if isinstance(alias, str) and alias:
                     aliases.add(alias)
+    oauth_aliases = routes.get("oauth_model_aliases")
+    oauth_aliases = oauth_aliases if isinstance(oauth_aliases, dict) else {}
+    for route in routes.get("plugin_routes") or []:
+        if not isinstance(route, dict):
+            continue
+        provider = (
+            str(route.get("provider") or "").strip().lower()
+            if isinstance(route.get("provider"), str)
+            else ""
+        )
+        raw_alias_entries = oauth_aliases.get(provider) if provider else None
+        alias_entries = raw_alias_entries if isinstance(raw_alias_entries, list) else []
+        for model in route.get("models") or []:
+            if not isinstance(model, str) or not model.strip():
+                continue
+            pin = model.strip()
+            matched_aliases = [
+                entry
+                for entry in alias_entries
+                if isinstance(entry, dict)
+                and isinstance(entry.get("name"), str)
+                and entry["name"].strip() == pin
+                and isinstance(entry.get("alias"), str)
+                and entry["alias"].strip()
+            ]
+            if not matched_aliases:
+                aliases.add(pin)
+                continue
+            for entry in matched_aliases:
+                if entry.get("fork") is True:
+                    aliases.add(pin)
+                aliases.add(entry["alias"].strip())
     return aliases
 
 

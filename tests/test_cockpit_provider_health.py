@@ -704,17 +704,41 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
                     "plugin_routes": [
                         None,
                         {
+                            "provider": "workbuddy-provider",
                             "models": [
                                 "deepseek-v4.1-flash",
+                                "glm-5.3-flash",
+                                "glm-5.4",
+                                "forked-pin",
                                 "",
                                 None,
                                 42,
-                            ]
+                            ],
                         },
-                    ]
+                    ],
+                    "oauth_model_aliases": {
+                        "workbuddy-provider": [
+                            {"name": "glm-5.3-flash", "alias": "glm-5.3-flash-wb"},
+                            {"name": "glm-5.4", "alias": "glm-5.4-wb"},
+                            {
+                                "name": "forked-pin",
+                                "alias": "forked-alias",
+                                "fork": True,
+                            },
+                        ]
+                    },
                 },
             )
-            self.assertEqual(load_route_aliases(routes), {"deepseek-v4.1-flash"})
+            self.assertEqual(
+                load_route_aliases(routes),
+                {
+                    "deepseek-v4.1-flash",
+                    "glm-5.3-flash-wb",
+                    "glm-5.4-wb",
+                    "forked-pin",
+                    "forked-alias",
+                },
+            )
 
     def test_catalog_loader_reads_slugs_in_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
