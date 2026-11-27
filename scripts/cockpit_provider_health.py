@@ -259,6 +259,21 @@ def read_json(path: pathlib.Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def read_active_provider_name(path: pathlib.Path) -> str:
+    """Return the provider table name that `read_config_target` looks up."""
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return "codex_local_access"
+    active = config.get("model_provider")
+    if active is None:
+        return "codex_local_access"
+    if not isinstance(active, str) or not active.strip():
+        return "<empty>"
+    stripped = active.strip()
+    return stripped if re.fullmatch(r"[A-Za-z0-9_.-]+", stripped) else "<unrecognized>"
+
+
 def read_config_target(path: pathlib.Path) -> str | None:
     """Return the `base_url` of the provider the desktop actually selects.
 
@@ -1197,9 +1212,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             severity="warn",
         )
     elif target == TARGET_UNKNOWN:
+        active_provider = read_active_provider_name(args.codex_config)
         report.add(
             "desktop-target-missing",
-            "未能在 config.toml 里找到 [model_providers.codex_local_access] 的 "
+            f"未能在 config.toml 里找到 [model_providers.{active_provider}] 的 "
             "base_url ⇒ 桌面目标未知",
             severity="warn",
         )

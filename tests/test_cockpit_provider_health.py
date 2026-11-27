@@ -394,6 +394,7 @@ class ConfigTargetTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertIsNone(read_config_target(path))
+            self.assertEqual(MODULE["read_active_provider_name"](path), "missing_block")
 
     def test_active_provider_with_dotted_name_is_resolved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -185,9 +185,15 @@ def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
         "gpt-5.6-luna",
         "deepseek-v4.1-flash-oc",
         "gemini-4-carbon-high",
+        "gemini-3.8-flash-high",
+        "gemini-4-argon-high",
+        "gemini-4-neon-xhigh",
+        "claude-opus-5-5-high",
+        "claude-sonnet-5-5-high",
         "hy4free",
         "hy4flash-free",
     } <= retired
+    assert "glm-5.3" not in retired
     assert "glm-5.3-flash" not in retired
 
 
