@@ -385,3 +385,26 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
   插件注册断言在隔离预检里需生产 `plugins.configs` 段（scratch 只验 binary）。
 - terra 已于 11-26 由并行会话退役（`540dec1`），探针集里用 `gpt-6.1-sol`
   替代；400 `model_not_found` 对退役名是正确行为。
+
+### 2026-11-27（同日续）：换到 v8.1.7
+
+用户同日指令直接升级至 v8.1.7。生产现为
+`cli-proxy-api-fork:v8.1.7-gemini-raw-daily-cap-authiso-sigiso`（binary
+`f0d6349a…`，upstream 锚 `47f18e4d`），五叠层零冲突合并；WorkBuddy CN 插件维持
+`0.21.32`（上游最新）、`zcode-start-plan` 维持 `zcode-proxy 4.9.1`（上游最新）。
+事务、回滚与验收见
+[换代台账](../change-evidence/20261127-bwg-cpa-v817-five-overlay-swap.md)。
+
+- **v8.1.7**（2026-11-27，v8.1.6 之上 3 提交）：`830b9cac`（#8516 修复 Unix 插件
+  重载测试的 fresh-image 断言）、`7fa52365`（#8520 修复 Gemini OpenAI Chat 翻译中
+  合并工具响应的用户消息排序，防 Vertex AI HTTP 400）、`47f18e4d`（#8519 插件重配、
+  热重载与目录错误时保持调度器路由与原子快照）。
+- **测试硬门基线更新**：WSL 全量 `go test ./...` 升至 **109 包 ok**，上代失败的
+  `TestUnixPluginReloadAfterShutdownUsesReplacedFile` 已恢复通过，仅保留既有的
+  `TestAntigravityExecutorCAQSTwoTurnReplay`（sig-iso 基线偏差）。
+- **验收与 12h 基线**：strict doctor `DOCTOR_CONTRACT_OK`（含新增的
+  `zcode-sidecar-*` 门禁）；12h 自然流量缓存命中率 **95.59%**（865/906 turns），
+  `agent_identity_neutralized=883`、`holds_12h=0`、`credential_ban_signals_7d=0`；
+  三大 OAuth 车道受控单发探针（`gemini-4-hydrogen-xhigh` / `deepseek-v4.1-flash` /
+  `gpt-6.1-sol`）全 200，`zhipu-coding-plan`（`glm-5.4`）遇 5h 窗口 429 `code=1308`
+  后 admission 即时冷却、零重试 fail-closed。
