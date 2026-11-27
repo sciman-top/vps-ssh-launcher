@@ -44,7 +44,7 @@
 | `repo_verified` | `scripts/run_gates.ps1 -RunParallel`：`CATALOG_CHECK=PASS`、bandit、ruff、format（178 files）、mypy（165 files, 0 issues）、pytest 1898 passed / 30 skipped / 903 subtests |
 | `filesystem_projected` | live `cpa-admission.py` = 主机 pin = `3a9df1d3…`；`drift=cpa-admission.py / cpa_request_guard.py / cpa-admission.sha256` 均 MATCH |
 | `host_loaded` | 推送（HEAD `06a4b2b`）后 strict doctor `DOCTOR_CONTRACT_OK`；admission active；healthz `ok`，5 lanes |
-| `live_accepted` | **未兑现**：换代后尚无自然流量经过（journal 结果为空）；未发合成探针（OAuth 车道有账号成本）。待自然流量出现 `agent_identity_neutralized` 命中后补记 |
+| `live_accepted` | **本代未取得自然流量验收**：`3a9df1d3…` 在役 05:41:24Z–05:58:01Z，期间零自然流量，随后被后继代 `b99cfd2f…`（`96636da`，叠加 Claude Code Desktop / Agent SDK 身份句变体）接替。后继代保留本修复（后缀分支在其 `AGENT_IDENTITY_SENTENCES` 内），其后自然流量有 2 次清洗命中且均 200（06:00:50Z `glm-5.3-flash-wb`、06:00:52Z `gemini-4-hydrogen-xhigh`），但这两次走的不是后缀分支。**补充模拟验收**：对线上字节 `b99cfd2f…` 以 `nobody` 加载并执行 `neutralize_agent_identity_sentences`，8 例全过（带后缀模型名、官方句式、无损路径/工具名/裸模型名），零网络、零写入。后缀分支的真实流量命中仍待自然出现 |
 
 ## 回滚
 
