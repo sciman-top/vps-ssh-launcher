@@ -108,7 +108,8 @@
         "rate_limit",
         "too many requests",
         "usage limit",
-        "usage_limit_reached"
+        "usage_limit_reached",
+        "exceed quota limit"
       ]
     },
     {

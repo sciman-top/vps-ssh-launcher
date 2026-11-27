@@ -2882,6 +2882,50 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
     assert lane(loaded, "zhipu-coding-plan")["model_capacity_markers"] == ()
 
 
+def test_start_plan_quota_refusal_is_a_lane_capacity_signal() -> None:
+    # Measured 2026-11-27 on bwg: with the Start Plan exhausted, the zcode.z.ai
+    # gateway answers HTTP 200 + {"code":1005,"msg":"exceed quota limit"}. The
+    # zcode-proxy sidecar cannot translate that as a stream and emits
+    # 502 `translation_failed` with the upstream JSON quoted in its message.
+    # Without a marker the refusal read as a transport fault: no cooldown and
+    # an immediate client retry against the same exhausted plan.
+    loaded = config()
+    start_plan = lane(loaded, "zcode-start-plan")
+    sidecar_502 = (
+        b'{"error":{"type":"translation_failed","message":"upstream returned '
+        b'invalid Anthropic message: {\\"code\\":1005,\\"msg\\":\\"exceed quota '
+        b'limit\\",\\"logid\\":\\"20261127135434914a4321\\"}"}}'
+    )
+    assert capacity_scope(502, sidecar_502, None, start_plan) == "lane"
+    # A 429 carrying the same text is still capacity.
+    assert (
+        capacity_scope(
+            429,
+            b'{"error":{"code":1005,"message":"exceed quota limit"}}',
+            None,
+            start_plan,
+        )
+        == "lane"
+    )
+    # A sidecar translation failure for any other reason is not a quota
+    # signal: it stays off the capacity ladder.
+    assert (
+        capacity_scope(
+            502,
+            b'{"error":{"type":"translation_failed","message":"upstream returned '
+            b'non-JSON body: unexpected token"}}',
+            None,
+            start_plan,
+        )
+        is None
+    )
+    # The marker is scoped to this lane; its sibling GLM lane is unchanged.
+    assert (
+        "exceed quota limit"
+        not in lane(loaded, "zhipu-coding-plan")["capacity_markers"]
+    )
+
+
 def test_expired_lane_deadline_is_not_reported_as_active_cooldown(
     monkeypatch: Any,
 ) -> None:

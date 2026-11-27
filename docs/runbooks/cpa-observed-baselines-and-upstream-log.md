@@ -508,3 +508,21 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
   Start Plan 官方明文限于官方客户端。
 - **研究覆盖的缺口**：子代理的搜索与网页阅读配额当日耗尽（2026-12-16 重置），Reddit、
   X、linux.do、V2EX 等论坛全部未覆盖；证据仅来自官方页直取与 GitHub。
+
+### 2026-11-27（同日七续）：起步套餐车道的根因与修复
+
+用户裁决该车道保留并授权修复。事务与证据见
+[起步套餐台账](../change-evidence/20261127-bwg-zcode-start-plan-quota-and-claim.md)。
+
+- **该车道此前从未验收，502 的原因不是边车故障**：上游 `zcode.z.ai` 对额度耗尽回
+  HTTP 200 + `{"code":1005,"msg":"exceed quota limit"}`，边车把它包成
+  `502 translation_failed` 并把原文引在自己的 message 里。六续里"边车 502 多为自身挂起"
+  （引自 zcode-api 旧 issue 标题）对本部署不成立，已在该 issue 的当前版本上实测排除。
+- **撤回六续的一个推断**：admission 在该车道改写 ZCode 身份句与边车的官方系统块不冲突——
+  边车在出站时才前置官方三块，admission 改的是边车之前的客户端文本。清洗规则保持现状。
+- **两处修复**：`exceed quota limit` 加入 `zcode-start-plan` 的 `capacity_markers`
+  （此前额度耗尽被当成传输故障，不冷却）；边车 `claim.auto: false`（上游默认开启的
+  活动 polling 对 BigModel 起步套餐没有收益）。`cpa-admission.py` 字节未变，pin 不轮换。
+- **排查手筋**：边车普通 `serve` 只留一行 502 表格行。先直连边车发一发非流式请求读
+  原始错误体，不必切 `serve debug`；`auth status` 必须带服务的完整环境（含
+  `ZCODE_PROXY_CREDENTIAL_SECRET`），否则会报凭据损坏的假象。

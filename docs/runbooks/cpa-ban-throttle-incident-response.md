@@ -1075,21 +1075,50 @@ Reddit / X / linux.do 等论坛未覆盖，下列"没有查到"都只限所查�
   [#83](https://github.com/TriDefender/zcode-api/issues/83) 是同账号 start-plan `405/3012`
   而 coding-plan 200，与官方"只暂停体验套餐"一致（issue 正文经摘要工具转述）。
 - **边车实测**（只读）：单元 `zcode-start-plan.service` 自 2026-11-21 运行，配置只有
-  `server / auth / provider: bigmodel / plan: start-plan / models / identity`，**没有 `claim` 段**
-  ——按上游模板默认值 `claim.enabled: true`、`claim.auto: true`，即每 5 分钟轮询官方活动页并
-  自动领取（journal 在 2026-11-27 有一条 `[claim] claim: preview failed … retry in 600s`）。
-  上游用户协议把"羊毛党自动化"列为禁止行为。该单元不受本仓投影管理，改动须单独授权。
+  `server / auth / provider: bigmodel / plan: start-plan / models / identity`。v4.9.1 的
+  `claim.enabled` / `claim.auto` 默认都是 `true`：每 5 分钟用 OAuth JWT 轮询 `zcode.z.ai`
+  的活动页并自动领取（含验证码），而本部署用的是 BigModel 起步套餐，轮询没有收益，
+  却是凭据上最像"羊毛党自动化"的行为。**2026-11-27 已改**：`claim.auto: false` 追加到
+  边车配置（`enabled` 保留，CLI `zcode-proxy claim` 仍可用），重启后 `[claim]` 行为 0。
+  该单元不受本仓投影管理；回滚入口与事务见
+  [起步套餐台账](../change-evidence/20261127-bwg-zcode-start-plan-quota-and-claim.md)。
 - **与清洗规则的关系**：admission 在 `zcode-start-plan` 车道改写 ZCode 身份句
-  （`_AGENT_IDENTITY_TEXT_ROLES`）。边车维护者把"系统提示词与官方不一致"称为检测面，这一
-  改写会让提示词进一步偏离官方形状——方向性冲突属推断，该车道 48h 内只有 1 发（502），
-  没有可验证的流量。
+  （`_AGENT_IDENTITY_TEXT_ROLES`）。边车 v4.9.1 源码（`src/proxy/body-transformer.ts`
+  `applyStartPlanOpenAISystem`、`src/proxy/system-prompt.ts` `buildStartPlanSystem`）
+  证实两者**不冲突**：网关靠 `system` 字段里的官方身份块识别 ZCode，而边车是在
+  **出站时**才前置这三块（块 2 是字节精确的官方稳定文本）；admission 在边车之前改写的
+  只是客户端自己带来的 system 文本，碰不到官方块。官方 FAQ 的执法条件是"把额度转接到
+  其他工具"，清洗一句身份句既不构成也不消除这一条件。**2026-11-27 用户裁决：车道保留，
+  清洗规则保持现状**（不扩、不撤）。上一版本此处"方向性冲突"的说法已撤回：边车维护者
+  在 [#85](https://github.com/TriDefender/zcode-api/issues/85) 的原话是"系统提示词肯定是不一致的"
+  （针对任意第三方客户端，报告者用的是 zai 侧 + omp 客户端），不是指身份句改写。
+  已知残余：边车把客户端系统提示的其余部分原样放进块 3，本仓改不了。
+- **502 的真实原因（2026-11-27 实测，取代"边车自身挂起"的推断）**：上游
+  `zcode.z.ai` 对额度耗尽回的是 **HTTP 200 + 业务错误体**
+  `{"code":1005,"msg":"exceed quota limit"}`；边车无法把它翻译成流，产出
+  `502 translation_failed`，把上游 JSON 原文引在自己的 message 里。所以该车道看到的 502
+  = **起步套餐额度已用完**，不是风控、不是边车故障、也不是免费窗口的问题。已修：
+  `exceed quota limit` 加入该车道 `capacity_markers`，admission 现在把它当容量信号入
+  冷却阶梯；此前它被当成传输故障（`upstream_error`），不冷却，客户端可以立即重试。
+  排查手筋：普通 `serve` 模式只留一行 `502` 表格行，不留原因——**先直接对边车发一发
+  非流式请求读原始错误体**（边车端口 18082，用边车自己的 `proxyApiKey`），比临时切
+  `serve debug` 更省，也不用再改单元。
+- **边车运行手筋**：`auth status` 必须在服务的完整环境里跑——只设 `HOME` 不带
+  `ZCODE_PROXY_CREDENTIAL_SECRET` 会报 "Ignoring corrupted or stale credentials / Not
+  logged in"，那是解密种子缺失的假象，不是凭据坏了（2026-11-27 实犯）。正确写法：
+  `set -a; . /etc/zcode-start-plan.env; set +a; zcode-proxy auth status`。
 - **降智与用量**：官方 FAQ 否认自动换模（"在模型选择器里选哪个，就用哪个"），只有高峰
   （工作日 14:00–18:00 UTC+8）排队限速的表述。GLM-5.4 思考下限是 `low`，开启思考但缺省
   `reasoning_effort` 会落到 `max`（[latest-model](https://docs.bigmodel.cn/cn/coding-plan/latest-model)）。
   ZCode 按 `usage` 判断是否压缩，网关须原样回传，否则客户端会反复压缩。
-- **信号处置**：`405 / 3012` = 体验套餐被暂停或临时风控，停该车道、不重试、不突发；
-  `1308` / `1310` = 5 小时 / 周额度窗，退避到重置点，不在两条 GLM 车道间同时重试放大；
-  边车 502 多为自身挂起（上游 #54、#66、#82），先看边车日志再判断是否风控。
+- **信号处置**：`405 / 3012` = 体验套餐被暂停或临时风控，停该车道、不重试、不突发
+  （admission 目前**不**识别 3012，不落锁；见下条挂账）；`exceed quota limit` /
+  `code 1005` = 套餐额度用尽，已入冷却阶梯；`1308` / `1310` = 5 小时 / 周额度窗，
+  退避到重置点，不在两条 GLM 车道间同时重试放大；边车 502 先按上一条手筋读原始体，
+  再判断是额度、风控还是边车故障。
+- **挂账（未做，需单独评审）**：让 3012 落持久锁（`account_restricted`）需要把
+  `zcode-start-plan` 纳入 `DURABLE_OAUTH_LANES`，牵涉 strict backoff、风险状态文件、
+  doctor 的 `lane-hold` 门禁与 policy 校验四处；该车道 48h 仅 1 发流量，未在本切片扩张。
 
 ## 禁止
 
