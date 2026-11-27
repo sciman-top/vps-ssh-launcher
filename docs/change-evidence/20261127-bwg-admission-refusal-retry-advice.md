@@ -63,10 +63,14 @@ prompt 大小与并发不显著；[#63577](https://github.com/openai/codex/issue
   - 输出：`STAGED_RULE_OK` → `ADMISSION_IDLE_OK` → `BACKUP_READY` → `ADMISSION_PIN_ROTATED` →
     `ADMISSION_INTEGRITY_OK`×3 → `DEPLOY_OK`（`2026-11-27T12:02:13Z` 起的新进程，`NRestarts=0`）
   - 备份：`/opt/cliproxyapi/backups/20261127T120213.832610822Z-admission-codex-refusal-retry-after-20261127`
-- **Doctor**：`DOCTOR_CONTRACT_OK`；17 项投影全部 `MATCH`；`admission-integrity=OK`；
-  `admission-service=enabled-active`。因投影已全部一致，未再执行 `-Apply`。
+- **Doctor 与投影**：部署事务后先跑只读 doctor，`DOCTOR_CONTRACT_OK`、17 项 drift 全部
+  `MATCH`、`admission-integrity=OK`。随后按惯例补跑
+  `scripts/cpa_bwg_guardrails.ps1 -Profile bwg -Apply`（`2026-11-27T12:19Z`，五条车道空闲时）：
+  `GUARDRAILS_APPLIED`、17 项 `PROJECTION_HASH_VERIFIED`（0 不匹配、0 回滚）、`HEALTH_OK`、
+  `READY_STATUS=200`，备份 `/root/cpa-guardrails-backup-20261127T121901.964548846Z`。
+  再次只读 doctor：`DOCTOR_CONTRACT_OK`；服务 `12:19:11Z` 重启后 `NRestarts=0`，无异常栈。
 - **线上字节语义校验**（以 `nobody` 加载线上 `/opt/cliproxyapi/cpa-admission.py`）：
-  `LIVE_SEMANTIC_OK` —— 窗口型拒绝带 `headers`；600 秒以上窗口、非窗口值与 chat 形状不带；
+  `LIVE_SEMANTIC_OK` —— 窗口型拒绝带 `headers`；600 秒以上窗口与非窗口值不带；
   转发过滤只留一个 `Content-Length`；模型级冷却下兄弟模型获准。
 - **真实链路**（`scripts/cpa_stream_acceptance.py --model gpt-6.2-sol`，三次）：
   - `12:05:06Z` 请求 `d4692b3b` 准入 → `12:05:13Z` 上游流内过载
@@ -84,13 +88,51 @@ prompt 大小与并发不显著；[#63577](https://github.com/openai/codex/issue
     sse_last_event=response.completed sse_text_finish=stop usage_in=313`，
     客户端侧 `STREAM_ACCEPTANCE result=PASS`（`completed_ms=6811`、9 个事件、`failures=[]`），
     其后 healthz `cooldown_scope=none`、`failure_streak=0`。
-- **判据行**：`DEPLOY_OK`、`DOCTOR_CONTRACT_OK`、`LIVE_SEMANTIC_OK`、
-  `STREAM_ACCEPTANCE_RESULT=PASS`（request_id `bdc16c15906c405192ba6c5c6e813630`）。
-- **仍待观察**：Codex 客户端在真实过载下按期限等待后重连的自然流量命中——journal 出现
-  `lane_reject reason=model_cooldown|cooldown` 后，同一请求不再于 2 秒内重复出现。
+- **判据行**：`DEPLOY_OK`、`GUARDRAILS_APPLIED`、`DOCTOR_CONTRACT_OK`、`LIVE_SEMANTIC_OK`、
+  `HOST_REPLAY_OK`、`STREAM_ACCEPTANCE_RESULT=PASS`（request_id `bdc16c15906c405192ba6c5c6e813630`）、
+  `LIVE_CODEX_DRILL=RECOVERED`。
+- **CI**：推送 `bde10c1` 后 `CI` 与 `Documentation checks` 均 success。
 - **回滚**：在维护锁下把上述备份目录中的 `cpa-admission.py`、`cpa-admission.json`、
   `cpa_request_guard.py`、`cpa-admission.sha256` 考回原路径并执行
   `systemctl restart cpa-admission`；仓内 `git revert 1c34122`。
+
+### 3.1 模拟：bwg 主机上的进程级重放
+
+以服务账号 `nobody` 加载线上模块（`2bc34f73`，主机 Python 3.12.3）与线上配置，在临时回环端口
+另起一个 admission 进程和一个假 CPA；不触碰 8318 / 8317，不持久化状态，不持生产请求锁。
+`HOST_REPLAY_OK`：
+
+- **18:30 事件链**：两个在飞 `gpt-6-luna` 的上游过载原样透传（`retry-after=317`）；排队中的第三个
+  `gpt-6-luna` 收到 `model_cooldown`，`retry_after=317`、`headers={'retry-after': '317'}`，
+  没有打穿到 CPA；排队的 `gpt-6.1-sol` 主请求 10 毫秒内获准并完成；车道
+  `cooldown_active=False`、`cooldown_scope=model`，只停 `gpt-6-luna`；假 CPA 只看到两笔 luna
+  与一笔 sol，且每个上游请求只有一个 `Content-Length`。
+- **主模型自身过载后的重连**：`gpt-6.1-sol` 的上游过载透传后，下一次同模型请求收到带期限的
+  `model_cooldown`；车道保持开放。
+- **CPA 拒连**：流式请求收到完整的 `response.failed`（`upstream_transport_error`、
+  `retry_after=60`、无 `headers`），不再是空流；服务端只记一条 `upstream_error` 警告。
+
+### 3.2 受控实战：真实 Codex 客户端经线上网关
+
+`codex-cli 0.171.0`（Desktop 内嵌内核的同代），临时 `CODEX_HOME`，沿用用户自己的重试预算
+（`stream_max_retries=2`、`request_max_retries=0`），走公网网关。先用两个 `gpt-6.2-sol` 小探针
+取得一次真实冷却（第一个探针正常完成，第二个撞上游过载），再启动客户端。服务端同一 turn
+（`client_request_hash=7fcb9e2f99df`）的时间线：
+
+| 时刻 (UTC) | 事件 |
+|---|---|
+| 12:26:04 | `lane_reject … model=gpt-6.2-sol reason=model_cooldown retry_after=204 waited_ms=0` |
+| 其后 205 秒 | 该 turn 没有任何请求 |
+| 12:29:29 | `lane_admit … waited_ms=2` |
+| 12:29:36 | `upstream_result … status=200 successful=true protocol_result=completed` |
+
+客户端侧 `ERROR: Reconnecting... 1/2` 之后输出 `OK`，`12:26:03Z` 启动、`12:29:47Z` 以成功结束，
+全程无人工操作。修复前的同一情形：`10:30:47–51Z` 在 +1.4 秒 / +1.7 秒重连后硬失败，
+`11:21:48–51Z` 五笔拒绝落在 3 秒内。
+
+本次演练的上游接触共 3 次小请求（两个探针、一次重连）；被冷却的是用户较少使用的
+`gpt-6.2-sol`，主模型未受影响。演练脚本前两次启动因临时配置的类型写法错误而即时退出，
+没有发出请求。
 
 ## 4. 效果边界、评审注记与未做项
 
