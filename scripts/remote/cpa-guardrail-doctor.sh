@@ -519,6 +519,39 @@ if systemctl is-active --quiet cpa-luna-admission.service 2>/dev/null ||
 else
   echo legacy-admission=absent
 fi
+# zcode-start-plan is the only lane whose upstream is a host sidecar
+# (zcode-proxy on the Docker bridge gateway). The admission table below
+# checks the lane limits, but nothing else on this surface observes the
+# sidecar itself: on 2026-11-26T15:09Z its only natural request failed
+# (502 after 8 s) while every gate stayed green. The sidecar must be a
+# running enabled unit bound to the bridge gateway only.
+if systemctl is-enabled --quiet zcode-start-plan.service &&
+   systemctl is-active --quiet zcode-start-plan.service; then
+  echo zcode-sidecar-service=enabled-active
+else
+  mark_fail zcode-sidecar-service
+fi
+if ss -ltnp 2>/dev/null | grep -E '(^|[[:space:]])172\.17\.0\.1:18082[[:space:]]' |
+   grep -Fq 'zcode-proxy'; then
+  echo zcode-sidecar-listener=OK
+else
+  mark_fail zcode-sidecar-listener
+fi
+if ss -ltn | grep -Eq '(0\.0\.0\.0|\[::\]|\*:)[[:space:]]*:?18082[[:space:]]'; then
+  mark_fail zcode-sidecar-public-socket
+else
+  echo zcode-sidecar-public-socket=ABSENT
+fi
+zcode_cred_age_days="$(
+  python3 -c '
+import os, sys, time
+try:
+    print(int((time.time() - os.stat(sys.argv[1]).st_mtime) // 86400))
+except OSError:
+    print("unknown")
+' /opt/zcode-start-plan/auth/.zcode-proxy/credentials.json 2>/dev/null
+)"
+echo "zcode-sidecar-credential-age-days=$zcode_cred_age_days observation_only"
 if curl --noproxy '*' -fsS --max-time 5 http://127.0.0.1:8318/healthz |
    python3 -c '
 import json, sys

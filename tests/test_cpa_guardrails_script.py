@@ -5650,6 +5650,152 @@ foreach ($case in @(
         self.assertLess(block.index("-ge 7"), block.index("mark_fail tls-cert"))
         self.assertIn("mark_fail tls-cert", block.rsplit("else", 1)[-1])
 
+    def test_doctor_gates_zcode_sidecar_listener_exposure(self) -> None:
+        doctor = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-doctor.sh"
+        ).read_text(encoding="utf-8")
+        # zcode-start-plan is the one lane whose upstream is a host sidecar.
+        # On 2026-11-26T15:09Z its only natural request failed while every
+        # gate stayed green: the admission table checks lane limits only.
+        # The split anchor sits mid-comment, so the first line has lost its
+        # leading ``#`` and must get it back or bash executes the prose.
+        block = "#" + doctor.split("zcode-start-plan is the only lane", 1)[1]
+        block = block.split('zcode_cred_age_days="$(', 1)[0]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Git Bash not available")
+        for name, listeners, expected in (
+            (
+                "bridge-bound",
+                "LISTEN 0 512 172.17.0.1:18082 0.0.0.0:* "
+                'users:(("zcode-proxy",pid=1,fd=8))\n',
+                ["zcode-sidecar-listener=OK", "zcode-sidecar-public-socket=ABSENT"],
+            ),
+            (
+                "foreign-process",
+                "LISTEN 0 512 172.17.0.1:18082 0.0.0.0:* "
+                'users:(("python3",pid=1,fd=8))\n',
+                ["FAILED zcode-sidecar-listener", "zcode-sidecar-public-socket=ABSENT"],
+            ),
+            (
+                "public-socket",
+                "LISTEN 0 512 0.0.0.0:18082 0.0.0.0:* "
+                'users:(("zcode-proxy",pid=1,fd=8))\n',
+                ["zcode-sidecar-listener", "FAILED zcode-sidecar-public-socket"],
+            ),
+            (
+                "ipv6-socket",
+                'LISTEN 0 512 [::]:18082 [::]:* users:(("zcode-proxy",pid=1,fd=8))\n',
+                ["FAILED zcode-sidecar-listener", "FAILED zcode-sidecar-public-socket"],
+            ),
+        ):
+            with self.subTest(case=name):
+                script = (
+                    "failures=0\n"
+                    'mark_fail() { echo "FAILED $1"; failures=$((failures + 1)); }\n'
+                    "systemctl() {\n"
+                    '  case "$1" in\n'
+                    '  is-enabled) [ -n "$unit_state" ] ;;\n'
+                    '  is-active) [ "$unit_state" = active ] ;;\n'
+                    "  esac\n"
+                    "}\n"
+                    "ss() {\n"
+                    '  case "$*" in\n'
+                    "  *-ltnp*) cat <<'SS'\n" + listeners + "SS\n"
+                    "        ;;\n"
+                    "  *) cat <<'SS'\n" + listeners + "SS\n"
+                    "     ;;\n"
+                    "  esac\n"
+                    "}\n"
+                    'unit_state="active"\n' + block
+                )
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", script),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for line in expected:
+                    self.assertIn(line, result.stdout)
+                self.assertEqual(
+                    result.stdout.count("zcode-sidecar-listener")
+                    + result.stdout.count("zcode-sidecar-public-socket"),
+                    2,
+                    result.stdout,
+                )
+                self.assertIn("zcode-sidecar-service=enabled-active", result.stdout)
+                # A stopped unit must fail its own gate while the listener
+                # gates keep reporting what the sockets actually show.
+                if name == "bridge-bound":
+                    stopped = script.replace('unit_state="active"', 'unit_state=""', 1)
+                    result = subprocess.run(
+                        self._bash_command(bash, "-c", stopped),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("FAILED zcode-sidecar-service", result.stdout)
+                    self.assertIn("zcode-sidecar-listener=OK", result.stdout)
+
+    def test_doctor_reports_zcode_sidecar_credential_age_as_observation(self) -> None:
+        doctor = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-doctor.sh"
+        ).read_text(encoding="utf-8")
+        # The JWT expiry semantics of the encrypted credentials file are not
+        # established, so the age is printed for the operator and never gates.
+        self.assertIn("zcode-sidecar-credential-age-days=$zcode_cred_age_days", doctor)
+        self.assertIn(
+            "observation_only",
+            doctor.split("zcode-sidecar-credential-age-days=", 1)[1].split("\n", 1)[0],
+        )
+        start = doctor.index('zcode_cred_age_days="$(')
+        block = doctor[start : doctor.index(')"', start) + 2]
+        self.assertNotIn("mark_fail", block)
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Git Bash not available")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "credentials.json"
+            target.write_text("{}", encoding="utf-8")
+            os.utime(target, (1700000000, 1700000000))
+            target_path = self._bash_path(bash, target)
+            # On Windows `python3` on PATH is the Store stub, which exits 49
+            # without output; shim it to the real interpreter running the suite.
+            interpreter = self._bash_path(bash, Path(sys.executable))
+            shim = "python3() { " + shlex.quote(interpreter) + ' "$@"; }\n'
+            # The block only assigns a variable, so echo it to observe the value.
+            observe = (
+                shim
+                + block.replace(
+                    "/opt/zcode-start-plan/auth/.zcode-proxy/credentials.json",
+                    target_path,
+                )
+                + '\necho "$zcode_cred_age_days"\n'
+            )
+            result = subprocess.run(
+                self._bash_command(bash, "-c", observe),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.strip().isdigit(), result.stdout)
+            self.assertGreater(int(result.stdout.strip()), 365)
+            missing = observe.replace(target_path, target_path + ".absent")
+            result = subprocess.run(
+                self._bash_command(bash, "-c", missing),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.stdout.strip(), "unknown")
+
     def test_renewtls_wrapper_renews_before_fork_last_day(self) -> None:
         source = (
             Path(__file__).parents[1] / "scripts" / "v2ray_agent_renewtls_cron.ps1"
