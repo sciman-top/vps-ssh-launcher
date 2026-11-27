@@ -664,9 +664,16 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
    `status=200 capacity=true` 47 次、`status=502 capacity=true` 12 次、`503 capacity=true` 58 次
    ⇒ 过载即使被 CPA 渲染成 200/502，只要体内标记在探测窗口内，熔断就算得出来。
    502 不在 `capacity_statuses`（只有 429/503）里，靠的是 `capacity_markers` 命中。
-3. **客户端对这条文案不自动重试**（对 429 才重试）⇒ 用户感觉像"卡住/失败"而不是"可重试"。
-   这是为什么"本地闸门的 429"换成"上游的 at capacity"后**体感更差**，
-   尽管两者描述的是同一个事实（单账号饱和）。
+3. **admission 冷却拒绝的重试期限自 2026-11-27 起客户端可读**：`/v1/responses` 流内合成的
+   `response.failed` 在 `error.headers["retry-after"]` 与 `error.retry_after` 同值，
+   仅限 `cooldown` / `model_cooldown` 且窗口 ≤ `CLIENT_RETRY_ADVICE_MAX_SECONDS`（600s）。
+   Codex 只解析前者（`codex-rs/codex-api/src/sse/responses_error.rs`）：此前只有裸
+   `retry_after` 时它把拒绝当普通断流，按本地短退避连打两次同一关闭窗口后报硬失败
+   （2026-11-27 10:30:47Z 重连间隔 1.4s/1.7s；codex-cli 0.171.0 回放 0.23s/0.44s，
+   带头后 4.0s）。现在按期限等待后重连（`Reconnecting n/N`，次数仍由客户端
+   `stream_max_retries` 决定）。配额类长窗口与队列/限速/传输类拒绝不带该头，保持
+   快速失败——用户应立刻读到窗口而不是干等。模型级冷却文案为
+   `Shared upstream lane <lane> model <model> is cooling down; …`。
 4. **正确处置**：把桌面模型切到**另一条非 OAuth lane**（如 `glm-5.3-flash`；
    切 lane 只分流负载，不是规避账号风控的手段），
    见 [封号/限流/降智应急响应](cpa-ban-throttle-incident-response.md) 的 L2 分流顺序。

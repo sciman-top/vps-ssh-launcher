@@ -5716,6 +5716,9 @@ def test_antigravity_upstream_429_explains_failure_in_responses_stream(
         )
         assert "Antigravity upstream returned HTTP 429" in error["message"]
         assert error.get("retry_after") == retry_after
+        # An upstream verdict this proxy did not turn into a cooldown keeps
+        # the bare leaf: only a window the lane holds becomes client advice.
+        assert "headers" not in error
         if retry_after is None:
             assert "did not receive a retry time" in error["message"]
         else:
@@ -9154,6 +9157,394 @@ def test_codex_overload_nested_retry_after_keeps_model_scope_and_spares_sibling(
     sol_lease = state.acquire(model="gpt-6.1-sol")
     assert sol_lease.admitted
     state.release(sol_lease, capacity_error=False, retry_after=None, successful=True)
+
+
+def _codex_overload_stream() -> bytes:
+    """The upstream stream CPA relayed on 2026-11-27 10:30:47Z, same shape.
+
+    HTTP 200, four events, no output: the overload verdict arrives as the
+    terminal `response.failed` with the retry hint nested in the error.
+    """
+
+    return (
+        b'event: response.created\ndata: {"type":"response.created",'
+        b'"sequence_number":0}\n\n'
+        b'event: response.in_progress\ndata: {"type":"response.in_progress",'
+        b'"sequence_number":1}\n\n'
+        b'data: {"type":"response.output_item.added","sequence_number":2}\n\n'
+        b"event: response.failed\ndata: "
+        + json.dumps(
+            {
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "type": "service_unavailable_error",
+                        "code": "server_is_overloaded",
+                        "message": (
+                            "Our servers are currently overloaded. "
+                            "Please try again later."
+                        ),
+                        "headers": {
+                            "retry-after": "317",
+                            "retry-after-ms": "317000",
+                        },
+                    }
+                },
+                "sequence_number": 3,
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n\n"
+    )
+
+
+def _failed_event_error(stream: bytes) -> dict[str, Any]:
+    payload = next(
+        json.loads(line.removeprefix(b"data: "))
+        for line in stream.splitlines()
+        if line.startswith(b"data: ") and b'"type":"response.failed"' in line
+    )
+    return cast(dict[str, Any], payload["response"]["error"])
+
+
+def test_codex_overload_refusal_in_responses_stream_names_its_retry_deadline() -> None:
+    """End-to-end replay of 2026-11-27 10:30:39-10:30:51Z on chatgpt-oauth.
+
+    One background `gpt-6-luna` turn is refused upstream with the in-stream
+    overload verdict, which parks that model alone. The refusal the next
+    `gpt-6-luna` request then receives is written into an already-committed
+    200 stream, so its retry deadline can only travel inside the event. The
+    Codex client reads that deadline from `error.headers["retry-after"]` and
+    from nowhere else (codex-rs `sse/responses_error.rs`); the bare
+    `retry_after` leaf alone was invisible to it, so the client fell back to
+    its short local backoff, spent both stream retries against the closed
+    window within two seconds and reported a dead turn. The deadline must be
+    present in the header map the client reads, and a lane that is not
+    Antigravity must not introduce itself as Antigravity.
+    """
+
+    class OverloadedUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            overloaded = json.loads(raw).get("model") == "gpt-6-luna"
+            body = (
+                _codex_overload_stream()
+                if overloaded
+                else (
+                    b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+                    b'data: {"type":"response.completed","response":{"status":"completed"}}'
+                    b"\n\n"
+                )
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(OverloadedUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    next(item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth")[
+        "queue_timeout_seconds"
+    ] = 2
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = server_thread(admission)
+    admission_thread.start()
+
+    def call(
+        model: str, path: str = "/v1/responses", **fields: Any
+    ) -> tuple[int, bytes]:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        try:
+            body = json.dumps({"model": model, "stream": True, **fields})
+            client.request(
+                "POST",
+                path,
+                body=body.encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            return response.status, response.read()
+        finally:
+            client.close()
+
+    def settled() -> dict[str, Any]:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = proxy.lanes["chatgpt-oauth"].snapshot()
+            if state["inflight"] == 0 and state["cooldown_scope"] == "model":
+                return cast(dict[str, Any], state)
+            time.sleep(0.02)
+        return cast(dict[str, Any], proxy.lanes["chatgpt-oauth"].snapshot())
+
+    try:
+        status, stream = call("gpt-6-luna", input="hello")
+        assert status == 200
+        assert b'"code":"server_is_overloaded"' in stream
+        relayed = _failed_event_error(stream)
+        # The upstream verdict is relayed untouched, hint included.
+        assert relayed["headers"]["retry-after"] == "317"
+        state = settled()
+        assert state["cooldown_remaining"] == 0, state
+        assert state["cooldown_scope"] == "model", state
+        assert 300 < state["model_cooldowns"]["gpt-6-luna"] <= 317, state
+
+        status, stream = call("gpt-6-luna")
+        assert status == 200
+        assert b"server_is_overloaded" not in stream
+        error = _failed_event_error(stream)
+        assert error["code"] == "model_cooldown"
+        assert error["type"] == "server_error"
+        assert 300 <= error["retry_after"] <= 317
+        # The one shape the Codex client parses, holding the same deadline.
+        assert error["headers"] == {"retry-after": str(error["retry_after"])}
+        assert error["message"] == (
+            "Shared upstream lane chatgpt-oauth model gpt-6-luna is cooling down; "
+            f"retry after {error['retry_after']}s. Sibling models on the lane "
+            "remain available."
+        )
+
+        # The sibling model is served untouched: the parked model did not
+        # take the user's turn down with it.
+        status, stream = call("gpt-6.1-sol", input="hello")
+        assert status == 200
+        assert b'"type":"response.completed"' in stream
+        assert b"response.failed" not in stream
+
+        # Only the Responses route carries the nested header map; the chat
+        # shape is unchanged apart from the corrected lane name.
+        status, stream = call(
+            "gpt-6-luna",
+            "/v1/chat/completions",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        assert status == 200
+        assert stream.endswith(b"data: [DONE]\n\n")
+        chat_error = json.loads(
+            next(
+                line.removeprefix(b"data: ")
+                for line in stream.splitlines()
+                if line.startswith(b"data: ") and line != b"data: [DONE]"
+            )
+        )["error"]
+        assert "headers" not in chat_error
+        assert chat_error["code"] == "model_cooldown"
+        assert chat_error["message"].startswith(
+            "Shared upstream lane chatgpt-oauth model gpt-6-luna is cooling down"
+        )
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_upstream_sees_one_content_length_matching_the_rewritten_body() -> None:
+    """A client that spells the header `content-length` used to leave two
+    disagreeing Content-Length headers on the upstream request: its own, for
+    the body it sent, and this proxy's, for the body after identity
+    neutralisation shortened it. Read by first match, the upstream then waited
+    for bytes that never came (2026-11-27: codex-cli straight to admission;
+    the nginx hop normalises the spelling and had been hiding it)."""
+
+    body = json.dumps(
+        {
+            "model": "gemini-3.8-flash-high",
+            "input": [
+                {
+                    "role": "developer",
+                    "content": "You are Codex, a coding agent based on GPT-5.",
+                }
+            ],
+        }
+    ).encode()
+    rewritten, _ = cast(Any, MODULE["neutralize_agent_identity_text"])(
+        "/v1/responses", body, "antigravity-oauth"
+    )
+    assert len(rewritten) < len(body), "fixture must change the body length"
+
+    seen: dict[str, Any] = {}
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            seen["lengths"] = self.headers.get_all("Content-Length")
+            seen["received"] = len(self.rfile.read(int(self.headers["Content-Length"])))
+            payload = b'{"output_text":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = AdmissionProxy(loaded)
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        # http.client keeps the caller's lowercase spelling as sent.
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=body,
+            headers={"content-length": str(len(body))},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.read() == b'{"output_text":"ok"}'
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+    assert seen["lengths"] == [str(len(rewritten))], seen
+    assert seen["received"] == len(rewritten), seen
+
+
+def test_streamed_transport_failure_keeps_the_quick_retry_shape() -> None:
+    """The 60s attached to a transport failure is a local heuristic, not a
+    deadline the lane holds: CPA may be back within a second, so the client
+    must keep its quick local backoff instead of sleeping out a full minute."""
+
+    unavailable = socket.socket()
+    loaded = config()
+    try:
+        unavailable.bind(("127.0.0.1", 0))
+        loaded["upstream_port"] = unavailable.getsockname()[1]
+    finally:
+        unavailable.close()
+    next(item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth")[
+        "queue_timeout_seconds"
+    ] = 1
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = server_thread(admission)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        try:
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","input":"hello","stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            error = _failed_event_error(response.read())
+        finally:
+            client.close()
+        assert error["code"] == "upstream_transport_error"
+        assert error["retry_after"] == 60
+        assert "headers" not in error
+    finally:
+        admission.shutdown()
+        admission.server_close()
+        admission_thread.join(timeout=2)
+
+
+def test_long_quota_window_refusal_keeps_the_quick_retry_shape() -> None:
+    """A cooldown is client advice only while it stays inside a wait a person
+    will accept. A usage-limit reset names minutes to hours; handed to Codex
+    as a deadline it would park the turn on "Reconnecting" for that whole span,
+    where the official client reports the limit at once. Past the bound the
+    refusal keeps the bare leaf, so the client fails fast and the user reads
+    the window instead of waiting it out."""
+
+    body = json.dumps(
+        {
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "The usage limit has been reached",
+                "plan_type": "plus",
+                "resets_at": int(time.time()) + 3600,
+            }
+        }
+    ).encode()
+
+    class QuotaUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Retry-After", "3600")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(QuotaUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    next(item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth")[
+        "queue_timeout_seconds"
+    ] = 1
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = server_thread(admission)
+    admission_thread.start()
+
+    def call() -> dict[str, Any]:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        try:
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6.1-sol","input":"hello","stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            return _failed_event_error(response.read())
+        finally:
+            client.close()
+
+    try:
+        # The upstream verdict itself: relayed as a capacity failure, but not
+        # a window this proxy refuses on, so no client deadline.
+        assert call()["code"] == "capacity"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = proxy.lanes["chatgpt-oauth"].snapshot()
+            if state["inflight"] == 0 and state["cooldown_active"]:
+                break
+            time.sleep(0.02)
+        assert state["cooldown_scope"] == "lane", state
+        assert state["cooldown_remaining"] > 3500, state
+
+        error = call()
+        assert error["code"] == "cooldown"
+        assert 3500 < error["retry_after"] <= 3600
+        assert "headers" not in error
+        assert "is cooling down or busy" in error["message"]
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
 
 
 @pytest.mark.parametrize("status", [200, 429, 500])

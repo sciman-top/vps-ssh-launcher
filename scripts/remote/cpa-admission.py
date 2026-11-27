@@ -516,6 +516,16 @@ DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth"}
 # clients that already back off for minutes on the 429 it advertises.
 STALE_WRITE_AHEAD_COOLDOWN_SECONDS = 90
 
+# Longest cooldown window this proxy hands to a client as a deadline to sleep
+# out before its next stream retry. Codex sleeps exactly what
+# `error.headers["retry-after"]` names, so the advice must stay inside a wait a
+# person will accept from a turn that only says "Reconnecting": the upstream
+# overload windows it exists for measured 6-375s on the Codex lane
+# (2026-11-24..27). A quota reset can name minutes to hours; parking a turn
+# that long hides a condition the user should read at once, so a longer window
+# keeps the bare leaf and the client's quick local backoff, which fails fast.
+CLIENT_RETRY_ADVICE_MAX_SECONDS = 600
+
 
 class DownstreamClientDisconnected(OSError):
     """The client closed the response while the proxy was forwarding it."""
@@ -1820,9 +1830,12 @@ def capacity_scope(
     seconds earlier, and promoting it to the whole lane turned one model's
     capacity window into a cross-model 429 (measured 2026-10-10: a
     `gpt-6-luna` capacity event refused the next `gpt-6.1-sol` request with
-    `retry_after=471`). Credential-shaped signals -- `server_is_overloaded`,
-    the rate/usage-limit texts, or a bare 429/503 -- stay lane-scoped, so the
-    shared account is still protected where the signal is account-level.
+    `retry_after=471`). A lane decides per marker: the rate/usage-limit texts
+    and a bare 429/503 stay lane-scoped, so the shared account is still
+    protected where the signal is account-level. `server_is_overloaded` is
+    model-scoped on chatgpt-oauth (2026-11-27): CPA core already cools only
+    that credential's model shard, and a parked background model must not
+    take the user's turn down with it.
     """
 
     errors = protocol_errors(body_prefix, config.get("name"))
@@ -5289,6 +5302,7 @@ class Handler(BaseHTTPRequestHandler):
         code: str,
         message: str,
         retry_after: int | None = None,
+        server_directed: bool = False,
     ) -> None:
         """Deliver a terminal failure after a 200 SSE header was committed.
 
@@ -5301,6 +5315,26 @@ class Handler(BaseHTTPRequestHandler):
         admission refusal turns into a hard turn failure. Messages therefore
         gets a typed ``event: error`` envelope, which is what the protocol
         defines for an in-stream failure.
+
+        ``server_directed`` marks ``retry_after`` as a window the lane will
+        hold until the advertised instant, so an earlier reconnect is refused
+        without reaching the upstream. On the Responses route it is repeated as
+        ``error.headers["retry-after"]``: that nested header map is the only
+        retry advice the Codex client reads out of a ``response.failed`` event
+        (``codex-rs/codex-api/src/sse/responses_error.rs``), and the same
+        place the upstream puts its own. A bare ``retry_after`` leaf is
+        invisible to it, so the refusal was classified as an ordinary stream
+        error and retried on the short local backoff -- twice, into the same
+        closed window, and then reported as a dead turn (2026-11-27
+        10:30:47Z: ``cooling down or busy; retry after 317s`` answered by
+        reconnects at +1.4s and +1.7s; replayed on codex-cli 0.171.0 with
+        reconnects at +0.23s and +0.44s, against +4.0s when the header was
+        present). Callers pass it only for a cooldown window; every other
+        value -- a queue shed, a rate guard, a transport heuristic, an
+        upstream verdict this proxy did not turn into a cooldown -- keeps the
+        old shape and the quick backoff. A window longer than
+        CLIENT_RETRY_ADVICE_MAX_SECONDS is treated the same way: the header
+        is withheld and only the bare leaf is sent.
         """
 
         error = {
@@ -5317,6 +5351,15 @@ class Handler(BaseHTTPRequestHandler):
                 f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
             ).encode("utf-8")
         elif route == "/v1/responses":
+            if (
+                server_directed
+                and retry_after is not None
+                and retry_after <= CLIENT_RETRY_ADVICE_MAX_SECONDS
+            ):
+                error = {
+                    **error,
+                    "headers": {"retry-after": str(max(1, retry_after))},
+                }
             request_id = getattr(self, "_request_id", "unknown")
             payload = {
                 "type": "response.failed",
@@ -5828,8 +5871,16 @@ class Handler(BaseHTTPRequestHandler):
                         f"retry after {lease.retry_after}s."
                     )
                 elif lease.reason == "model_cooldown":
+                    # The model-scoped breaker is no longer Antigravity-only:
+                    # a Codex `server_is_overloaded` parks just its model too
+                    # (2026-11-27), so the lane must name itself.
+                    owner = (
+                        "Antigravity"
+                        if lane_name == "antigravity-oauth"
+                        else f"Shared upstream lane {lane_name}"
+                    )
                     message = (
-                        f"Antigravity model {model} is cooling down; "
+                        f"{owner} model {model} is cooling down; "
                         f"retry after {lease.retry_after}s. Sibling models "
                         f"on the lane remain available."
                     )
@@ -5855,6 +5906,14 @@ class Handler(BaseHTTPRequestHandler):
                         else lease.reason,
                         message=message,
                         retry_after=None if manual_hold else lease.retry_after,
+                        # Only a cooldown window is a deadline: the lane holds
+                        # it to the last second, so an early reconnect is
+                        # refused locally. A queue shed or rate guard frees
+                        # on its own and is best retried quickly.
+                        server_directed=(
+                            not manual_hold
+                            and lease.reason in {"cooldown", "model_cooldown"}
+                        ),
                     )
                 else:
                     self._send_json(
@@ -5922,6 +5981,13 @@ class Handler(BaseHTTPRequestHandler):
         stream_probe: StreamErrorProbe | None = None
         conn: http.client.HTTPConnection | None = None
         response: http.client.HTTPResponse | None = None
+        # Bound before the upstream attempt. A streaming request has already
+        # had its 200 committed, and the transport-failure handler below must
+        # be able to close that stream with a terminal event even when CPA
+        # never answered: on a refused upstream connection the event did not
+        # exist yet (2026-11-27), the handler raised UnboundLocalError, and
+        # the client received an empty, severed stream instead.
+        client_lost = threading.Event()
         try:
             conn = http.client.HTTPConnection(
                 config["upstream_host"], config["upstream_port"], timeout=300
@@ -5932,9 +5998,16 @@ class Handler(BaseHTTPRequestHandler):
                 if key.lower() not in HOP_BY_HOP_HEADERS
                 and key.lower() not in CPA_TRACE_HEADERS
                 and key.lower() not in STRIPPED_REQUEST_HEADERS
-                and key.lower() != "host"
+                and key.lower() not in {"host", "content-length"}
             }
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
+            # The body may have been rewritten above (identity neutralisation,
+            # agent-payload mapping), so the client's own length is stale and
+            # is dropped by case-folded name. A client that spells the header
+            # `content-length` otherwise left two disagreeing `Content-Length`
+            # headers on the wire, and the upstream waited for a body that
+            # never arrived (2026-11-27: codex-cli straight to admission; the
+            # nginx hop normalises the spelling and had been hiding it).
             headers["Content-Length"] = str(body_length)
             headers["X-CPA-Request-Id"] = self._request_id
             # Speak HTTP/1.0 to CPA. An HTTP/1.1 response would use chunked
@@ -6118,7 +6191,6 @@ class Handler(BaseHTTPRequestHandler):
             # socket in bounded slices so it can honour that signal instead of
             # pinning the lane lease until the read timeout.
             heartbeat_stop = threading.Event()
-            client_lost = threading.Event()
             heartbeat_interval = proxy.heartbeat_interval if response_is_sse else None
 
             def _write_chunk(payload: bytes) -> None:
