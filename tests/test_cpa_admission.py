@@ -4994,6 +4994,22 @@ def test_neutralize_agent_identity_sentences_keeps_paths_and_product_mentions() 
         neutralize_sentences("You are Codex, based on GPT-6.")
         == "You are a coding agent."
     )
+    # The model marker is a whole model id; stopping at the digits used to
+    # leave "You are a coding agent-terra," behind.
+    assert (
+        neutralize_sentences("You are Codex, based on GPT-5.6-terra. You run.")
+        == "You are a coding agent. You run."
+    )
+    assert (
+        neutralize_sentences(
+            "You are Codex, an agent based on GPT-5.1-codex-max, in the CLI."
+        )
+        == "You are a coding agent, in the CLI."
+    )
+    assert (
+        neutralize_sentences("You are Codex, an agent based on GPT-6.1-sol, running.")
+        == "You are a coding agent, running."
+    )
     unchanged = (
         r"Read C:\x\.zcode\skills\a.md and ~/.codex/config.toml; "
         "GPT-5, OpenAI, ChatGPT, ZCode and the Codex CLI"

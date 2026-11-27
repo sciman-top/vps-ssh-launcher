@@ -3356,9 +3356,12 @@ AGENT_IDENTITY_SENTENCES = (
         "You are a coding assistant",
     ),
     (
+        # The optional model marker is a whole model id ("GPT-5.6-terra",
+        # "GPT-5.1-codex-max"): stopping at the digits left a dangling
+        # "-terra," after the replacement.
         re.compile(
             r"\byou are (?:an? )?codex\b(?:, (?:an? )?(?:coding |interactive )?agent)?"
-            r"(?:,? based on gpt-[0-9]+(?:\.[0-9]+)*)?",
+            r"(?:,? based on gpt-[0-9]+(?:\.[0-9]+)*(?:-[a-z0-9]+)*)?",
             re.IGNORECASE,
         ),
         "You are a coding agent",
