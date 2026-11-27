@@ -924,7 +924,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 | ai.input.im（Astra） | 第三方中转账号 | 无（中转方自行管理） | Sol 别名于 2026-11-11 退役；中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
 | opencode.ai zen（**2026-11-20 整槽退役**：用户退订 OpenCode Go；`deepseek-v4.1-flash-oc` + `glm-5.3-oc` / `glm-5.3-flash-oc` 三别名随之摘除、留 `oauth_exclusions` 墓碑） | 第三方中转账号 | 无 | 历史：2026-10-11 替换退役的 CIII 渠道；2026-10-18/2026-11-11 两度整槽退役、2026-10-24/2026-11-14 两度重收；2026-11-20 上午按用户指令增补 GLM 族单宿别名（`glm-5.3-oc`/`glm-5.3-flash-oc`，小写、1M 上下文），**同日用户退订，slot 2 连同三个 oc 别名最终退役**——manifest 删 slot 2、`opencode.ai` 入 `retired_hosts`（不入册则 apply 以孤儿 provider 回滚）、`x-opencode-session`/UA 钉头与 403/1010 request-scoped-errors 随槽消失；deepseek 车道回 wb 单腿。槽号不复用，`providers.env` 的 `BASE_URL_2`/`API_KEY_2` 映射保留未动作续订回加重放入口 |
 | Slot 3 明文 HTTP（terra，2026-11-18 退役） | 历史第三方中转账号 | 无；明文传输 API key | 历史风险记录；当前 manifest 仅保留 retired host/tombstone |
-| zcode Start Plan sidecar | 官方账号本地 sidecar | 本机 lane `max_inflight=1` + 20 RPM + 有界队列 | Docker-bridge HTTP 明文仅限容器到宿主 sidecar；不对公网暴露，但同宿主观察面可读 |
+| zcode Start Plan sidecar | 官方账号本地 sidecar | 本机 lane `max_inflight=1` + 20 RPM + 有界队列 | Docker-bridge HTTP 明文仅限容器到宿主 sidecar；不对公网暴露，但同宿主观察面可读。2026-11-27 起 strict doctor `==nginx-guardrails==` 另有三道 sidecar 门禁：`zcode-sidecar-service`（单元 enabled+active）、`zcode-sidecar-listener`（`172.17.0.1:18082` 的监听者须为 `zcode-proxy`）、`zcode-sidecar-public-socket`（不得绑公网/IPv6）；凭据文件年龄 `zcode-sidecar-credential-age-days` 仅观测不设门（加密文件的 JWT 过期语义未取证）。起因：2026-11-26T15:09Z 该 lane 48h 内唯一自然请求 502（8s），当时所有门禁全绿 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
 
