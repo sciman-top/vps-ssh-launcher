@@ -130,6 +130,25 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   与工具输出不清扫；`systemInstruction` 的整词替换有损，`.codex` 这类路径会被改写。
   台账：[定位与回放](../change-evidence/20261125-bwg-antigravity-handoff-identity-swap.md)、
   [多车道中性化](../change-evidence/20261125-bwg-agent-identity-neutralization.md)。
+- **2026-11-27 复审（规则覆盖实测与 #8521）**：
+  - 用仓内真实函数 `neutralize_agent_identity_sentences` 对 31 条合成文本实测。
+    `openai/codex` 三个提示模板（`gpt_5_codex_prompt.md`、`gpt-5.2-codex_prompt.md`、
+    `gpt-5.1-codex-max_prompt.md`）首句均为 `You are Codex, based on GPT-5.`，现行规则
+    已覆盖。唯一缺陷是模型记号只吞到数字：`You are Codex, based on GPT-5.6-terra.`
+    被改成 `You are a coding agent-terra.`；已修并随 reviewed deploy 上线（台账
+    [identity-suffix](../change-evidence/20261127-bwg-admission-identity-suffix.md)）。
+  - **OpenCode V2 是未覆盖的已证实触发**：上游
+    [#8521](https://github.com/router-for-me/CLIProxyAPI/issues/8521)（2026-11-27 关闭）
+    报告 OpenCode V2（`2.2+` / `2.3+`）每个请求都把 `tools.opencode.session_move` 注入
+    `systemInstruction`，Google 对含该子串的请求返回裸 `429 RESOURCE_EXHAUSTED`，并把
+    健康凭据送进 `model_cooldown`；原文明确 `sensitive-words` 的零宽方案**不生效**，
+    上游的处理只是一条文档提交（`0e19e8e`，不在 v8.1.7 内），做法是自行在
+    `sensitive-patterns-replace` 里加规则。**本仓未加该规则**：48h 内 admission
+    journal、保留的错误转储、nginx 访问日志均无 OpenCode 痕迹，Antigravity 车道当前
+    不可达该触发；而验证规则形状需要向 Google 发含该子串的请求，违反"不得用在役
+    账号做触发二分"。**接入 OpenCode 到 agy 车道前必须先补这条规则并走受控验证**，
+    这与本节"工具描述与 user 文本里的同一短语不单独触发"（#7627）不矛盾：#8521
+    证实的是它出现在 `systemInstruction` 里时触发。
 - **2026-11-25 第二轮复审（自然流量验收与 ChatGPT 车道结论）**：
   - 自然流量已验收。48h 内 Antigravity 车道 71 发里 68 发命中
     `antigravity_identity_user_text`，69 发完成；journal 里该车道只有一发 429，
