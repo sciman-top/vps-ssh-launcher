@@ -451,3 +451,15 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
   `model_retry_after`，首笔流内过载即单独冷却 `gpt-6-luna`，保障 `gpt-6.1-sol` /
   `gpt-6.2-sol` 正常放行。详见
   [模型级过载隔离台账](../change-evidence/20261127-bwg-cpa-codex-model-scoped-overload.md)。
+- **`chatgpt-oauth` 冷却拒绝的重试期限客户端可读（同日五续）**：模型级隔离上线后，主模型
+  自身被上游过载时仍秒级硬失败——admission 写进已提交 200 流的拒绝只带裸 `error.retry_after`，
+  而 Codex 只解析 `error.headers["retry-after"]`（openai/codex
+  `codex-rs/codex-api/src/sse/responses_error.rs`），读不到期限就按本地短退避在窗口内连打两次
+  后报错（18:30Z 与 11:21:48–51Z 的五笔拒绝均如此）。现已让 `cooldown` / `model_cooldown`
+  且 ≤600 秒的拒绝在 `/v1/responses` 带上该头；队列/限速/传输类与配额类长窗口保持快速失败。
+  同批修了三个存量缺陷：模型级冷却文案写死 "Antigravity"、流式请求遇上游拒连抛
+  `UnboundLocalError`、客户端小写 `content-length` 与 admission 的 `Content-Length` 并存。
+  上游过载的定性（openai/codex #56346、#63577，本栈 29 小时实测 42%）与判否项
+  （缩短 CPA 冷却并在窗内复检：冷却到期后重试成功率仅约 25–30%，判否；admission 的
+  `mirror_probe_interval_seconds` 会被 CPA 本地 `503 auth_unavailable` 挡住）见
+  [拒绝重试期限台账](../change-evidence/20261127-bwg-admission-refusal-retry-advice.md)。
