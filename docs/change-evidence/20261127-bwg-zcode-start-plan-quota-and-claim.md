@@ -87,14 +87,30 @@ in"，一度被当成重启弄坏了凭据。带上完整环境后复测 `Logged
 `pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply`，结果见下文
 「投影结果」。
 
-## 分层验证
+## 投影结果
 
-| 层级 | 证据 | 结果 |
-| --- | --- | --- |
-| `repo_verified` | `ruff check` / `ruff format --check` 测试文件；`pytest -k "start_plan_quota or capacity_scope or config_freezes"` | 3 passed；负向对照成立 |
-| `repo_verified` | Full 门禁 `-Profile Full -RunParallel`（代码改动后的树） | `1904 passed, 30 skipped, 903 subtests`；contract/build/bandit/ruff/format/mypy 全过 |
-| `filesystem_projected` | `-Apply` 与 strict doctor | 见下文「投影结果」 |
-| `live_accepted` | 额度耗尽状态下的真实拒绝经 admission 入冷却 | 见下文「受控实战（修复后）」 |
+`-Apply` 于 2026-11-27 14:06:55Z：`GUARDRAILS_APPLIED`，17 项 `PROJECTION_HASH_VERIFIED`
+（含 `/opt/cliproxyapi/cpa-admission.json`），`HEALTH_OK`、`READY_STATUS=200`，备份
+`/root/cpa-guardrails-backup-20261127T140655.904827405Z`。投影前主机无在途事务：最后一个
+admission 备份目录是 12:02Z，五条车道 inflight/pending 均为 0。随后 strict doctor
+`DOCTOR_CONTRACT_OK`，17 项 MATCH，`admission-integrity=OK`，`credential_ban_signals_7d=0`，
+`zcode-sidecar-service=enabled-active`。
+
+## 受控实战（修复后）
+
+14:08Z，经 admission 单发、不重试，两发：
+
+| 发 | admission journal | 边车请求表 | 含义 |
+| --- | --- | --- | --- |
+| 1 | `status=502 capacity=true retry_after=absent protocol_result=capacity`（6.9s） | 第 1 行 502 | 同一个上游拒绝，修复前是 `capacity=false / upstream_error` |
+| 2 | `status=503 capacity=true retry_after=present protocol_result=capacity`（12ms） | **无新行** | CPA 核心已对该凭据冷却，admission 把它如实标为容量；零上游接触 |
+
+说明：admission 自身的熔断阈值是连续 2 次失败，所以探针 1 之后 `cooldown_active=False`、
+`failure_streak=1`；挡住探针 2 的是 CPA 核心对 502 的凭据冷却。两级保护现在都把这次
+拒绝当作容量处理。额度何时重置没有官方数字，重置前该车道仍会返回配额拒绝。
+
+`live_accepted`：额度耗尽这一状态下的分类与零重试均已实测；额度恢复后的成功路径要等
+额度重置后的自然流量，本次未验证。
 
 ## 边界
 
