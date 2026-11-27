@@ -130,6 +130,7 @@ selected-account/account-failover 补丁）。隔离构建、注册、strict doc
 | 项 | 值 |
 | --- | --- |
 | 插件上游 | `github.com/mmqz/cpa-multi-plugins`（MIT） |
+| 现行上游（2026-11-27 复核） | [`luode0320/cpa-workbuddy-plugin`](https://github.com/luode0320/cpa-workbuddy-plugin)（已关闭 issue 区，最新 0.21.32；变更记录在其 `workbuddy/CHANGELOG.md`）。早期记录的 `cpa-multi-plugins` 地址已 404 |
 | 初始落地 release tag | `v0.8.68`（2026-10-12；以下为初始落地记录） |
 | 初始插件版本 | workbuddy `0.9.58` |
 | 产物 | `cpa-multi-plugins-linux-amd64.zip` |
@@ -300,6 +301,12 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)的根因修正节。
 
 ## 4. 风控与事件处置
+
+> **2026-11-27 复核**：11128 是内容指纹判定（上游扫描 system 与 assistant），本车道的
+> 身份句清洗有实际作用；`11140` / `12153` 是账号级失效，按摘号处理；0.21.31 起硬禁用线
+> 默认 20、保活线默认 50。证据与处置见
+> [封号 runbook「2026-11-27 复核」](cpa-ban-throttle-incident-response.md)；
+> 本车道 48h 流量画像见[上游台账六续](cpa-observed-baselines-and-upstream-log.md)。
 
 **2026-10-26 调度检查补强**：保留 WorkBuddy 粘性选择与故障回退、OpenCode
 双宿兜底；不调整渠道优先级、凭据数量、并发或重试预算。doctor 的

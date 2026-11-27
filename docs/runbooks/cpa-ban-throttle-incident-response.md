@@ -388,6 +388,44 @@ auth 目录而非留 `disabled`"的现行做法——后台刷新仍会对留存
 维护者 11-24 以 working as intended 关闭）、`fetchAvailableModels` 周期探测
 TOS 号（#7869）、重启后 `disabled` 回落为 false（#8021，REPORTED）。
 
+2026-11-27 复核（官方页直取并与 Wayback 归档逐句对比；社区面只覆盖官方开发者论坛与
+GitHub，Reddit / X / linux.do 未覆盖）：
+
+- **条款正文自 11-19 归档起逐句未变**，FAQ 把范围写得更具体：问题标题点名
+  "Claude Code, OpenClaw, or OpenCode"；"Wrapping agy inside third-party coding agents or
+  applications, or automating account rotation, is not supported under consumer plans"；
+  官方给第三方 agent 的出路是 Gemini Enterprise 或 AI Studio key（[FAQ](https://antigravity.google/docs/faq)）。
+- **Plans 页在 11-21 至 11-27 之间改写**（[plans](https://antigravity.google/docs/plans)）：
+  Free 与 Google AI Plus 只有**周窗口**（"A meaningful quota, refreshed weekly"），可用模型是
+  "Gemini 4 Hydrogen (and Gemini 3.8 Flash until November 30, 2026)"；Hydrogen 是
+  Free / Plus / 试用号的默认模型（[models](https://antigravity.google/docs/models)）。同页
+  写明 11-30 下线 Gemini 4 Argon、Gemini 3.8 Flash、GPT-OSS-120b、Claude 4.6（本栈这些
+  名字已是排除表墓碑）。每日 150 的上限不是从官方数字换算来的。
+- **思考档位与周额度**：Hydrogen 有 Low / Medium（默认）/ High / Extra（CLI 的 `xhigh`）
+  四档，全套餐可用；论坛（非 staff 账号）回复称更高的 reasoning 档消耗更多周额度。本栈
+  车道只发布 `gemini-4-hydrogen-xhigh`，每一发都按最高档扣周额度。v8.1.7 源码确认带后缀
+  的模型以后缀为档位、客户端显式传的 `reasoning_effort` 会覆盖后缀——要省额度就在客户端
+  降档，不必改目录。返回名不带 `-xhigh` 属正常（Google 报基础名），不是降档。
+- **封号是持续流而非单次事件**：官方开发者论坛 11-26/27 新增十余个独立申诉帖，其中有
+  "CLIProxyAPI + OpenCode" 的自述（[205848](https://discuss.ai.google.dev/t/205848)、
+  [主申诉帖](https://discuss.ai.google.dev/t/199195)），付费 Pro / Ultra 也在其中。没有找到
+  "低量即安全"或"免费号更易 / 更难被封"的判别证据。申诉流程只见于论坛回复（账号无 staff
+  标记）：只走 TOS Appeal Form，一次性，称自动处理 48–72 小时，批准后下次登录自动恢复，
+  须先撤销第三方 OAuth 授权；实例为 4 到 20 天。
+- **同窗口的新失败形态**：Antigravity 2.35.2 起大量
+  `403 UNSUPPORTED_LOCATION (1008) "Detected location: CN"`，账号国家与出口为 JP / US / SG
+  仍中招，原因未证实。本栈 admission 对 Antigravity 的 JSON 403 一律落
+  `authentication_required` 持久锁（不含 TOS 文本时不会升级为 `account_restricted`），
+  遇到时读转储原文判别，不按 TOS 处置。
+- **上游状态**：2026-11-26 05:39–05:45Z 维护者批量关闭至少 195 个 Antigravity issue
+  （completed、零评论），**closed / completed 不等于已修**——
+  [#8409](https://github.com/router-for-me/CLIProxyAPI/issues/8409)（数组包裹的 403 TOS 载荷
+  不被识别）与 [#8452](https://github.com/router-for-me/CLIProxyAPI/issues/8452)（403 一律
+  显示 `payment_required`）的函数体到 v8.1.7 / main 字节级未变。本栈的兜底：Antigravity 的
+  JSON 403 即使不被 CPA 识别为 TOS，admission 也会落持久锁，车道照样停。#7658 的上限 /
+  停止逻辑在 v8.1.5 起存在；#7768、#7676 仍 open；[#8522](https://github.com/router-for-me/CLIProxyAPI/pull/8522)
+  （模板收录客户端触发词）被维护者拒绝，触发词清单继续由本仓自己维护。
+
 ### 执行器侧 thoughtSignature 凭据隔离（sig-iso fork 车道，2026-11-23 起）
 
 #7846 的跨账号签名重放面有两层：reasoning replay 账本面已由 crossauth 车道
@@ -890,10 +928,45 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 | 事实 | 强度 | 对本栈的含义 |
 |---|---|---|
 | 设备与支付卡双上限覆盖 Go/Plus/Pro，**退登不释放名额**，买 credits/重置不解除 | [社区转述官方帮助页](https://www.nediya.com/insights/2026-11-chatgpt-device-limit-shared-pool-gift-card.html)（官方页 `help-lb.openai.com/.../20001559`；具体数字未公布） | 不在同一设备上叠加/轮换账号登录；本栈的 OAuth 凭据都在服务器侧，**不因此豁免** |
-| 12 月起 Plus/Pro/Business 的用量在 ChatGPT 与 Codex 间共享同一上限 | 同上 | 唯一 Plus 账号（`chatgpt-oauth` lane）的 Codex 用量会与网页额度互相挤占；限流会更早出现，**不应**用加号/换号对冲 |
+| 12 月起 Plus/Pro/Business 的用量在 ChatGPT 与 Codex 间共享同一上限 | **2026-11-27 一手复核**：官方帮助页 [20001625](https://help.openai.com/en/articles/20001625-understanding-chatgpt-and-codex-usage-limits) 原文 "Starting in December, Plus, Pro, and Business plans' usage allowance will be shared across ChatGPT and Codex…"。此前本行误引 20001559——那篇是卡/设备限制页，全文没有合并额度的语句 | 唯一 Plus 账号（`chatgpt-oauth` lane）的 Codex 用量会与网页额度互相挤占；限流会更早出现，**不应**用加号/换号对冲 |
 | 停用原因含"账号或 API key 不当共享""规避安全或访问限制" | [OpenAI 帮助页转述](https://qcode.cc/en/codex-account-ban-guide)（2026-08-03 版） | 这条正是消费级 OAuth 经第三方向多台设备供数的条款风险本体；也是本仓长期登记为"不可本地消除"的残余风险 |
 | 官方建议为自动化/多用户使用 API key（按 token 计费） | [同上](https://qcode.cc/en/codex-account-ban-guide) | 唯一结构性的规避手段是迁移官方 API/工作区档位；属用户决策，agent 不擅自迁移 |
 | `safety_identifier` 用于滥用检测归因，`prompt_cache_key` 用于缓存路由，二者**不同生命周期** | [OpenAI 安全最佳实践](https://developers.openai.com/api/docs/guides/safety-best-practices.md)、[迁移说明](https://dev.to/ssukhpinder/openai-responses-api-user-migration-split-safety-from-prompt-caching-32io) | 不要为"防风控"把二者互填；本栈 Codex 执行器本就剥离 `safety_identifier`（`codex_executor_execute.go`），保持不动 |
+
+**2026-11-27 一手复核补充**（官方页直取 + openai/codex issue；子代理的搜索配额当日耗尽，
+Reddit / X / linux.do 等论坛未覆盖，下列"没有查到"都只限所查范围）：
+
+- **合并额度的三个细节**（同一官方页）：按 token 计量（"measured in tokens"，模型越贵、
+  任务越复杂扣得越多）；"Instant chat will not draw from your usage"；"A small group of users
+  may see the usage changes before December"，所以不能假设 12 月 1 日才生效。合并余额在
+  ChatGPT 的 Settings → Usage。
+- **GPT-6.2 计量更正**：社区转述 OpenAI 2026-11-26 通知，GPT-6.2 Astra / Sol 发布时计量偏低，
+  此后触顶约快 40% / 25%（[openai/codex#64248](https://github.com/openai/codex/issues/64248)，
+  通知原文未见）。本栈 `gpt-6.2-sol` 在 ChatGPT 车道目录内。
+- **VPS 路径的额度读数可能与住宅线路不一致**：4 个独立账号（都用官方 CLI / 桌面端）报告
+  同一 token 经 VPS 线路读到周额度已用尽并被拒、经住宅线路读到剩余 88–93%；重新登录、
+  兑换 reset 都无效（[#63977](https://github.com/openai/codex/issues/63977)、
+  [#64178](https://github.com/openai/codex/issues/64178)、
+  [#64123](https://github.com/openai/codex/issues/64123)）。报告者自注无法区分出口 IP 差别
+  对待、区域路由与后端记账，也没有维护者回应。**处置含义**：`chatgpt-oauth` 出现数小时
+  乃至数天的 `usage_limit_reached` 冷却时，先从住宅线路的 Settings → Usage 核对真实余额，
+  再决定是等窗口还是按上游问题处理；不要重登（每次重登都是一次新的设备登录），也不要用
+  reset 兑换去"修"。是否调整出口仍是用户裁决，本页置顶纪律不变。
+- **并发即 429**：7 个并发线程触发账号级退避 63–578 秒，退避期间取消后重发会拿到新的、
+  更长的 429（[#63861](https://github.com/openai/codex/issues/63861)，单例）。与现行
+  `max_inflight=2`、不跨号重放一致，无需改动。
+- **封号面**：openai/codex 与 CLIProxyAPI 两仓 2026-11-20 之后没有新的封号报告（关键词
+  检索，范围有限）。CLIProxyAPI [#7783](https://github.com/router-for-me/CLIProxyAPI/issues/7783)
+  的诉求指向"多用户共享导致封号"，维护者建议多用户各部署独立实例；单人自用、不共享 key
+  与现行边界一致。官方 auth 文档列举的登录载体都是官方客户端，并写明自动化建议用 API
+  key；所查 auth / pricing 两页内没有"Sign in with ChatGPT 仅限官方客户端"的禁令，也没有
+  对第三方网关的许可（只查了这两页，不是全站结论）。
+- **单凭据的持久性风险**（未分诊的 bug 报告）：[#8543](https://github.com/router-for-me/CLIProxyAPI/issues/8543)
+  关闭时不等待进行中的 auth refresh 落盘，轮换后的 refresh token 丢失，重启后
+  `invalid_grant`；[#8539](https://github.com/router-for-me/CLIProxyAPI/issues/8539) auth 文件
+  原地改写，崩溃或满盘可能截断。本栈该车道只有一个凭据，丢了就要重新设备登录：换芯 /
+  重启避开刷新窗口（doctor 的 `oauth_refresh_policy` / `oauth_hours_left` 可读下一次刷新），
+  成功刷新后留一份 auth 文件备份，磁盘余量保持充足。
 
 ### 实测：本窗口内没有账号级信号
 
@@ -937,12 +1010,86 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
    不做自动重登；重新 OAuth 登录本身可能就是被计数的异常行为。
 4. 唯一结构性缓解仍是迁移官方 API/工作区档位（用户决策），agent 不擅自执行。
 
+**2026-11-27 复核**（插件作者的 CHANGELOG / 源码 + 社区 issue；论坛未覆盖）：
+
+- **11128 是内容指纹判定**。插件作者的一手消融：system 含 `DeepSeek Harness` 即
+  `400/11128`，请求体超过 1KB 才稳定触发，零宽字符变体仍被拦；DSH 的 `@` 文件引用段在
+  system 与 assistant 被拦、在 user 放行（`luode0320/cpa-workbuddy-plugin`
+  CHANGELOG 0.21.20 / 0.21.23）。社区：同会话第 4、5 轮被拒、24 秒后第 6 轮通过
+  （[dsh-connect-workbuddy#329](https://github.com/dingminhua/dsh-connect-workbuddy/issues/329)）；
+  `kimi-k3.1-pro` 10/10 被拒，而同账号同 system 下 `glm-5.4`、`deepseek-v4.1-flash` 正常
+  （[#322](https://github.com/dingminhua/dsh-connect-workbuddy/issues/322)）。**含义**：
+  WorkBuddy 车道上的身份句清洗有实际作用——上游扫描的是 system 与 assistant，现行规则
+  覆盖 system / developer / user，48h 内 1189 发全部 HTTP 200（协议级完成 1185、客户端
+  断开 3、流内 `upstream_error` 1）。被拒不具确定性，不能靠重试
+  硬闯；assistant 角色里的指纹段不在清洗范围，是已知残余面。`kimi-k3.1-pro` 不经此车道。
+- **账号级失效的两种形态**：`11140`（账号异常被限制，换模型、等冷却、人工启用都不解除，
+  应直接摘号并停止探活——0.21.22 的作者生产观测）与 `12153 refresh token revoked`
+  （同一凭据在别处刷新，或同 IP 批量号被踢下线；按"摘号重登"处理，不是等冷却）。
+  **纪律：一个账号只给一个消费者**——同一账号若还在官方客户端或第二个网关登录，会整链
+  吊销。2026-11-20 之后没有找到"积分被清零"的确认案例。
+- **插件默认值变化**：0.21.31 起保活线 400→50、硬禁用线 100→20（未显式配置即生效，所以
+  2026-11-27 两个号在 20 分以下被自动停用是新默认的行为）；0.21.32 起失败写盘禁用默认
+  关闭，失败只走内存阶梯冷却。
+- **上游仓库更正**：插件在
+  [`luode0320/cpa-workbuddy-plugin`](https://github.com/luode0320/cpa-workbuddy-plugin)
+  （关闭了 issue 区），早期记录的 `cpa-multi-plugins` 地址已 404；
+  `ardeyouxipianyi/workbuddy2api-hub` 也已 404，上文 14003 定量画像的出处无法复核，
+  口径保留但降级为历史观察。
+- **容量与成本**：每天北京时间 15:00–17:00 渠道接近不可用（`6021` / `queue.full`）；
+  `glm-5.4` 的积分系数约为 `deepseek-v4.1-flash` 的 6 倍（社区转述的模型元数据，对应关系
+  为推断），长上下文放 deepseek 更省；`reasoning_effort: off` 会被 `11133` 拒绝，要关思考
+  就不发该字段。插件作者的生产数据里 300K–380K prompt 有 214 发、零失败（最大 372K），
+  与本栈实测 338K 输入被完整计入一致——没有为防降智而缩小上下文的依据。
+- **模型 ID 必须是小写精确值**：大写模型名曾触发上游 `11102` 并扇出全池（60 分钟 1196
+  发）。本栈 `retry_on_4xx: 0`，同类误用的上限是单发。
+
 ### 若真命中账号级信号
 
 按上表 `403 request illegal` / `11140` / 认证类 401 处置：**停流、保留凭据、
 不清冷却、不换号、不加号**，按官方申诉入口（停用邮件内链接或
 `openai.com/form/appeal`，附 User ID/Org ID 与使用说明）处理。gateway 侧只做
 `-QuarantineClaudeOAuth` 类**用户指令驱动**的隔离，agent 不代做订阅迁移决策。
+
+## ZCode 起步套餐（Start Plan）车道的官方口径（2026-11-27 复核）
+
+本节只登记官方原文与边车实测；车道去留与清洗范围是用户裁决。
+
+- **官方明文限于官方客户端**：[ZCode FAQ 第 11 条](https://zcode.z.ai/cn/docs/qa)
+  "体验套餐（Start Plan）只能在官方 ZCode 客户端里使用。把体验套餐的额度转接到其他工具…
+  体验套餐会被暂停：调用时报 Your account has been suspended for misusing the Start Plan
+  （405 / 3012）…暂停只针对体验套餐，不影响你购买的 GLM Coding Plan"。`zcode-start-plan`
+  车道正是该条描述的形态。体验套餐是新用户 5 天试用（[配置页](https://zcode.z.ai/cn/docs/configuration)），
+  "工作日 23:00 起免费 + 整周末"只见第三方转述，官方页写"以登录后 Start Plan 页面的实时展示为准"。
+- **付费 Coding Plan 的协议现行版生效于 2026-11-13**
+  （[订阅及自动续费协议](https://docs.bigmodel.cn/cn/terms/subscription-agreement) §七）：
+  "如通过非官方工具或未授权方式使用，平台有权对相关权益进行限制、暂停或封禁处理"；
+  "批量调用"是点名的触发项；永久封禁保留给倒卖、中转、套利。使用须知
+  （[usage-notes](https://docs.bigmodel.cn/cn/coding-plan/usage-notes)）的梯度是限制权益 →
+  限流 / 冻结 → "3 次以上违规可能会被封禁账号"。官方工具名单含 ZCode、Claude Code、Codex、
+  OpenCode、Cline 等，不含 CLIProxyAPI。相对 09-26 的风险接受日是否改过措辞无法核实。
+- **边车上游**：`TriDefender/zcode-api`，4.9.1（2026-11-20）仍是最新 release。它对每个上游
+  请求注入模拟 ZCode 桌面端的身份头，并构造"官方三块"系统提示词（README 与
+  `src/config/template.ts`）。2026-11-20 的 [#85](https://github.com/TriDefender/zcode-api/issues/85)
+  标题为"现在可以被官方检测出来了"，维护者指系统提示词不一致是检测面；
+  [#83](https://github.com/TriDefender/zcode-api/issues/83) 是同账号 start-plan `405/3012`
+  而 coding-plan 200，与官方"只暂停体验套餐"一致（issue 正文经摘要工具转述）。
+- **边车实测**（只读）：单元 `zcode-start-plan.service` 自 2026-11-21 运行，配置只有
+  `server / auth / provider: bigmodel / plan: start-plan / models / identity`，**没有 `claim` 段**
+  ——按上游模板默认值 `claim.enabled: true`、`claim.auto: true`，即每 5 分钟轮询官方活动页并
+  自动领取（journal 在 2026-11-27 有一条 `[claim] claim: preview failed … retry in 600s`）。
+  上游用户协议把"羊毛党自动化"列为禁止行为。该单元不受本仓投影管理，改动须单独授权。
+- **与清洗规则的关系**：admission 在 `zcode-start-plan` 车道改写 ZCode 身份句
+  （`_AGENT_IDENTITY_TEXT_ROLES`）。边车维护者把"系统提示词与官方不一致"称为检测面，这一
+  改写会让提示词进一步偏离官方形状——方向性冲突属推断，该车道 48h 内只有 1 发（502），
+  没有可验证的流量。
+- **降智与用量**：官方 FAQ 否认自动换模（"在模型选择器里选哪个，就用哪个"），只有高峰
+  （工作日 14:00–18:00 UTC+8）排队限速的表述。GLM-5.4 思考下限是 `low`，开启思考但缺省
+  `reasoning_effort` 会落到 `max`（[latest-model](https://docs.bigmodel.cn/cn/coding-plan/latest-model)）。
+  ZCode 按 `usage` 判断是否压缩，网关须原样回传，否则客户端会反复压缩。
+- **信号处置**：`405 / 3012` = 体验套餐被暂停或临时风控，停该车道、不重试、不突发；
+  `1308` / `1310` = 5 小时 / 周额度窗，退避到重置点，不在两条 GLM 车道间同时重试放大；
+  边车 502 多为自身挂起（上游 #54、#66、#82），先看边车日志再判断是否风控。
 
 ## 禁止
 

@@ -229,6 +229,17 @@ admission 不可见），也可能是软性限制信号，自动续打等于在�
 
 ## 请求模型与监控边界（2026-10-18）
 
+> **2026-11-27 复核**（若该车道复活时适用）：官方
+> [legal-and-compliance](https://code.claude.com/docs/en/legal-and-compliance) 写明订阅 OAuth
+> "intended exclusively for" 订阅者本人使用 Claude Code 与 Agent SDK，不允许第三方开发者
+> 提供 Claude.ai 登录，并保留"without prior notice"采取措施的权利；自管 API key 经网关
+> 则被文档明确承认。订阅登录实测约 4 周到期（CLIProxyAPI #8530，与官方 authentication
+> 文档的 "Using Claude Code doesn't extend the login" 一致），网关属 unattended，须按
+> "登录日 + 27 天" 主动续登。官方 `model-config` 文档描述的是 safeguard 触发的模型回退
+> （回退后会话粘在回退模型上），**没有**"触顶自动降 Sonnet"的描述——触顶是停下来等重置。
+> 检测只能比对请求 `model` 与响应 `model`。未找到归因于网关的 Claude 封号案例（仅 GitHub，
+> 论坛未覆盖）。
+
 - 三个 Claude OAuth 目录模型均在最终 Claude payload 上过滤 `fallbacks`，包括客户端
   自带项和上游默认 cloaking 为 Opus 添加的旧型号项。请求失败应原样暴露，不能靠
   改用旧型号维持成功率；其余默认兼容处理保留。依据是 CLIProxyAPI v8.0.31

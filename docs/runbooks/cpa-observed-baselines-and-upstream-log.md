@@ -463,3 +463,48 @@ upstream 锚 `38fe9295`），五叠层经三方合并重移植；WorkBuddy CN �
   （缩短 CPA 冷却并在窗内复检：冷却到期后重试成功率仅约 25–30%，判否；admission 的
   `mirror_probe_interval_seconds` 会被 CPA 本地 `503 auth_unavailable` 挡住）见
   [拒绝重试期限台账](../change-evidence/20261127-bwg-admission-refusal-retry-advice.md)。
+
+### 2026-11-27（同日六续）：第二轮全面深审
+
+只读审查（strict doctor、48h journal、管理 API、保留转储、脱敏配置、上游源码、官方页与
+社区 issue），**网关代码与配置未发现需要修改的缺陷**，本轮只改文档。
+
+- **线上基线**（12:42Z）：`DOCTOR_CONTRACT_OK`，`credential_ban_signals_7d=0`，三条 OAuth
+  车道 OPEN，投影 17 项 MATCH，admission pin `2bc34f73`。容器 12:19Z 的重启是并行会话
+  admission 换代后的 `-Apply` 收口（同刻有 guardrails 备份目录），非异常。上游 CLIProxyAPI
+  仍为 v8.1.7（main 无新提交）。
+- **流量画像（48h，1926 发 upstream_result）**：WorkBuddy 车道 1189 发，占 OAuth 流量
+  92%，单小时峰值 297 发、单分钟峰值 10 发，p50 输入 131K token（最大 338K），缓存命中
+  0.983；来源是本机 ZCode 桌面端经 `fq.sciman.top` 的编码会话（provider 配置的模型即
+  `glm-5.3-flash-wb` / `glm-5.4-wb`）。ChatGPT 车道 79 发，容量失败 35 发（约 45%，仍是
+  上游过载）。Antigravity 3 发、zhipu 4 发、zcode-start-plan 1 发。
+- **跨车道归一化不伤缓存（假设已证伪）**：`strip_antigravity_model_switch_items` /
+  `normalize_antigravity_developer_context` / `collapse_antigravity_retry_user_turns` 自
+  `10575d2`（2026-11-23）起对所有车道生效，48h 内在 WorkBuddy 车道剥掉了 78 个中置
+  `<skills_instructions>` part 并折叠 628 条重试 user 轮。曾怀疑它破坏前缀缓存：实测发生
+  折叠的 314 发命中率中位 0.997，未折叠的 715 发为 0.997，无差异。`glm-5.4-wb` 的低命中
+  请求（119 发里 47 发 <50%）集中在 04:30–04:50Z 与 07:00Z 的十分钟桶内，且都不带折叠，
+  是新会话冷启动与模型切换，不是归一化造成。
+- **错误转储的结构**（5 份保留样本，只读角色与长度）：官方 Codex Desktop 的请求无顶层
+  `instructions`，`input[0]` 为 developer 基础提示，`tools` 8–17 个；一份 73 项的样本是
+  71 条连续 user 消息（每条约 8.5K 字符）而无 assistant 轮，是失败重试在客户端累积的
+  形状，与此前"重复重试撑大上下文"的判断一致。
+- **cloak 关闭后的出站身份**（v8.1.7 源码）：`disable-codex-cloaking: true` 时
+  `applyCodexCloakingHeaders` 直接返回，`User-Agent` 取客户端值（无则
+  `codex-header-defaults`，再无则常量 `codex-tui/0.154.0…`）；`Originator` 取客户端值，
+  客户端不带时**仍回落 `codex-tui`**。即官方客户端透传自洽指纹，不带 Originator 的调用
+  （探针、脚本）仍以 `codex-tui` 出站——这是 #4679 里被甩的那个值。本栈该车道 agent
+  流量全来自官方客户端，不受影响；结论：不要用脚本直接打 ChatGPT 车道。
+- **周期探活的现状**：`/v1/chat/completions` 路由在 ChatGPT 车道 72h 内 13 发（约 53
+  token，单一客户端实例），全部在 2026-11-26 17:01Z 之前；terra 退役后不再出现。
+  WorkBuddy 插件的 active ping 为每账号 4 小时最多一发（实测 6 轮、每轮 9 发），plus 每 4
+  小时 credits sweep。Antigravity 两凭据每 25 分钟被上游重写一次是 `RefreshLead=30m` 设计。
+- **上游未修项**：#8409 / #8452 的函数到 v8.1.7 字节级未变，是 2026-11-26 批量关闭的
+  195 个 issue 之一；admission 对 Antigravity JSON 403 一律落持久锁，构成兜底。
+- **官方口径更正与新证据**：见
+  [封号 runbook](cpa-ban-throttle-incident-response.md) 的 OpenAI 补充、WorkBuddy 复核、
+  Antigravity 复核与 ZCode 起步套餐各节。要点：合并额度文章号是 20001625（此前误引
+  20001559）；WorkBuddy 11128 是内容指纹判定；Antigravity 免费档只有周窗口；ZCode
+  Start Plan 官方明文限于官方客户端。
+- **研究覆盖的缺口**：子代理的搜索与网页阅读配额当日耗尽（2026-12-16 重置），Reddit、
+  X、linux.do、V2EX 等论坛全部未覆盖；证据仅来自官方页直取与 GitHub。
