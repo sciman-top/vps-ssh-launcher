@@ -89,6 +89,30 @@ def test_provider_without_cache_numbers_reports_none_not_zero() -> None:
     assert entry["samples"] == 1
 
 
+def test_cache_ratio_uses_only_completed_samples_with_reported_cache_counts() -> None:
+    telemetry = ModelTelemetry()
+
+    _record(telemetry, usage_in=1000, usage_cached=None)
+    entry = telemetry.snapshot()["models"]["gpt-6.1-terra"]
+    assert entry["usage_samples"] == 1
+    assert entry.get("cache_hit_ratio") is None
+    assert entry["cache_samples"] == 0
+
+    _record(telemetry, usage_in=1000, usage_cached=0)
+    entry = telemetry.snapshot()["models"]["gpt-6.1-terra"]
+    assert entry["cache_hit_ratio"] == 0.0
+
+    _record(telemetry, usage_in=1000, usage_cached=800)
+    _record(telemetry, usage_in=None, usage_cached=900)
+    _record(telemetry, usage_in=3000, usage_cached=0, result="incomplete")
+    entry = telemetry.snapshot()["models"]["gpt-6.1-terra"]
+    assert entry["usage_samples"] == 4
+    assert entry["cache_samples"] == 2
+    assert entry["cached_tokens"] == 800
+    assert entry["uncached_input_tokens"] == 1200
+    assert entry["cache_hit_ratio"] == 0.4
+
+
 def test_interrupted_first_token_still_feeds_the_first_text_distribution() -> None:
     telemetry = ModelTelemetry()
 

@@ -1404,7 +1404,7 @@ Antigravity 车道的客户端面是 codex（Responses）协议：Codex 客户�
 
 admission 现在把 provider 回传的缓存计数按模型滚动聚合到 `/healthz` 的
 `telemetry.models.<alias>`：`cached_tokens` / `uncached_input_tokens` /
-`cache_hit_ratio`（仅统计 `protocol_result=completed` 的生成）与
+`cache_hit_ratio`（仅统计完成且明确上报输入和缓存计数的生成，样本数见 `cache_samples`）与
 `first_text_ms` 的 p50/p90/max。窗口 1h、序列上限 64，只有观测、不参与任何
 准入决策；provider 不回报缓存时 `cache_hit_ratio` 缺省而不是 0。
 

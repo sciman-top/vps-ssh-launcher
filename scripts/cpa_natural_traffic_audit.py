@@ -221,12 +221,19 @@ def parse_journal(
         first_byte_ms = _parse_int(fields.get("upstream_first_byte_ms"))
         first_text_ms = _parse_int(fields.get("first_text_ms"))
         sse_inspection = fields.get("sse_inspection_complete") or "na"
+        lane_name = fields.get("lane") or "unknown"
         admission_ts = admission_logs.get(request_id) if request_id else None
         if admission_ts is None and header_at is not None and header_at <= timestamp:
-            if waited_ms is not None and sse_inspection != "na":
+            if (
+                lane_name != "passthrough"
+                and waited_ms is not None
+                and sse_inspection != "na"
+            ):
                 # Older lane-owned SSE logs have only the early queue header.
                 admission_ts = header_at + timedelta(milliseconds=waited_ms)
             elif header_ms is not None:
+                # Passthrough SSE and buffered replies write downstream headers
+                # after CPA responds. Subtract that upstream wait from the anchor.
                 admission_ts = header_at - timedelta(milliseconds=header_ms)
         if admission_ts is not None and admission_ts > timestamp:
             admission_ts = None
@@ -271,7 +278,6 @@ def parse_journal(
             and sse_events > 1
             else None
         )
-        lane_name = fields.get("lane") or "unknown"
         model_name = fields.get("model") or "unknown"
         is_probe = request_id in probe_ids if request_id else False
         usage_in = _parse_int(fields.get("usage_in"))
@@ -601,6 +607,11 @@ def summarize(
         tokens_output = sum(
             r["usage_out"] for r in token_reports if r["usage_out"] is not None
         )
+        cache_reports = [
+            r
+            for r in completed
+            if r["usage_in"] is not None and r["usage_cached"] is not None
+        ]
         uncached_parts = []
         cached_parts = []
         candidate_uncached_parts = []
@@ -612,18 +623,22 @@ def summarize(
         mixed_model_conv_reports = 0
         model_switch_candidate_reports = 0
         additive_cache_shape = False
-        for record in token_reports:
+        cache_shape_by_model: dict[str, set[str]] = {}
+        for record in cache_reports:
             reported_input = record["usage_in"]
             reported_cached = record["usage_cached"]
-            if reported_cached is not None and reported_cached > reported_input:
+            if reported_cached > reported_input:
                 # The provider's input count excludes cache reads.
                 uncached = reported_input
                 cached = reported_cached
                 additive_cache_shape = True
+                shape = "additive"
             else:
                 # The provider's input count includes cache reads.
-                cached = min(reported_input, reported_cached or 0)
-                uncached = max(0, reported_input - cached)
+                cached = reported_cached
+                uncached = reported_input - cached
+                shape = "total"
+            cache_shape_by_model.setdefault(str(record["model"]), set()).add(shape)
             uncached_parts.append(uncached)
             cached_parts.append(cached)
             if cached + uncached >= _CACHE_CANDIDATE_MIN_TOKENS:
@@ -667,16 +682,6 @@ def summarize(
             if single_model_conv_denom > 0
             else None
         )
-        cache_shape_by_model: dict[str, set[str]] = {}
-        for record in token_reports:
-            reported_input = record["usage_in"]
-            reported_cached = record["usage_cached"]
-            shape = (
-                "additive"
-                if reported_cached is not None and reported_cached > reported_input
-                else "total"
-            )
-            cache_shape_by_model.setdefault(str(record["model"]), set()).add(shape)
         cache_shape_mixed_models = sorted(
             model for model, shapes in cache_shape_by_model.items() if len(shapes) > 1
         )
@@ -790,6 +795,7 @@ def summarize(
                 "unexplained_output_origins": len(unexplained),
                 "non_sse_completed": len(non_sse),
                 "token_reports": len(token_reports),
+                "cache_reports": len(cache_reports),
                 "community_consumer_signal": name.startswith("workbuddy-oauth/")
                 and (
                     len(completed) > 0
@@ -799,8 +805,8 @@ def summarize(
                     or len(tiny_sse) > 0
                 ),
                 "tokens_input": tokens_input if token_reports else None,
-                "tokens_cached": tokens_cached if token_reports else None,
-                "tokens_uncached": tokens_uncached if token_reports else None,
+                "tokens_cached": tokens_cached if cache_reports else None,
+                "tokens_uncached": tokens_uncached if cache_reports else None,
                 "tokens_output": tokens_output if token_reports else None,
                 "cache_hit_ratio": cache_hit_ratio,
                 "cache_candidate_reports": len(candidate_cached_parts),
@@ -831,6 +837,8 @@ def summarize(
                     "cached_plus_reported_input"
                     if additive_cache_shape
                     else "reported_input_total"
+                    if cache_reports
+                    else "na"
                 ),
                 "cache_accounting_mixed_models": cache_shape_mixed_models,
                 "cost_reports": len(cost_reports),
@@ -1082,6 +1090,7 @@ def render(summary: dict[str, Any]) -> list[str]:
         lines.append(
             "  tokens "
             f"reports={lane['token_reports']} "
+            f"cache_reports={lane['cache_reports']} "
             f"in={_optional_int(lane['tokens_input'])} "
             f"cached={_optional_int(lane['tokens_cached'])} "
             f"uncached={_optional_int(lane['tokens_uncached'])} "
@@ -1120,8 +1129,8 @@ def render(summary: dict[str, Any]) -> list[str]:
         "-- coverage: admission journal only; aggregates only; no prompts, "
         "request IDs, client keys, or credentials; sse_bytes_per_s is a "
         "transport proxy, not tokens/s; token sums come from upstream usage "
-        "fields only when the provider reported them (reports=N is the support "
-        "for cache_hit_ratio; providers may report usage_in as total input or "
+        "fields only when the provider reported them (cache_reports counts completed "
+        "requests with both input and cache counts; providers may report usage_in as total input or "
         "uncached input, and the audit switches to cached+usage_in when "
         "cached_tokens exceeds usage_in; cache_candidates further excludes "
         f"requests whose total prompt is below {_CACHE_CANDIDATE_MIN_TOKENS} "

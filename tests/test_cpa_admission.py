@@ -4723,6 +4723,26 @@ def test_normalize_antigravity_developer_context_keeps_changed_mode_and_spares_n
     )
 
 
+def test_native_gemini_first_text_excludes_thought_parts() -> None:
+    probe = StreamErrorProbe(
+        4096,
+        None,
+        path="/v1beta/models/gemini-4-hydrogen-xhigh:streamGenerateContent",
+        started_at=time.monotonic(),
+    )
+    probe.feed(
+        b'data: {"candidates":[{"content":{"parts":'
+        b'[{"text":"thinking","thought":true}]}}]}\n\n'
+    )
+    assert probe.first_text_ms is None
+    probe.feed(
+        b'data: {"candidates":[{"content":{"parts":'
+        b'[{"text":"answer"}]},"finishReason":"STOP"}]}\n\n'
+    )
+    assert probe.first_text_ms is not None
+    assert probe.terminal_success
+
+
 def test_stream_probe_supports_passthrough_without_lane_config() -> None:
     """Passthrough SSE probes collect usage/TTFT/errors with zero lane side effects."""
     probe = StreamErrorProbe(
@@ -5167,19 +5187,25 @@ def test_collapse_antigravity_retry_user_turns_works_after_history() -> None:
     normalized, removed = collapse("/v1/responses", body, "antigravity-oauth")
     parsed = json.loads(normalized)
 
-    assert removed == 2
+    assert removed == 1
     assert [item.get("role") for item in parsed["input"]] == [
         "user",
         "assistant",
         None,
         None,
+        "user",
         "developer",
         "user",
     ]
     assert parsed["input"][-1]["content"] == "继续"
 
 
-def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -> None:
+@pytest.mark.parametrize(
+    "lane", ["antigravity-oauth", "chatgpt-oauth", "workbuddy-oauth"]
+)
+def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history(
+    lane: str,
+) -> None:
     collapse = MODULE["collapse_antigravity_retry_user_turns"]
     body = json.dumps(
         {
@@ -5197,16 +5223,10 @@ def test_collapse_antigravity_retry_user_turns_does_not_touch_normal_history() -
         ensure_ascii=False,
     ).encode()
 
-    normalized, removed = collapse("/v1/responses", body, "antigravity-oauth")
-    parsed = json.loads(normalized)
+    normalized, removed = collapse("/v1/responses", body, lane)
 
-    assert removed == 1
-    assert [item.get("role") for item in parsed["input"]] == [
-        "assistant",
-        "user",
-        "user",
-    ]
-    assert parsed["input"][2]["content"] == [{"type": "input_image", "image_url": "x"}]
+    assert removed == 0
+    assert normalized == body
 
 
 def test_neutralize_agent_identity_sentences_keeps_paths_and_product_mentions() -> None:
@@ -6970,18 +6990,24 @@ def test_cross_provider_agent_payload_is_normalized_before_upstream(
         content.append(
             {"type": "encrypted_content", "encrypted_content": "opaque-task-envelope"}
         )
+    history = [
+        {"role": "user", "content": "continue"},
+        {"role": "assistant", "content": "First task completed"},
+        {"role": "user", "content": "continue"},
+    ]
     body = json.dumps(
         {
             "model": model,
             "store": False,
             "reasoning": {"effort": "xhigh"},
             "input": [
+                *history,
                 {
                     "type": "agent_message",
                     "author": "/root",
                     "recipient": "/root/worker",
                     "content": content,
-                }
+                },
             ],
         }
     ).encode()
@@ -7004,9 +7030,10 @@ def test_cross_provider_agent_payload_is_normalized_before_upstream(
         assert forwarded["model"] == model
         assert forwarded["store"] is False
         assert forwarded["reasoning"] == {"effort": "xhigh"}
+        assert forwarded["input"][:3] == history
         if normalized:
             assert forwarded != json.loads(body)
-            message = forwarded["input"][0]
+            message = forwarded["input"][3]
             assert message["type"] == "message" and message["role"] == "user"
             assert message["content"] == [
                 {"type": "input_text", "text": task_header},

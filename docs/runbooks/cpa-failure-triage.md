@@ -162,13 +162,14 @@ fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换
 # 关注每 lane 的 tokens 行：通常 `cache_hit_ratio = cached / in`；当 provider
 # 单独返回缓存读取量并出现 `cached > in` 时，审计自动改用
 # `cached / (cached + in)`，并在行尾标出 `accounting=cached_plus_reported_input`。
-# `reports=N` 是统计支持数，不代表每个 provider 都使用同一 usage 分母。
+# `reports=N` 是上报输入 token 数的记录数。`cache_reports=N` 是完成生成且同时上报
+# 输入和缓存 token 数的记录数，`cached`、`uncached` 和命中率只使用这些样本。
 # `cache_candidates` 只保留该请求总输入至少 20k token 的长前缀，避免标题、
 # 探活等微小冷请求污染长上下文结论；它不是 header、session 或凭据命中证明。
 ```
 
-尚需注意：并非所有 provider 都回传 usage（WorkBuddy/部分中转可能不回），
-此时 `reports` 会小于 `n`、`cache_hit_ratio=na`，仍是"未报告"而不是"零命中"。
+部分 provider 或中转会省略缓存读取量，即使它已报告输入 token 数。
+当没有合格样本时，`cache_hit_ratio=na`。上游明确回报 `usage_cached=0` 时计入分母。
 健康探针只计入 `requests`/`probes`，其时延、协议、吞吐、token/cache/cost
 指标不进入 `natural` 聚合。自然流量中，长前缀候选至少 10 个、累计输入不少于
 1,000,000 tokens 时，`cache_candidate_hit_ratio < 0.50` 会输出需要复核的 WARN；这是

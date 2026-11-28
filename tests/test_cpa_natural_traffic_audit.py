@@ -120,6 +120,44 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertGreater(lane["cache_hit_ratio"], 0.5)
         self.assertEqual(lane["cache_accounting"], "cached_plus_reported_input")
 
+    def test_cache_ratio_excludes_missing_cache_and_incomplete_usage(self) -> None:
+        log = (
+            "2026-10-31T00:00:05+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=100000 usage_cached=na usage_out=100 request_id=r1\n"
+            "2026-10-31T00:00:06+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=false protocol_result=client_disconnect "
+            "usage_in=100000 usage_cached=100000 usage_out=5 request_id=r2\n"
+            "2026-10-31T00:00:07+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=100000 usage_cached=0 usage_out=100 request_id=r3\n"
+            "2026-10-31T00:00:08+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 "
+            "successful=true protocol_result=completed "
+            "usage_in=100000 usage_cached=80000 usage_out=100 request_id=r4\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        unknown = summarize(records[:2], 24)["lanes"][0]
+        self.assertIsNone(unknown["cache_hit_ratio"])
+        self.assertIsNone(unknown["tokens_cached"])
+        cold = summarize(records[:3], 24)["lanes"][0]
+        self.assertEqual(cold["cache_hit_ratio"], 0.0)
+
+        summary = summarize(records, 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["token_reports"], 4)
+        self.assertEqual(lane["tokens_input"], 400000)
+        self.assertEqual(lane["tokens_output"], 305)
+        self.assertEqual(lane["cache_reports"], 2)
+        self.assertEqual(lane["tokens_cached"], 80000)
+        self.assertEqual(lane["tokens_uncached"], 120000)
+        self.assertEqual(lane["cache_hit_ratio"], 0.4)
+        self.assertEqual(lane["cache_candidate_reports"], 2)
+        self.assertIn("reports=4 cache_reports=2", "\n".join(render(summary)))
+
     def test_cache_candidates_exclude_tiny_probe_inputs(self) -> None:
         log = (
             "2026-10-31T00:00:01+00:00 host py[1]: INFO upstream_result "
@@ -483,6 +521,22 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         rendered = "\n".join(render(summary))
         self.assertIn("output_tokens_per_s", rendered)
         self.assertIn("uncached=200", rendered)
+
+    def test_passthrough_sse_header_follows_upstream_wait(self) -> None:
+        log = (
+            "2026-11-28T00:00:10+00:00 host py[1]: INFO http request_id=r1\n"
+            "2026-11-28T00:00:13+00:00 host py[1]: INFO upstream_result "
+            "lane=passthrough model=gpt-6.2-astra status=200 waited_ms=0 "
+            "protocol_result=completed upstream_header_ms=10000 "
+            "upstream_first_byte_ms=10100 sse_events=10 "
+            "sse_inspection_complete=true sse_terminal_seen=true "
+            "usage_out=58 request_id=r1\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        lane = summarize(records, 24)["lanes"][0]
+        self.assertEqual(lane["total_duration_p50_s"], 13.0)
+        self.assertEqual(lane["decode_ms_p50"], 2900.0)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 20.0)
 
     def test_output_rate_excludes_stream_queue_and_ttfb(self) -> None:
         """A queued SSE turn is not decoded at thousands of tokens/s."""

@@ -2343,7 +2343,12 @@ class ModelTelemetry:
                 counted = [
                     item for item in live if item[1] is not None or item[2] is not None
                 ]
-                cached_total = sum(int(item[2] or 0) for item in counted)
+                cache_reports = [
+                    item
+                    for item in counted
+                    if item[1] is not None and item[2] is not None
+                ]
+                cached_total = sum(int(item[2] or 0) for item in cache_reports)
                 # Providers disagree on whether the reported input count already
                 # includes cache reads. OpenAI/Antigravity/GLM report TOTAL input
                 # plus a cached subset, so uncached = input - cached. WorkBuddy's
@@ -2358,7 +2363,7 @@ class ModelTelemetry:
                     int(item[1] or 0)
                     if int(item[2] or 0) > int(item[1] or 0)
                     else max(0, int(item[1] or 0) - int(item[2] or 0))
-                    for item in counted
+                    for item in cache_reports
                 )
                 first_text = [
                     int(item[4])
@@ -2367,17 +2372,14 @@ class ModelTelemetry:
                 ]
                 entry: dict[str, Any] = {"samples": len(live)}
                 if counted:
+                    entry["usage_samples"] = len(counted)
+                    entry["cache_samples"] = len(cache_reports)
+                if cache_reports:
                     denominator = cached_total + uncached_total
                     entry.update(
                         {
-                            "usage_samples": len(counted),
                             "cached_tokens": cached_total,
                             "uncached_input_tokens": uncached_total,
-                            # None, not 0: a provider that never reports cache
-                            # numbers must read as unknown, not as a 0% hit rate.
-                            # Numerator is provider-reported cached tokens;
-                            # denominator is every prompt token, so this is the
-                            # provider ratio, not a local estimate.
                             "cache_hit_ratio": round(cached_total / denominator, 4)
                             if denominator
                             else None,
@@ -2683,6 +2685,7 @@ class StreamErrorProbe:
                     parts = content.get("parts") if isinstance(content, dict) else None
                     if isinstance(parts, list) and any(
                         isinstance(part, dict)
+                        and part.get("thought") is not True
                         and isinstance(part.get("text"), str)
                         and bool(part.get("text"))
                         for part in parts
@@ -3137,15 +3140,10 @@ def omit_antigravity_historical_user_images(
 def collapse_antigravity_retry_user_turns(
     path: str, body: bytes, lane_name: str | None
 ) -> tuple[bytes, int]:
-    """Remove duplicate retry-only turns from old sessions.
+    """Collapse adjacent identical retry-only user items in Responses input.
 
-    A failed Codex turn can remain as a user item even when no assistant/tool
-    item was produced. Repeating the same retry action then grows the input
-    with duplicate short user turns, and later failures can continue that
-    pattern after earlier turns have produced history. Exact retry-only user
-    items are therefore collapsed independently of surrounding history, while
-    images, tool results, and arbitrary user text pass through. The latest
-    retry-only turn for each retry text is retained.
+    Once another item intervenes, the same short instruction can be a distinct
+    turn. Keep it even if the later turn repeats the exact wording.
     """
     _ = lane_name
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
@@ -3157,9 +3155,17 @@ def collapse_antigravity_retry_user_turns(
     if not isinstance(items, list):
         return body, 0
 
-    retry_indices: dict[str, list[int]] = {}
-    for index, item in enumerate(items):
-        if not isinstance(item, dict) or item.get("role") != "user":
+    kept: list[Any] = []
+    removed = 0
+    for item in items:
+        kept.append(item)
+        if (
+            len(kept) < 2
+            or item != kept[-2]
+            or not isinstance(item, dict)
+            or item.get("type", "message") != "message"
+            or item.get("role") != "user"
+        ):
             continue
         content = item.get("content")
         if isinstance(content, str):
@@ -3175,25 +3181,16 @@ def collapse_antigravity_retry_user_turns(
             text = "".join(part["text"] for part in content).strip()
         else:
             continue
-        normalized = text.casefold()
-        if normalized in _ANTIGRAVITY_RETRY_ONLY_USER_TEXTS:
-            retry_indices.setdefault(normalized, []).append(index)
-
-    duplicate_indices = {
-        index
-        for indices in retry_indices.values()
-        if len(indices) > 1
-        for index in indices[:-1]
-    }
-    if not duplicate_indices:
+        if text.casefold() in _ANTIGRAVITY_RETRY_ONLY_USER_TEXTS:
+            kept.pop(-2)
+            removed += 1
+    if not removed:
         return body, 0
 
-    payload["input"] = [
-        item for index, item in enumerate(items) if index not in duplicate_indices
-    ]
+    payload["input"] = kept
     out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     _body_parse_state.entry = (out, payload)
-    return out, len(duplicate_indices)
+    return out, removed
 
 
 def strip_antigravity_model_switch_items(
@@ -5707,6 +5704,18 @@ class Handler(BaseHTTPRequestHandler):
             # body still names it. Preserve that model on the lease so a
             # capacity response cannot fall back to the shared breaker.
             model = observed_model
+        # Test adjacency before other normalizers can remove intervening items.
+        body, collapsed_retry_turns = collapse_antigravity_retry_user_turns(
+            self.path, body, lane_name
+        )
+        if collapsed_retry_turns:
+            logging.info(
+                "protocol_normalized model=%s kind=antigravity_retry_history "
+                "duplicate_user_turns=%s %s",
+                observed_model,
+                collapsed_retry_turns,
+                self._trace_context,
+            )
         body, omitted_historical_images = omit_antigravity_historical_user_images(
             self.path, body, lane_name
         )
@@ -5753,17 +5762,6 @@ class Handler(BaseHTTPRequestHandler):
                 "protocol_normalized model=%s kind=antigravity_developer_context %s %s",
                 observed_model,
                 context_counts,
-                self._trace_context,
-            )
-        body, collapsed_retry_turns = collapse_antigravity_retry_user_turns(
-            self.path, body, lane_name
-        )
-        if collapsed_retry_turns:
-            logging.info(
-                "protocol_normalized model=%s kind=antigravity_retry_history "
-                "duplicate_user_turns=%s %s",
-                observed_model,
-                collapsed_retry_turns,
                 self._trace_context,
             )
         body, identity_text_stats = neutralize_agent_identity_text(
