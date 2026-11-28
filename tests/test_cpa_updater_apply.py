@@ -1549,13 +1549,14 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         for lane in (
             "chatgpt-risk.json",
             "workbuddy-risk.json",
-            "workbuddy-intl-risk.json",
+            "zcode-start-plan-risk.json",
             "antigravity-risk.json",
         ):
             self.assertIn(lane, source)
-        # The claude tombstone (authentication_required) is inert by design and
-        # must never fail an update.
+        # Retired lanes (claude tombstone, workbuddy-intl removed 2026-11-26)
+        # must never be read or fail an update.
         self.assertNotIn("claude-risk.json", source)
+        self.assertNotIn("workbuddy-intl-risk.json", source)
 
     def test_updater_drain_and_hold_read_failures_are_deferred(self) -> None:
         repo_root = Path(__file__).parents[1]
@@ -1593,7 +1594,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             state = {
                 "chatgpt-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
                 "workbuddy-risk.json": '{"version":1,"not_before":900,"hold_reason":null}',
-                "workbuddy-intl-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
+                "zcode-start-plan-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
                 "antigravity-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
                 # Inert tombstone: must be invisible to the check.
                 "claude-risk.json": '{"version":1,"not_before":0,"hold_reason":"authentication_required"}',
@@ -1727,7 +1728,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             for name in (
                 "chatgpt-risk.json",
                 "workbuddy-risk.json",
-                "workbuddy-intl-risk.json",
+                "zcode-start-plan-risk.json",
                 "antigravity-risk.json",
             ):
                 (windows_base / name).write_text(

@@ -256,6 +256,17 @@ if [ -e "$RISK_STATE_DIR/workbuddy-intl-risk.json" ]; then
 else
   : > "$BK/workbuddy-intl-risk.json.missing"
 fi
+if [ -e "$RISK_STATE_DIR/zcode-start-plan-risk.json" ]; then
+  if [ -L "$RISK_STATE_DIR/zcode-start-plan-risk.json" ] ||
+     [ ! -f "$RISK_STATE_DIR/zcode-start-plan-risk.json" ]; then
+    echo "REFUSE zcode-start-plan-risk-state is not a regular file"
+    discard_empty_backup
+    exit 1
+  fi
+  cp -a "$RISK_STATE_DIR/zcode-start-plan-risk.json" "$BK/zcode-start-plan-risk.json"
+else
+  : > "$BK/zcode-start-plan-risk.json.missing"
+fi
 if [ -f "$DIR/plugins/workbuddy-ai-provider.so" ]; then
   cp -a "$DIR/plugins/workbuddy-ai-provider.so" "$BK/workbuddy-ai-provider.so"
 else
@@ -473,6 +484,12 @@ restore_all() {
     cp -a "$BK/workbuddy-intl-risk.json" "$RISK_STATE_DIR/workbuddy-intl-risk.json" || mark_rollback_failed
   elif [ -f "$BK/workbuddy-intl-risk.json.missing" ]; then
     rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json" || mark_rollback_failed
+  fi
+  if [ -f "$BK/zcode-start-plan-risk.json" ]; then
+    mkdir -p "$RISK_STATE_DIR" || mark_rollback_failed
+    cp -a "$BK/zcode-start-plan-risk.json" "$RISK_STATE_DIR/zcode-start-plan-risk.json" || mark_rollback_failed
+  elif [ -f "$BK/zcode-start-plan-risk.json.missing" ]; then
+    rm -f "$RISK_STATE_DIR/zcode-start-plan-risk.json" || mark_rollback_failed
   fi
   if [ -f "$BK/workbuddy-ai-provider.so" ]; then
     cp -a "$BK/workbuddy-ai-provider.so" "$DIR/plugins/workbuddy-ai-provider.so" || mark_rollback_failed
@@ -3055,6 +3072,14 @@ fi
 rm -f "$DIR/plugins/workbuddy-ai-provider.so"
 rm -f "$RISK_STATE_DIR/workbuddy-intl-risk.json"
 echo "WORKBUDDY_INTL_UNINSTALLED plugin=removed risk_state=removed"
+if [ ! -f "$RISK_STATE_DIR/zcode-start-plan-risk.json" ]; then
+  install -d -m 700 -o nobody -g nogroup "$RISK_STATE_DIR"
+  printf '{"version":1,"not_before":0,"hold_reason":null}\n' >"$RISK_STATE_DIR/zcode-start-plan-risk.json.new"
+  chown nobody:nogroup "$RISK_STATE_DIR/zcode-start-plan-risk.json.new"
+  chmod 600 "$RISK_STATE_DIR/zcode-start-plan-risk.json.new"
+  mv -f "$RISK_STATE_DIR/zcode-start-plan-risk.json.new" "$RISK_STATE_DIR/zcode-start-plan-risk.json"
+  echo "ZCODE_START_PLAN_RISK_STATE_INITIALIZED path=$RISK_STATE_DIR/zcode-start-plan-risk.json"
+fi
 if ! grep -Fq 'ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh' "$ADMISSION_UNIT" ||
    ! grep -Fq 'VPS_SSH_LAUNCHER_ADMISSION_TARGET=/opt/cliproxyapi/cpa-admission.py' "$ADMISSION_LAUNCHER" ||
    ! grep -Fq 'VPS_SSH_LAUNCHER_ADMISSION_CONFIG=/opt/cliproxyapi/cpa-admission.json' "$ADMISSION_LAUNCHER"; then

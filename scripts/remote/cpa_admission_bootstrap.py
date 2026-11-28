@@ -233,6 +233,8 @@ def main() -> int:
                 "/var/lib/cpa-admission/chatgpt-risk.json",
                 "--workbuddy-state-file",
                 "/var/lib/cpa-admission/workbuddy-risk.json",
+                "--zcode-start-plan-state-file",
+                "/var/lib/cpa-admission/zcode-start-plan-risk.json",
             ],
             stdin=subprocess.DEVNULL,
             pass_fds=(REQUEST_GUARD_FD, bridge_fd),

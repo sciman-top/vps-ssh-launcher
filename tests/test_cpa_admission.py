@@ -2926,6 +2926,194 @@ def test_start_plan_quota_refusal_is_a_lane_capacity_signal() -> None:
     )
 
 
+def test_start_plan_suspension_is_a_durable_account_hold(tmp_path: Path) -> None:
+    signal = MODULE["oauth_risk_signal"]
+    assert signal(
+        "zcode-start-plan",
+        405,
+        b'{"code":3012,"msg":"Your account has been suspended for misusing the Start Plan"}',
+    ) == ("account_restricted", None)
+    assert signal(
+        "zcode-start-plan",
+        200,
+        b'{"error":{"code":3012,"message":"misusing the Start Plan"}}',
+    ) == ("account_restricted", None)
+    assert signal(
+        "zcode-start-plan",
+        502,
+        json.dumps(
+            {
+                "error": {
+                    "type": "upstream_error",
+                    "code": "translation_failed",
+                    "message": (
+                        'upstream returned {"code":3012,'
+                        '"msg":"Your account has been suspended"}'
+                    ),
+                }
+            }
+        ).encode(),
+    ) == ("account_restricted", None)
+    assert signal(
+        "zcode-start-plan",
+        405,
+        b'upstream 405: {"code":3012,"msg":"Start Plan suspended"}',
+    ) == ("account_restricted", None)
+    assert signal("zcode-start-plan", 405, b"{}") == (None, None)
+    assert signal(
+        "zcode-start-plan",
+        405,
+        b'{"error":{"code":405,"message":"Method Not Allowed"}}',
+    ) == (None, None)
+
+    state_file = risk_state_path(tmp_path)
+    config = MODULE["load_config"](ROUTE_MANIFEST_PATH.with_name("cpa-admission.json"))
+    proxy = MODULE["AdmissionProxy"](config, zcode_start_plan_state_path=state_file)
+    proxy.lanes["zcode-start-plan"].record_risk("account_restricted", None)
+    assert json.loads(state_file.read_text(encoding="utf-8"))["hold_reason"] == (
+        "account_restricted"
+    )
+    restarted = MODULE["AdmissionProxy"](config, zcode_start_plan_state_path=state_file)
+    assert restarted.lanes["zcode-start-plan"].snapshot()["hold_reason"] == (
+        "account_restricted"
+    )
+
+
+def test_array_wrapped_antigravity_tos_and_retry_info_are_classified() -> None:
+    # Upstream CLIProxyAPI #8409: Google Cloud Code / Vertex may return a
+    # single-element JSON array `[{"error": {...}}]` on 403/429 responses.
+    tos_array = json.dumps(
+        [
+            {
+                "error": {
+                    "code": 403,
+                    "message": "Permission denied",
+                    "status": "PERMISSION_DENIED",
+                    "details": [
+                        {
+                            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                            "reason": "TOS_VIOLATION",
+                            "domain": "cloudcode-pa.googleapis.com",
+                        }
+                    ],
+                }
+            }
+        ]
+    ).encode()
+    assert oauth_risk_signal("antigravity-oauth", 403, tos_array) == (
+        "account_restricted",
+        None,
+    )
+
+    retry_array = json.dumps(
+        [
+            {
+                "error": {
+                    "code": 429,
+                    "message": "No capacity available for model gemini-4-hydrogen-xhigh",
+                    "status": "RESOURCE_EXHAUSTED",
+                    "details": [
+                        {
+                            "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                            "retryDelay": "125s",
+                        }
+                    ],
+                }
+            }
+        ]
+    ).encode()
+    assert oauth_risk_signal("antigravity-oauth", 429, retry_array) == (None, 125)
+
+    bare_array = json.dumps(
+        [
+            {
+                "error": {
+                    "code": 429,
+                    "message": "Resource has been exhausted (e.g. check quota).",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            }
+        ]
+    ).encode()
+    assert MODULE["antigravity_bare_resource_exhausted"](429, bare_array) is True
+
+
+def test_large_spooled_antigravity_bare_429_does_not_crash_and_arms_repeat_reject(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    received = [0]
+    bare_429 = (
+        b'{"error":{"code":429,"message":"Resource has been exhausted '
+        b'(e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}'
+    )
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            received[0] += 1
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(bare_429)))
+            self.end_headers()
+            self.wfile.write(bare_429)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    monkeypatch.setitem(MODULE, "ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES", 64)
+    MODULE["reset_antigravity_repeat_reject_state"]()
+    try:
+        with _admission_stack(
+            Upstream,
+            lane_overrides={
+                "queue_timeout_seconds": 0.01,
+                "cooldown_schedule_seconds": [1, 1, 1, 1, 1],
+            },
+            lane_name="antigravity-oauth",
+            proxy_overrides={"state_path": risk_state_path(tmp_path)},
+        ) as stack:
+            proxy = stack["proxy"]
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=3)
+            # Exceeds the 64-byte spool threshold so `del body` executes before
+            # upstream I/O, verifying record_antigravity_repeat_reject_arm uses
+            # the precomputed digest without raising UnboundLocalError.
+            body = json.dumps(
+                {
+                    "model": "gemini-3.8-flash-high",
+                    "messages": [{"role": "user", "content": "x" * 200}],
+                }
+            ).encode()
+
+            def wait_lane_idle() -> None:
+                deadline = time.monotonic() + 2
+                while proxy.lanes["antigravity-oauth"].snapshot()["inflight"]:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.005)
+
+            try:
+                for _ in range(2):
+                    client.request("POST", "/v1/messages", body)
+                    response = client.getresponse()
+                    assert response.status == 429
+                    response.read()
+                    wait_lane_idle()
+                    time.sleep(1.1)
+                assert received[0] == 2
+                client.request("POST", "/v1/messages", body)
+                response = client.getresponse()
+                assert response.status == 429
+                assert (
+                    response.getheader("X-CPA-Admission-Reason")
+                    == "repeat_rejected_cooldown"
+                )
+                assert json.loads(response.read())["upstream_contacted"] is False
+                assert received[0] == 2
+            finally:
+                client.close()
+    finally:
+        MODULE["reset_antigravity_repeat_reject_state"]()
+
+
 def test_expired_lane_deadline_is_not_reported_as_active_cooldown(
     monkeypatch: Any,
 ) -> None:

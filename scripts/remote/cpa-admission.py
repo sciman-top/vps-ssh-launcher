@@ -510,7 +510,10 @@ WORKBUDDY_LANES = frozenset({"workbuddy-oauth", "workbuddy-intl-oauth"})
 STRICT_OAUTH_LANES = frozenset(
     {"antigravity-oauth", "claude-oauth", "workbuddy-oauth", "workbuddy-intl-oauth"}
 )
-DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth"}
+# ZCode Start Plan is a single-account trial entitlement. A structured 405/3012
+# response means the entitlement was suspended for misuse, so its hold must
+# survive restarts and must never ride the transient capacity ladder.
+DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth", "zcode-start-plan"}
 # One bounded verification window for a stale write-ahead marker found at
 # startup (see the LaneState load path); short enough to be invisible to
 # clients that already back off for minutes on the 429 it advertises.
@@ -980,6 +983,27 @@ def parse_retry_after(value: str | None, now: float | None = None) -> int | None
         return None
 
 
+def _append_protocol_errors_from_mapping(
+    payload: dict[str, Any], lane_name: str | None, errors: list[Any]
+) -> None:
+    if payload.get("error"):
+        errors.append(payload["error"])
+    elif (
+        payload.get("code") == 11140
+        or (lane_name in WORKBUDDY_LANES and payload.get("code") in (6003, 6004, 6008))
+        or (lane_name == "zcode-start-plan" and payload.get("code") in (3012, 405))
+    ) and isinstance(payload.get("msg"), str):
+        # 6008 is "Credits exhausted" and arrives as this bare shape,
+        # not inside an `error` envelope. Omitting it here made the one
+        # real quota event invisible to every classifier downstream.
+        errors.append({"code": payload["code"], "message": payload["msg"]})
+    elif payload.get("type") == "error":
+        errors.append({k: payload[k] for k in ("code", "message") if k in payload})
+    response = payload.get("response")
+    if isinstance(response, dict) and response.get("error"):
+        errors.append(response["error"])
+
+
 def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[Any]:
     # Generated prose and tool output can discuss rate limits. Only inspect
     # protocol error fields, never arbitrary text in a successful response.
@@ -1006,6 +1030,18 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
                         inner = None
                     if isinstance(inner, dict) and isinstance(inner.get("code"), int):
                         errors.append({"code": inner["code"], "message": candidate})
+            elif lane_name == "zcode-start-plan":
+                match = re.search(r"\{.*\}", candidate, re.DOTALL)
+                if match:
+                    try:
+                        inner = json.loads(match.group(0))
+                    except ValueError:
+                        inner = None
+                    if isinstance(inner, dict):
+                        if inner.get("error"):
+                            errors.append(inner["error"])
+                        elif inner.get("code") in (3012, 405):
+                            errors.append({"code": inner["code"], "message": candidate})
             elif lane_name == "chatgpt-oauth":
                 match = re.search(r"\{.*\}", candidate, re.DOTALL)
                 if match:
@@ -1023,26 +1059,16 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
             if payload is None:
                 continue
         if isinstance(payload, dict):
-            if payload.get("error"):
-                errors.append(payload["error"])
-            elif (
-                payload.get("code") == 11140
-                or (
-                    lane_name in WORKBUDDY_LANES
-                    and payload.get("code") in (6003, 6004, 6008)
-                )
-            ) and isinstance(payload.get("msg"), str):
-                # 6008 is "Credits exhausted" and arrives as this bare shape,
-                # not inside an `error` envelope. Omitting it here made the one
-                # real quota event invisible to every classifier downstream.
-                errors.append({"code": payload["code"], "message": payload["msg"]})
-            elif payload.get("type") == "error":
-                errors.append(
-                    {k: payload[k] for k in ("code", "message") if k in payload}
-                )
-            response = payload.get("response")
-            if isinstance(response, dict) and response.get("error"):
-                errors.append(response["error"])
+            _append_protocol_errors_from_mapping(payload, lane_name, errors)
+            continue
+        if isinstance(payload, list):
+            # Google Cloud Code / Vertex transports occasionally wrap error
+            # responses in a single-element JSON array `[{"error": {...}}]`
+            # (upstream CLIProxyAPI #8409). Unwrap dict items so TOS_VIOLATION
+            # and RetryInfo details are never dropped on that wire shape.
+            for item in payload:
+                if isinstance(item, dict):
+                    _append_protocol_errors_from_mapping(item, lane_name, errors)
             continue
     return errors
 
@@ -1302,6 +1328,29 @@ def oauth_risk_signal(
                 for code in codes
             ):
                 return "retry_window_review_required", None
+    if lane_name == "zcode-start-plan":
+        for error in protocol_errors(body, lane_name):
+            if not isinstance(error, dict):
+                continue
+            code = error.get("code")
+            raw_message = error.get("message")
+            message = str(raw_message or "").lower()
+            upstream_code = quoted_upstream_code(raw_message)
+            if (
+                code in (3012, "3012")
+                or upstream_code == 3012
+                or "misusing the start plan" in message
+                or any(marker in message for marker in STANDING_RESTRICTION_MARKERS)
+                or (
+                    code in (405, "405")
+                    and any(
+                        marker in message
+                        for marker in ("start plan", "suspended", "misus")
+                    )
+                )
+            ):
+                return "account_restricted", None
+        return None, None
     if lane_name in {"chatgpt-oauth", *WORKBUDDY_LANES}:
         errors = protocol_errors(body, lane_name)
         if status == 403 and not errors and edge_denial_body(body):
@@ -1507,6 +1556,8 @@ def antigravity_bare_resource_exhausted(status: int, body: bytes) -> bool:
     if status != 429:
         return False
     payload = parsed_json_body(body)
+    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
+        payload = payload[0]
     if not isinstance(payload, dict):
         return False
     error = payload.get("error")
@@ -1597,9 +1648,12 @@ def antigravity_repeat_reject_remaining(
     now: float | None = None,
     *,
     body: bytes | None = None,
+    body_digest: str | None = None,
 ) -> int | None:
     """Return seconds left on a request's repeat-reject pause, if armed."""
-    keys = antigravity_repeat_reject_keys(client_hash, body=body)
+    keys = antigravity_repeat_reject_keys(
+        client_hash, body=body, body_digest=body_digest
+    )
     if not keys:
         return None
     current = time.monotonic() if now is None else now
@@ -1619,7 +1673,10 @@ def antigravity_repeat_reject_remaining(
 
 
 def antigravity_repeat_reject_keys(
-    client_hash: str | None, *, body: bytes | None = None
+    client_hash: str | None,
+    *,
+    body: bytes | None = None,
+    body_digest: str | None = None,
 ) -> tuple[str, ...]:
     """Build repeat-reject tracking key while ignoring placeholder hashes.
 
@@ -1631,9 +1688,11 @@ def antigravity_repeat_reject_keys(
     """
     if client_hash and client_hash != "-":
         return (client_hash,)
-    if body:
-        body_digest = hashlib.sha256(body).hexdigest()[:12]
+    if body_digest:
         return (f"body:{body_digest}",)
+    if body:
+        computed = hashlib.sha256(body).hexdigest()[:12]
+        return (f"body:{computed}",)
     return ()
 
 
@@ -1643,9 +1702,12 @@ def record_antigravity_repeat_reject_arm(
     now: float | None = None,
     *,
     body: bytes | None = None,
+    body_digest: str | None = None,
 ) -> None:
     """Count a bare-429 arm for one client request and pause unchanged repeats."""
-    keys = antigravity_repeat_reject_keys(client_hash, body=body)
+    keys = antigravity_repeat_reject_keys(
+        client_hash, body=body, body_digest=body_digest
+    )
     if not keys:
         return
     now = time.monotonic() if now is None else now
@@ -5025,6 +5087,7 @@ class AdmissionProxy:
         chatgpt_state_path: Path | None = None,
         workbuddy_state_path: Path | None = None,
         workbuddy_intl_state_path: Path | None = None,
+        zcode_start_plan_state_path: Path | None = None,
         traffic_lock_path: Path | None = None,
     ) -> None:
         self.config = config
@@ -5057,6 +5120,7 @@ class AdmissionProxy:
                     "chatgpt-oauth": chatgpt_state_path,
                     "workbuddy-oauth": workbuddy_state_path,
                     "workbuddy-intl-oauth": workbuddy_intl_state_path,
+                    "zcode-start-plan": zcode_start_plan_state_path,
                 }.get(lane["name"]),
             )
             for lane in config["lanes"]
@@ -5720,10 +5784,15 @@ class Handler(BaseHTTPRequestHandler):
                 identity_counts,
                 self._trace_context,
             )
+        antigravity_body_digest = (
+            hashlib.sha256(body).hexdigest()[:12]
+            if lane_name == "antigravity-oauth" and body
+            else None
+        )
         if lane_name == "antigravity-oauth":
             repeat_remaining = antigravity_repeat_reject_remaining(
                 getattr(self, "_client_request_hash", None),
-                body=body,
+                body_digest=antigravity_body_digest,
             )
             if repeat_remaining is not None:
                 reason = "repeat_rejected_cooldown"
@@ -6561,7 +6630,7 @@ class Handler(BaseHTTPRequestHandler):
                     record_antigravity_repeat_reject_arm(
                         getattr(self, "_client_request_hash", None),
                         observed_model,
-                        body=body,
+                        body_digest=antigravity_body_digest,
                     )
             capacity_error = capacity_kind is not None
             successful = (
@@ -7133,6 +7202,7 @@ def main(
     parser.add_argument("--chatgpt-state-file", type=Path)
     parser.add_argument("--workbuddy-state-file", type=Path)
     parser.add_argument("--workbuddy-intl-state-file", type=Path)
+    parser.add_argument("--zcode-start-plan-state-file", type=Path)
     args = parser.parse_args()
     if args.config is None:
         parser.error("config is required")
@@ -7143,6 +7213,7 @@ def main(
         "chatgpt-oauth": args.chatgpt_state_file,
         "workbuddy-oauth": args.workbuddy_state_file,
         "workbuddy-intl-oauth": args.workbuddy_intl_state_file,
+        "zcode-start-plan": args.zcode_start_plan_state_file,
     }
     for lane, path in state_files.items():
         if lane in config["model_lanes"].values() and path is None:
@@ -7161,6 +7232,7 @@ def main(
         chatgpt_state_path=args.chatgpt_state_file,
         workbuddy_state_path=args.workbuddy_state_file,
         workbuddy_intl_state_path=args.workbuddy_intl_state_file,
+        zcode_start_plan_state_path=args.zcode_start_plan_state_file,
         traffic_lock_path=Path("/run/cpa-admission/requests.lock"),
     )
     # Bind the listening socket before the startup receipt so the bootstrap

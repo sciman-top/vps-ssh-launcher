@@ -1111,14 +1111,18 @@ Reddit / X / linux.do 等论坛未覆盖，下列"没有查到"都只限所查�
   （工作日 14:00–18:00 UTC+8）排队限速的表述。GLM-5.4 思考下限是 `low`，开启思考但缺省
   `reasoning_effort` 会落到 `max`（[latest-model](https://docs.bigmodel.cn/cn/coding-plan/latest-model)）。
   ZCode 按 `usage` 判断是否压缩，网关须原样回传，否则客户端会反复压缩。
-- **信号处置**：`405 / 3012` = 体验套餐被暂停或临时风控，停该车道、不重试、不突发
-  （admission 目前**不**识别 3012，不落锁；见下条挂账）；`exceed quota limit` /
+- **信号处置**：`405 / 3012` = 体验套餐被暂停或临时风控，admission 现在把结构化
+  3012（含 `zcode-proxy` / CPA 包装体内的内嵌 `3012`）或明确的
+  `misusing the Start Plan` / 暂停文案写成 `account_restricted` 锁，停该车道、
+  不重试、不突发；空的 405 或无账号证据的通用 `Method Not Allowed` 仍不落锁。
+  `exceed quota limit` /
   `code 1005` = 套餐额度用尽，已入冷却阶梯；`1308` / `1310` = 5 小时 / 周额度窗，
   退避到重置点，不在两条 GLM 车道间同时重试放大；边车 502 先按上一条手筋读原始体，
   再判断是额度、风控还是边车故障。
-- **挂账（未做，需单独评审）**：让 3012 落持久锁（`account_restricted`）需要把
-  `zcode-start-plan` 纳入 `DURABLE_OAUTH_LANES`，牵涉 strict backoff、风险状态文件、
-  doctor 的 `lane-hold` 门禁与 policy 校验四处；该车道 48h 仅 1 发流量，未在本切片扩张。
+- `zcode-start-plan` 已纳入 `DURABLE_OAUTH_LANES`，经 `cpa_admission_bootstrap.py`
+  绑定 `--zcode-start-plan-state-file /var/lib/cpa-admission/zcode-start-plan-risk.json`
+  落盘（0600 `nobody:nogroup`），并接入 `cpa-guardrail-doctor.sh` 的权限与 `lane-hold`
+  门禁及 `cpa-auto-update.sh` 重启前后状态比对，3012 封控锁跨重启持久生效。
 
 ## 禁止
 

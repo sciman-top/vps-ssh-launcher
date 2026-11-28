@@ -410,7 +410,7 @@ held = []
 for name in (
     'chatgpt-risk.json',
     'workbuddy-risk.json',
-    'workbuddy-intl-risk.json',
+    'zcode-start-plan-risk.json',
     'antigravity-risk.json',
 ):
     try:
@@ -687,7 +687,7 @@ if [[ "$MODE" == --confirm-pending ]]; then
       held_lanes=()
       for pending_lane in "${pending_lanes[@]}"; do
         case "$pending_lane" in
-          chatgpt-risk.json|workbuddy-risk.json|workbuddy-intl-risk.json|antigravity-risk.json) : ;;
+          chatgpt-risk.json|workbuddy-risk.json|zcode-start-plan-risk.json|antigravity-risk.json) : ;;
           *)
             log "UNVERIFIED: pending lane hold record is malformed version=$CUR"
             exit 10
@@ -1956,7 +1956,7 @@ if [[ -n "$NEW_HOLDS" ]]; then
   log "UNVERIFIED: lane hold appeared across the container restart lanes=${NEW_HOLDS//$'\n'/,} retained=$TARGET backup=$BK; recover per cpa-gateway.md manual release"
   NEW_HOLD_LANES=$(while IFS='=' read -r lane_file _; do
     case "$lane_file" in
-      chatgpt-risk.json|workbuddy-risk.json|workbuddy-intl-risk.json|antigravity-risk.json)
+      chatgpt-risk.json|workbuddy-risk.json|zcode-start-plan-risk.json|antigravity-risk.json)
         printf '%s\n' "$lane_file"
         ;;
       *)

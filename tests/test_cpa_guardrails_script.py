@@ -950,12 +950,14 @@ docker() {{
             [
                 "chatgpt-oauth",
                 "zhipu-coding-plan",
+                "zcode-start-plan",
                 "antigravity-oauth",
                 "workbuddy-oauth",
             ],
             {
                 "chatgpt-risk.json": state_body(None, 4102444800.0),
                 "workbuddy-risk.json": state_body(None, 0.0),
+                "zcode-start-plan-risk.json": state_body(None, 0.0),
                 "antigravity-risk.json": state_body(None, 0.0),
             },
         )
@@ -963,6 +965,7 @@ docker() {{
         self.assertIn("lane-hold=OK", healthy.stdout)
         self.assertIn("lane-hold-chatgpt-oauth=OPEN cooldown_mirror_s=", healthy.stdout)
         self.assertIn("lane-hold-workbuddy-oauth=OPEN", healthy.stdout)
+        self.assertIn("lane-hold-zcode-start-plan=OPEN", healthy.stdout)
 
         held = run_case(
             ["chatgpt-oauth", "workbuddy-oauth"],
@@ -979,6 +982,23 @@ docker() {{
         self.assertIn(
             "lane-hold=HELD workbuddy-oauth:retry_window_review_required",
             held.stdout,
+        )
+
+        zcode_held = run_case(
+            ["chatgpt-oauth", "zcode-start-plan"],
+            {
+                "chatgpt-risk.json": state_body(None, 0.0),
+                "zcode-start-plan-risk.json": state_body("account_restricted", 0.0),
+            },
+        )
+        self.assertEqual(zcode_held.returncode, 1, zcode_held.stdout)
+        self.assertIn(
+            "lane-hold-zcode-start-plan=HELD reason=account_restricted",
+            zcode_held.stdout,
+        )
+        self.assertIn(
+            "lane-hold=HELD zcode-start-plan:account_restricted",
+            zcode_held.stdout,
         )
 
         tombstone = run_case(
