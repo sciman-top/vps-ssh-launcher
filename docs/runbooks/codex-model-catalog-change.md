@@ -24,19 +24,16 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 `max_context_window`。`auto_compact_token_limit` 由客户端清单单独钉定，目录门禁要求
 阈值为正整数且不超过容量的 90%。以实际路由和客户端目录为准。
 
-### CPA 在役模型上下文契约（2026-11-19）
+### CPA 在役模型上下文契约（2026-11-28 实测复核）
 
 | 容量 | 自动压缩阈值 | 模型 |
 | ---: | ---: | --- |
 | 272000 | 200000 | `gpt-6-luna`, `gpt-6.2-astra` |
 | 500000 | 320000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | 320000 | `claude-opus-5-5-high`, `claude-sonnet-5-5-high`, `glm-5.3`, `glm-5.3-flash`, `deepseek-v4.1-flash` |
-| 1048576 | 320000 | `gemini-3.8-flash-high` |
+| 1000000 | 320000 | `glm-5.3-flash`, `glm-5.3-flash-start`, `glm-5.4`, `glm-5.3-flash-wb`, `glm-5.4-wb`, `deepseek-v4.1-flash` |
+| 1048576 | 320000 | `gemini-4-hydrogen-xhigh` |
 
-`gemini-4-argon-high` / `gemini-4-hydrogen-xhigh` / `gemini-4-neon-xhigh` 已随
-2026-11-24 第四例 TOS 退役摘出上表与桌面 override 清单（同日 flash-high 一度全退、
-经用户指令复名保留——车道唯一 flash 档，仅剩三个 flash-only 免费号承重）；下文对
-gemini 各档的观测数据保留作历史对照。
+（上表与 `config/codex-model-context-overrides.json` 及 `scripts/remote/cpa_provider_routes.json` 当前 11 款在役模型逐项对齐；此前 2026-11-19 契约中的 `claude-opus-5-5-high` / `claude-sonnet-5-5-high` / `glm-5.3` / `gemini-3.8-flash-high` / `gemini-4-argon-high` / `gemini-4-neon-xhigh` 等已按各自变更退役或保留作历史对照。）
 
 272K 路由维持 200000，其余 12 款采用 320000 作为待验证的真实任务试验阈值。目录容量保持原值。该分组是统一试验起点，不代表不同模型已经证实有相同的最优压缩点；每款模型需按完成质量、返工、耗时和可取得的配额数据独立评估。`gpt-6.2-astra` 继续显式钉定目录窗口，以消除默认生成时 `max_context_window=872000` 的漂移。`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
 `deepseek-v4.1-flash` 由 WorkBuddy 插件 lane 承载，按入口验证实际输入与配额。
@@ -74,6 +71,16 @@ chat wire，`max_tokens=1024`；64 会被思考预算吞掉返回空 content，
 带内缓存命中 91.7%–99.9%；320–500K 带与 >500K 带同期无上下文尺寸相关失败。
 无负向信号，320000 阈值维持。完成质量与返工两轴服务端不可测，仍以真实任务
 体验为准；异常时按「只改上下文钉值」流程把对应模型的压缩阈值改回 256000。
+
+2026-11-28 十日客户端 rollout 实测定案（`~/.codex/sessions/2026/11/{19..28}`
+共 57 个会话、38 次压缩事件，`context_window_exceeded` 与截断报错均为 0）：
+
+- **容量层维持不变**：11 款在役模型 `max-context-length`（272K / 500K / 1M / 1048576）均已对齐官方与 OAuth 实际承载上限。
+- **自动压缩阈值维持 200000 / 320000**：
+  - 200K 档（272K 模型，73.5%）：`gpt-6-luna` 6 次压缩（180–195K→34–42K，128–200K 缓存 93.9%）；`gpt-6.2-astra` 3 次压缩（162–204K→36–47K，超 200K 后缓存由 85.0% 跌至 53.5%），200K 避开默认 90% 压缩死锁。
+  - 320K 档（500K / 1M 模型）：256–320K 区间缓存命中 92.8%–99.3%，压缩后稳定回落至 31–49K；`gpt-6.1-sol` 在 11-28 漂移至 450K 期间进入 320–400K 后缓存由 93.6% 滑坡至 77.3%，佐证 320K 不宜全局上调。
+  - `deepseek-v4.1-flash` 出现单会话 8 连压缩（11-25，均在 301–312K→39–46K，256–320K 缓存 97.7%），保留为唯一有条件试探 380K–400K 的候选（需兼顾 BWG CPA 容器 512MB 内存上限，不作全局上调）。
+- **不启用全局百分比异步压缩覆盖**：核验官方 `config-schema.json`，Codex 无 `model_post_turn_compact_threshold_percent` 键，仅提供 `[features.async_compaction].model_async_compact_threshold_percent`（按完整 `context_window` 计百分比）。在 272K / 500K / 1M 混排目录下单一全局百分比会顾此失彼，`config.toml` 继续保持无全局上下文/压缩覆盖。
 
 ## 增加模型（desktop 要看到新名）
 
