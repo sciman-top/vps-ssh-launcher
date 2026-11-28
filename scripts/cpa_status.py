@@ -113,7 +113,7 @@ RISK_STATE_DIR = "/var/lib/cpa-admission"
 # bcrypt hash (one-way), so this file is the only machine-readable source;
 # it never leaves the host and must be chmod 600.
 MANAGEMENT_KEY_FILE = "/root/.cpa-management-key"
-# The five durable state files admission is launched with (bootstrap argv);
+# The durable state files admission is launched with (bootstrap argv);
 # the lane mapping is by filename prefix (antigravity-risk.json ->
 # antigravity-oauth lane). Keep the INTL WorkBuddy prefix before the broader
 # CN prefix because ``workbuddy-intl-oauth`` must read its own state bucket.
@@ -123,6 +123,7 @@ RISK_FILE_PREFIXES = (
     "chatgpt",
     "workbuddy-intl",
     "workbuddy",
+    "zcode-start-plan",
 )
 
 LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -685,11 +686,25 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
             lane_state = lanes.get(lane, {}).get("state", {}) if lane else {}
             verdict: str
             detail: str
+            candidates: list[tuple[str, str]] = []
             if kind == "direct":
+                if lane_state:
+                    admission_verdict = _admission_verdict(lane_state, alias)
+                    if admission_verdict[0] is not None:
+                        candidates.append((admission_verdict[0], admission_verdict[1]))
+                risk_verdict = _risk_verdict(risk_index, lane, now)
+                if risk_verdict[0] is not None:
+                    candidates.append((risk_verdict[0], risk_verdict[1]))
                 verdict, detail = (
                     VERDICT_UNOBSERVED,
                     ("direct API-key upstream; use cpa-health.py for end-to-end proof"),
                 )
+                if candidates:
+                    for ranked in _VERDICT_PRECEDENCE:
+                        hit = next((c for c in candidates if c[0] == ranked), None)
+                        if hit:
+                            verdict, detail = hit
+                            break
             else:
                 credentials = _match_route_credentials(
                     kind,
@@ -699,7 +714,6 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                     settings_index,
                     [source_model for _, source_model in route_aliases],
                 )
-                candidates: list[tuple[str, str]] = []
                 admission_verdict = (
                     _admission_verdict(lane_state, alias) if lane_state else (None, "")
                 )
@@ -910,7 +924,9 @@ def render(document: dict[str, Any]) -> list[str]:
         metrics_text = _metrics_text(row.get("metrics"))
         if not metrics_text:
             metrics_text = (
-                " -" if row.get("kind") == "direct" else " (no traffic in 1h window)"
+                " -"
+                if (row.get("kind") == "direct" and not row.get("lane"))
+                else " (no traffic in 1h window)"
             )
         lines.append(
             f"  {str(row.get('model')).ljust(width_model)}"
@@ -1096,9 +1112,13 @@ def render_html(
         css = _VERDICT_CSS.get(verdict, "info")
         metrics_text = _metrics_text(row.get("metrics"))
         if not metrics_text:
-            # Direct upstreams have no admission telemetry at all; routed
-            # models with no series simply carried no traffic in the window.
-            metrics_text = "-" if row.get("kind") == "direct" else "近1h无流量"
+            # Un-laned direct upstreams have no admission telemetry at all;
+            # lane-gated models with no series simply carried no traffic in the window.
+            metrics_text = (
+                "-"
+                if (row.get("kind") == "direct" and not row.get("lane"))
+                else "近1h无流量"
+            )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(row.get('model')))}</code></td>"

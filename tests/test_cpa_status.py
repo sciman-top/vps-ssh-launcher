@@ -433,6 +433,51 @@ class VerdictTests(unittest.TestCase):
         row = model_row(cpa_status.synthesize(doc, now=1000.0), "gpt-6-astra")
         self.assertEqual(row["verdict"], "UNOBSERVED")
 
+    def test_lane_gated_provider_surfaces_admission_hold_and_risk_anchor(self) -> None:
+        doc = surfaces(
+            healthz={
+                "lanes": {
+                    "zcode-start-plan": healthz_lane(
+                        models=["glm-5.3-flash-start"],
+                        hold_reason="account_restricted",
+                    )
+                }
+            },
+            manifest={
+                "version": 1,
+                "oauth_routes": [],
+                "plugin_routes": [],
+                "providers": [
+                    {
+                        "slot": 6,
+                        "name": "zcode-start-plan",
+                        "admission_lane": "zcode-start-plan",
+                        "models": [{"alias": "glm-5.3-flash-start"}],
+                    }
+                ],
+            },
+        )
+        row = model_row(cpa_status.synthesize(doc, now=1000.0), "glm-5.3-flash-start")
+        self.assertEqual(row["verdict"], "HOLD")
+        self.assertIn("account_restricted", row["detail"])
+
+        risk_only_doc = surfaces(
+            healthz={"lanes": {}},
+            manifest=doc["manifest"],
+            risk={
+                "zcode-start-plan": {
+                    "version": 1,
+                    "not_before": 5000.0,
+                    "hold_reason": "account_restricted",
+                }
+            },
+        )
+        risk_row = model_row(
+            cpa_status.synthesize(risk_only_doc, now=1000.0), "glm-5.3-flash-start"
+        )
+        self.assertEqual(risk_row["verdict"], "PERSISTED_COOLDOWN")
+        self.assertIn("account_restricted", risk_row["detail"])
+
     def test_plugin_route_matches_credentials_by_provider(self) -> None:
         doc = surfaces(
             healthz={

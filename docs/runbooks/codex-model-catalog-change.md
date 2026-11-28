@@ -30,12 +30,12 @@ CPA 的 `max-context-length` 对齐 Codex 的 `context_window` 与
 | ---: | ---: | --- |
 | 272000 | 200000 | `gpt-6-luna`, `gpt-6.2-astra` |
 | 500000 | 320000 | `gpt-6.1-sol`, `gpt-6.2-sol` |
-| 1000000 | 320000 | `glm-5.3-flash`, `glm-5.3-flash-start`, `glm-5.4`, `glm-5.3-flash-wb`, `glm-5.4-wb`, `deepseek-v4.1-flash` |
+| 1000000 | 320000 | `glm-5.3-flash`, `glm-5.3-flash-start`, `glm-5.4`, `glm-5.3-flash-wb`, `glm-5.4-wb`, `deepseek-v4.1-flash`, `hy4flash` |
 | 1048576 | 320000 | `gemini-4-hydrogen-xhigh` |
 
-（上表与 `config/codex-model-context-overrides.json` 及 `scripts/remote/cpa_provider_routes.json` 当前 11 款在役模型逐项对齐；此前 2026-11-19 契约中的 `claude-opus-5-5-high` / `claude-sonnet-5-5-high` / `glm-5.3` / `gemini-3.8-flash-high` / `gemini-4-argon-high` / `gemini-4-neon-xhigh` 等已按各自变更退役或保留作历史对照。）
+（上表与 `config/codex-model-context-overrides.json` 及 `scripts/remote/cpa_provider_routes.json` 当前 12 款在役模型逐项对齐；此前 2026-11-19 契约中的 `claude-opus-5-5-high` / `claude-sonnet-5-5-high` / `glm-5.3` / `gemini-3.8-flash-high` / `gemini-4-argon-high` / `gemini-4-neon-xhigh` 及 2026-11-28 促销过渡名 `hy4flash-free` 等已按各自变更退役或保留作历史对照。）
 
-272K 路由维持 200000，其余 12 款采用 320000 作为待验证的真实任务试验阈值。目录容量保持原值。该分组是统一试验起点，不代表不同模型已经证实有相同的最优压缩点；每款模型需按完成质量、返工、耗时和可取得的配额数据独立评估。`gpt-6.2-astra` 继续显式钉定目录窗口，以消除默认生成时 `max_context_window=872000` 的漂移。`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
+272K 路由维持 200000，其余 10 款采用 320000 作为待验证的真实任务试验阈值。目录容量保持原值。该分组是统一试验起点，不代表不同模型已经证实有相同的最优压缩点；每款模型需按完成质量、返工、耗时和可取得的配额数据独立评估。`gpt-6.2-astra` 继续显式钉定目录窗口，以消除默认生成时 `max_context_window=872000` 的漂移。`cpa_catalog_check.py` 双向强制所有带 `max-context-length` 的在役模型均出现在桌面 override 清单中。
 `deepseek-v4.1-flash` 由 WorkBuddy 插件 lane 承载，按入口验证实际输入与配额。
 其 oc 兜底腿与 GLM oc 别名（`glm-5.3-oc` / `glm-5.3-flash-oc`，2026-11-20 上午
 增补）已随同日用户退订 OpenCode Go 整槽退役，别名留 `oauth_exclusions` 墓碑，
@@ -75,7 +75,7 @@ chat wire，`max_tokens=1024`；64 会被思考预算吞掉返回空 content，
 2026-11-28 十日客户端 rollout 实测定案（`~/.codex/sessions/2026/11/{19..28}`
 共 57 个会话、38 次压缩事件，`context_window_exceeded` 与截断报错均为 0）：
 
-- **容量层维持不变**：11 款在役模型 `max-context-length`（272K / 500K / 1M / 1048576）均已对齐官方与 OAuth 实际承载上限。
+- **容量层维持不变**：12 款在役模型 `max-context-length`（272K / 500K / 1M / 1048576，含同日开放并改挂付费档的 `hy4flash`）均已对齐官方与 OAuth 实际承载上限。
 - **自动压缩阈值维持 200000 / 320000**：
   - 200K 档（272K 模型，73.5%）：`gpt-6-luna` 6 次压缩（180–195K→34–42K，128–200K 缓存 93.9%）；`gpt-6.2-astra` 3 次压缩（162–204K→36–47K，超 200K 后缓存由 85.0% 跌至 53.5%），200K 避开默认 90% 压缩死锁。
   - 320K 档（500K / 1M 模型）：256–320K 区间缓存命中 92.8%–99.3%，压缩后稳定回落至 31–49K；`gpt-6.1-sol` 在 11-28 漂移至 450K 期间进入 320–400K 后缓存由 93.6% 滑坡至 77.3%，佐证 320K 不宜全局上调。

@@ -56,9 +56,9 @@ _PROVIDER_MODEL_ALIASES = (
     (re.compile(r"^(gemini-4-carbon)$"), r"\1-high"),
     (re.compile(r"^(gemini-4-argon)(?:-trial)?$"), r"\1-high"),
     (re.compile(r"^(gemini-4-neon)$"), r"\1-xhigh"),
-    # 2026-11-17: the luode cutover put hy4flash-free upstream (echoed bare);
-    # the hy4-free line stays for journal rows from the retired hy4free
-    # upstream so historical windows keep a stable label.
+    # 2026-11-28: WorkBuddy CN serves paid hy4flash (upstream may echo
+    # hy4-flash); historical hy4-flash-free / hy4-free labels remain stable.
+    (re.compile(r"^hy4-flash$"), "hy4flash"),
     (re.compile(r"^hy4-flash-free$"), "hy4flash-free"),
     (re.compile(r"^hy4-free$"), "hy4free"),
 )
