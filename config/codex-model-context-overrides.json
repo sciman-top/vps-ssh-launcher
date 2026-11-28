@@ -68,7 +68,7 @@
       "auto_compact_token_limit": 320000
     },
     {
-      "slug": "hy4flash-free",
+      "slug": "hy4flash",
       "context_window": 1000000,
       "max_context_window": 1000000,
       "auto_compact_token_limit": 320000

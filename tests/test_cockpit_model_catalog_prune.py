@@ -191,8 +191,9 @@ def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
         "claude-opus-5-5-high",
         "claude-sonnet-5-5-high",
         "hy4free",
+        "hy4flash-free",
     } <= retired
-    assert "hy4flash-free" not in retired
+    assert "hy4flash" not in retired
     assert "glm-5.3" not in retired
     assert "glm-5.3-flash" not in retired
 

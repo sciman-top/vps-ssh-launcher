@@ -8,11 +8,12 @@ latch, persistence, and the per-model refusal are exercised in the order
 production sees them.
 
 Regression target: one drained credential used to gate every model, including
-zero-cost ones, and reported the cause as a missing deadline. Production's
-zero-cost model is hy4flash-free on the CN lane (re-opened 2026-11-28), but
-the zero-cost scenario still rides a synthetic fixture name injected into a
-synthetic lane config here so the suite stays independent of production
-catalog state; the bypass logic itself is generic lane configuration.
+zero-cost ones, and reported the cause as a missing deadline. Production
+currently carries no zero-cost model again (the 2026-11-28 paid swap moved
+the CN lane's hy4 flash tier from the promo pin hy4flash-free to the paid
+hy4flash), so the zero-cost scenario rides a synthetic fixture name injected
+into a synthetic lane config here; the bypass logic itself is generic lane
+configuration.
 
 ``traffic_lock_path`` is deliberately left unset: that guard needs ``fcntl``,
 which does not exist on the Windows development host. With no lock path the
@@ -42,9 +43,8 @@ AdmissionProxy = cast(Any, MODULE["AdmissionProxy"])
 AdmissionServer = cast(Any, MODULE["Server"])
 
 # The zero-cost bypass scenario rides this synthetic fixture name injected
-# into a synthetic lane by _run(); production's real zero-cost model
-# (hy4flash-free, CN lane since 2026-11-28) is exercised by the single-shot
-# live acceptance instead.
+# into a synthetic lane by _run(); production carries no zero-cost model
+# since the 2026-11-28 paid hy4flash swap.
 ZERO_COST_FIXTURE = "wb-zero-cost-fixture"
 
 
@@ -203,7 +203,8 @@ def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
     allowance must not gate it.
 
     The scenario rides the synthetic ZERO_COST_FIXTURE name (the synthetic
-    name keeps the suite independent of production catalog state).
+    name keeps the suite independent of production catalog state, which has
+    carried no zero-cost model since the 2026-11-28 paid hy4flash swap).
 
     The fake upstream refuses everything, so the free request also ends in an
     upstream error -- what matters is that it was *admitted* (it reached the

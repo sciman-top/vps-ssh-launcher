@@ -98,11 +98,12 @@ def test_neighbouring_codes_keep_their_existing_meaning(
     assert hold != "account_credits_exhausted"
 
 
-def test_zero_cost_models_carry_hy4flash_free_on_cn(
+def test_zero_cost_models_are_absent_after_the_paid_hy4flash_swap(
     admission: ModuleType,
 ) -> None:
-    """hy4flash-free re-opened 2026-11-28 (user directive): the CN lane
-    carries it as the zero-cost model — billing gates every remaining model.
+    """2026-11-28 paid swap (user directive): the CN lane's hy4 flash tier is
+    the PAID hy4flash (x0.03), so billing gates every model on the lane again
+    — the one-day zero_cost declaration is gone.
 
     The list is lane configuration, not a code constant: which models are free
     is provider catalog data that moves without a code change. The zero-cost
@@ -114,8 +115,7 @@ def test_zero_cost_models_carry_hy4flash_free_on_cn(
     )
     assert all(item["name"] != "workbuddy-intl-oauth" for item in loaded["lanes"])
     lane = next(item for item in loaded["lanes"] if item["name"] == "workbuddy-oauth")
-    # load_config normalizes the lane list into a frozenset; assert by set.
-    assert lane.get("zero_cost_models") == frozenset({"hy4flash-free"})
+    assert not lane.get("zero_cost_models")
 
 
 def test_zero_cost_models_default_to_empty_when_absent(admission: ModuleType) -> None:

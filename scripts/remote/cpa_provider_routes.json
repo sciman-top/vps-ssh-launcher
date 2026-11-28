@@ -22,7 +22,7 @@
       "deepseek-v4.1-flash",
       "glm-5.3-flash-wb",
       "glm-5.4-wb",
-      "hy4flash-free"
+      "hy4flash"
     ]
   },
   "providers": [
@@ -167,7 +167,7 @@
         "max-context-length": 1000000
       },
       {
-        "name": "hy4flash-free",
+        "name": "hy4flash",
         "max-context-length": 1000000
       }
     ]
@@ -184,14 +184,14 @@
       }
     ]
   },
-  "plugin_exclusions_note": "A plugin channel registers whatever its upstream catalog serves at load time, so its pin holds only as an exclusion list. plugin_exclusions carries the names the deployed oauth.excluded-models lists had on 2026-11-25, so -Apply reproduces them. A model the upstream adds later is not listed: it surfaces as MODEL_IDS_UNKNOWN in the doctor client-model-catalog contract, and is then either recorded here or declared as a pin. glm-5.3-flash and glm-5.4 are opened as CN pins aliased to -wb by user directive on 2026-11-26, so they are not exclusions. hy4flash-free re-opened as a bare CN pin by user directive on 2026-11-28 (x0.00 promo free tier, trial window 2026-11-16..11-30), so it left this list; the plugin-channel projection only appends, so the stale host-side entry is dropped by the reviewed config surgery of the same transaction, not by -Apply. Entries are appended, never removed, so a retirement recorded on the host survives a projection.",
+  "plugin_exclusions_note": "A plugin channel registers whatever its upstream catalog serves at load time, so its pin holds only as an exclusion list. plugin_exclusions carries the names the deployed oauth.excluded-models lists had on 2026-11-25, so -Apply reproduces them. A model the upstream adds later is not listed: it surfaces as MODEL_IDS_UNKNOWN in the doctor client-model-catalog contract, and is then either recorded here or declared as a pin. glm-5.3-flash and glm-5.4 are opened as CN pins aliased to -wb by user directive on 2026-11-26, so they are not exclusions. 2026-11-28 (user directive, same-day follow-up): the pin moved from hy4flash-free (x0.00 promo, trial window ends 2026-11-30; the user chose to stop two days early) to its paid sibling hy4flash (x0.03, identical \"Hy4 flash\" display name and published limits per the CN product config), so hy4flash left this list and hy4flash-free returned to it as a tombstone — -Apply re-appends the tombstone on its own, the stale host-side hy4flash entry is dropped by the reviewed config surgery of the same transaction. Entries are appended, never removed, so a retirement recorded on the host survives a projection.",
   "plugin_exclusions": {
     "workbuddy-provider": [
       "auto",
       "deepseek-v4-pro",
       "glm-5.2",
       "glm-5.3",
-      "hy4flash",
+      "hy4flash-free",
       "hy4std",
       "kimi-k2.8-preview",
       "kimi-k3-1",
@@ -343,9 +343,9 @@
         "deepseek-v4.1-flash",
         "glm-5.3-flash",
         "glm-5.4",
-        "hy4flash-free"
+        "hy4flash"
       ],
-      "note": "2026-11-17 luode0320 cutover: the CN plugin registers as workbuddy-provider and its dynamic catalog is narrowed back to its declared pins via oauth-excluded-models. 2026-11-26 (user directive): glm-5.3-flash and glm-5.4 are opened on CN with non-fork -wb client aliases (glm-5.3-flash-wb, glm-5.4-wb) so bare glm-5.3-flash/glm-5.4 route exclusively to BigModel Coding Plan (zhipu-plan). 2026-11-28 (user directive): hy4flash-free (the x0.00 promo free tier retired INTL-side on 2026-11-17) re-opens on CN as a bare pin — no alias bridge needed since no other lane claims the name; the CN plugin's active pings were already serving it 200 at open time.",
+      "note": "2026-11-17 luode0320 cutover: the CN plugin registers as workbuddy-provider and its dynamic catalog is narrowed back to its declared pins via oauth-excluded-models. 2026-11-26 (user directive): glm-5.3-flash and glm-5.4 are opened on CN with non-fork -wb client aliases (glm-5.3-flash-wb, glm-5.4-wb) so bare glm-5.3-flash/glm-5.4 route exclusively to BigModel Coding Plan (zhipu-plan). 2026-11-28 (user directive): the hy4 flash tier opened as the x0.00 promo pin hy4flash-free and, the same day, moved to its paid sibling hy4flash (x0.03) ahead of the promo's 2026-11-30 expiry — the user chose to stop two days early; both ids share the \"Hy4 flash\" display name and published limits, and the free id returns to the exclusion list as a tombstone.",
       "shared_consumption": true,
       "admission_lane": "workbuddy-oauth"
     }

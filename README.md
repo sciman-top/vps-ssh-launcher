@@ -679,7 +679,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 | **`zhipu-coding-plan`** | `glm-5.3-flash`, `glm-5.4` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱付费 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
 | **`zcode-start-plan`** | `glm-5.3-flash-start` | `max_inflight=1`<br>`max_pending=4` (120s) | 对接宿主 `zcode-proxy` 桥接边车（`172.17.0.1:18082`），物理隔离夜间/周末免费 Start Plan 与付费 Coding Plan |
 | **`antigravity-oauth`** | `gemini-4-hydrogen-xhigh` | `max_inflight=2`<br>`max_pending=4` (120s) | 严格冷却机制：对齐 `RetryInfo.retryDelay` 最长窗口（`mirror_probe=600s`）；叠加单凭据日上限 150、TOS 2h 池级急停与重复拒绝局部暂停 |
-| **`workbuddy-oauth`**（CN） | `deepseek-v4.1-flash`, `glm-5.3-flash-wb`, `glm-5.4-wb`, `hy4flash-free` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流（`RPM=12`），杜绝并发突发；`hy4flash-free` 为 CN 零成本档（2026-11-28 用户指令重开，`zero_cost_models` 声明）；INTL `workbuddy-ai-provider` 已卸载且凭据保持 `disabled` 暗置，`claude-oauth` 保持退役封存 |
+| **`workbuddy-oauth`**（CN） | `deepseek-v4.1-flash`, `glm-5.3-flash-wb`, `glm-5.4-wb`, `hy4flash` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流（`RPM=12`），杜绝并发突发；hy4 flash 档为 **付费** `hy4flash`（x0.03；2026-11-28 用户指令由促销 pin `hy4flash-free` 同日改挂，早于 11-30 促销到期）；INTL `workbuddy-ai-provider` 已卸载且凭据保持 `disabled` 暗置，`claude-oauth` 保持退役封存 |
 
 > [!NOTE]
 > 泳道与模型清单的真源是 `scripts/remote/cpa-admission.json` 的 `lanes` 段；本表为判读速查，变更泳道时随 JSON 一并更新。

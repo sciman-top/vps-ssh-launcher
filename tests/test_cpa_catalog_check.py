@@ -37,7 +37,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     # user directive), and hy4flash-free re-opened bare (2026-11-28).
     assert cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-provider", "cn"
-    ) == ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4", "hy4flash-free"]
+    ) == ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4", "hy4flash"]
     assert (
         cpa_catalog_check.plugin_lane_models(manifest, "workbuddy-ai-provider", "intl")
         == []
@@ -53,7 +53,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
-        "hy4flash-free",
+        "hy4flash",
     ]
     assert "workbuddy-intl-oauth" not in derived
     # Synthetic multi-realm isolation check (fork alias unfolding).

@@ -3032,7 +3032,7 @@ expected = {
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
-        "hy4flash-free",
+        "hy4flash",
     ],
 }
 expected_max_inflight = {

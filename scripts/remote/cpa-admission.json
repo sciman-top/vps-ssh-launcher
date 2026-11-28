@@ -153,10 +153,7 @@
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
-        "hy4flash-free"
-      ],
-      "zero_cost_models": [
-        "hy4flash-free"
+        "hy4flash"
       ],
       "max_inflight": 1,
       "max_pending": 4,

@@ -8,8 +8,10 @@ realm's dynamic catalog must keep narrowed to via oauth-excluded-models,
 and (3) deepseek-v4.1-flash-sg stays declared but closed dark — the INTL
 plugin is disabled in config.yaml, so re-enabling is one enabled-flag flip.
 The CN pool carries the paid primary, the -wb aliased GLM pair (opened
-2026-11-26), and hy4flash-free (re-opened as a bare pin 2026-11-28, user
-directive; the x0.00 promo free tier).
+2026-11-26), and the hy4 flash tier as the PAID pin hy4flash (x0.03;
+2026-11-28 user directive — the day opened the x0.00 promo pin
+hy4flash-free and moved it to the paid sibling the same day, ahead of the
+promo's 2026-11-30 expiry).
 """
 
 from __future__ import annotations
@@ -46,13 +48,14 @@ def test_manifest_cn_plugin_pins_are_the_declared_set() -> None:
     assert len(cn) == 1
     assert cn[0]["provider"] == "workbuddy-provider"
     # The paid primary, glm-5.4 opened as a second pin on the same lane and
-    # credential pool (2026-11-26, user directive), and hy4flash-free
-    # re-opened as a bare pin (2026-11-28, user directive).
+    # credential pool (2026-11-26, user directive), and the PAID hy4 flash
+    # tier (2026-11-28, user directive; the promo pin hy4flash-free lasted
+    # most of one day before the user moved it to the paid sibling).
     assert cn[0]["models"] == [
         "deepseek-v4.1-flash",
         "glm-5.3-flash",
         "glm-5.4",
-        "hy4flash-free",
+        "hy4flash",
     ]
     assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
@@ -71,10 +74,11 @@ def test_fork_bridge_drops_intl_channel_and_keeps_cn_aliases() -> None:
     assert set(cn_aliases) == {"glm-5.3-flash-wb", "glm-5.4-wb"}
 
 
-def test_hy4free_never_returns_and_intl_stays_retired() -> None:
+def test_hy4free_and_promo_pin_never_return_and_intl_stays_retired() -> None:
     """hy4free's upstream id died with the 2026-11-17 rename and must never
-    resurface; the INTL lane stays retired; hy4flash-free serves on CN since
-    2026-11-28 (user directive)."""
+    resurface; the INTL lane stays retired; the hy4 flash tier serves on CN
+    only as the PAID hy4flash since 2026-11-28 (user directive) — the promo
+    id hy4flash-free is back to a tombstone and must not resurface either."""
 
     routes = _manifest()
     assert "hy4free" not in routes["pooled_aliases"]
@@ -85,15 +89,18 @@ def test_hy4free_never_returns_and_intl_stays_retired() -> None:
         if route["realm"] == "cn"
         for model in route["models"]
     ]
-    assert "hy4flash-free" in cn_models
+    assert "hy4flash" in cn_models
     assert "hy4free" not in cn_models
-    assert "hy4free" not in json.dumps(routes["plugin_routes"])
+    assert "hy4flash-free" not in cn_models
+    tombstones = _manifest()["plugin_exclusions"]["workbuddy-provider"]
+    assert "hy4flash-free" in tombstones
+    assert "hy4flash" not in tombstones
     models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_MODELS
     admission_models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_ADMISSION_MODELS
     assert "intl" not in models
     assert "intl" not in admission_models
-    assert models["cn"][-1] == "hy4flash-free"
-    assert admission_models["cn"][-1] == "hy4flash-free"
+    assert models["cn"][-1] == "hy4flash"
+    assert admission_models["cn"][-1] == "hy4flash"
 
 
 def test_legacy_workbuddy_provider_route_is_gone() -> None:
