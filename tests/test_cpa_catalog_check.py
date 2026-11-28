@@ -33,11 +33,11 @@ def test_derived_lanes_match_the_deployable_admission_config() -> None:
 
 def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
     manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
-    # The CN lane carries the paid primary and, since 2026-11-26 (user
-    # directive), glm-5.4 as a second pin.
+    # The CN lane carries the paid primary, glm-5.4 as a second pin (2026-11-26,
+    # user directive), and hy4flash-free re-opened bare (2026-11-28).
     assert cpa_catalog_check.plugin_lane_models(
         manifest, "workbuddy-provider", "cn"
-    ) == ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4"]
+    ) == ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4", "hy4flash-free"]
     assert (
         cpa_catalog_check.plugin_lane_models(manifest, "workbuddy-ai-provider", "intl")
         == []
@@ -53,6 +53,7 @@ def test_plugin_lanes_use_their_own_realm_not_a_union() -> None:
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
+        "hy4flash-free",
     ]
     assert "workbuddy-intl-oauth" not in derived
     # Synthetic multi-realm isolation check (fork alias unfolding).
@@ -236,7 +237,7 @@ def test_context_overrides_must_match_live_manifest_windows(
                 "schema_version": 1,
                 "models": [
                     {
-                        "slug": "hy4flash-free",
+                        "slug": "hy4free",
                         "context_window": 1000000,
                         "max_context_window": 1000000,
                         "auto_compact_token_limit": 900000,
@@ -254,7 +255,7 @@ def test_context_overrides_must_match_live_manifest_windows(
     )
     monkeypatch.setattr(cpa_catalog_check, "CONTEXT_OVERRIDES", overrides)
     errors = cpa_catalog_check.check()
-    assert any("hy4flash-free" in error for error in errors), errors
+    assert any("hy4free" in error for error in errors), errors
     assert any("gpt-6.1-sol" in error and "500000" in error for error in errors), errors
 
     manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))

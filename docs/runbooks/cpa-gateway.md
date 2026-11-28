@@ -546,7 +546,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|---|---|
 | ChatGPT Plus OAuth | [OpenAI ToS](https://openai.com/policies/terms-of-use/) 禁止共享账号凭据、绕过 rate limits/保护措施 | 个人、单用户、低频；官方桌面/CLI 形态 | 多人共享、转售、pool、多账号轮换、对外当 API 卖 | `chatgpt-oauth` lane、inflight 2、`request-retry=0`、session affinity | 无 per-account RPM/TPM 预算；OAuth 条款风险不可技术消除 |
 | Antigravity / Gemini | [Antigravity FAQ](https://antigravity.google/docs/faq) 明确第三方软件访问违反 ToS、可暂停/终止；建议 AI Studio/Enterprise API key；消费级不支持自动化账号切换 | 个人、单账号、低频；迁移官方 API key | 第三方 agent 自动化、账号轮换、headless 批量、用 OAuth 替代 API | `antigravity-oauth` lane、inflight 2、完整 Retry-After、persistent hold | OAuth 本身是条款风险；`sensitive-words` 只是兼容补丁，不是防封控制 |
-| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：2026-11-08 清点为 7 CN + 7 INTL；这是历史快照，不代表本次重新清点。`scheduler_mode=credits` 粘性选择+故障回退、每凭据 inflight 1。CPA 将 CN 裸名 `deepseek-v4.1-flash` 与 INTL fork 别名 `deepseek-v4.1-flash-intl` 分别送入两个 admission lane 和状态文件；`deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶，`hy4free` 为 INTL 零成本模型。该 admission 分流不约束插件实际选择的 auth realm，也不保证 per-auth 隔离。OpenCode 兜底槽已于 2026-11-20 整槽退役（用户退订），deepseek 车道回 wb 单腿。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
+| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：2026-11-08 清点为 7 CN + 7 INTL；这是历史快照，不代表本次重新清点。`scheduler_mode=credits` 粘性选择+故障回退、每凭据 inflight 1。CPA 将 CN 裸名 `deepseek-v4.1-flash` 与 INTL fork 别名 `deepseek-v4.1-flash-intl` 分别送入两个 admission lane 和状态文件；`deepseek-v4.1-flash-sg` 保留为 INTL 第二模型桶，`hy4free` 为 INTL 零成本模型。该 admission 分流不约束插件实际选择的 auth realm，也不保证 per-auth 隔离。OpenCode 兜底槽已于 2026-11-20 整槽退役（用户退订），deepseek 车道回 wb 单腿。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限。2026-11-28 起 CN lane 目录为四名（`deepseek-v4.1-flash`、`glm-5.3-flash-wb`、`glm-5.4-wb`、零成本 `hy4flash-free`），INTL 仍关闭暗置 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
 | API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
 
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
@@ -658,6 +658,8 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
   **重启用 = 翻回 `enabled: true`**（config reload 即回归）。同日
   `hy4flash-free`（x0.00 免费档，曾以过渡别名 `hy4free` 服役）**退役删除**：
   pin 摘除 + 排除表墓碑，doctor 目录门 fail-closed 拦截复现。
+  2026-11-28（用户指令）该名在 **CN** lane 以裸 pin 重新开放（免费促销档，
+  上游试用窗 2026-11-16..11-30）；INTL 侧退役与关闭暗置不变。
   `deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
   随账号停用退役（保留惰性墓碑）。
@@ -1797,6 +1799,9 @@ admission 启动时会把残留的 stale 标记自动清为 null 并开一个 90
 不会因 admission lane 状态而直接冷却 CN lane。INTL lane 的 `x0.00` 零成本
 例外已随 `hy4flash-free` 退役（2026-11-17）而摘除——该 lane 现处关闭暗置态，
 其声明的 `deepseek-v4.1-flash-sg`/`-intl` 均经上游排除表关闭，不产生流量。
+CN lane 自 2026-11-28 起重新声明 `hy4flash-free` 为零成本模型
+（`zero_cost_models`）：credits 型 hold/冷却不 gate 该免费档，
+账号型信号（认证/限制类）仍全 lane 生效。
 lane 隔离仍只证明 admission 状态分开，不证明 WorkBuddy
 scheduler 选择了同名 realm 的凭据，也不代表账号额度已重置。旧版本遗留的
 `account_credits_exhausted` 状态仍可读；不要手动清理或缩短 `not_before`。

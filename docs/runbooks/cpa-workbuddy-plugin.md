@@ -197,8 +197,10 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
 1. 管理页把 `login_region` 切到 `cn` **之后**再发起 CN 登录——这是 token 血统正确性要求，不只操作卫生：上游 issue #36 实证 intl 态下登录的凭据带 IDE 平台血统、走错头族（0.9.58 起登录平台持久化到 auth 文件已修，但血统在登录时铸定，事后不可迁移）。完成后立即把 `login_region` 翻回 `intl`。该值粘性且只影响新登录（存量凭据的请求路由恒按各自 auth 文件的域分派），残留 `cn` 会让后续新登录意外进 CN realm。
 2. 插件候选目录收窄（luode 割接后为 oauth-excluded-models 双通道；此前的
-   `models_cn`/`models_intl` pin 已随 mmqz 单插件退役）：CN 收窄到
-   `deepseek-v4.1-flash`；INTL 声明 pin 为 `deepseek-v4.1-flash-sg`。
+   `models_cn`/`models_intl` pin 已随 mmqz 单插件退役）：CN 收窄到声明
+   pin 集（2026-11-28 起：`deepseek-v4.1-flash`、`glm-5.3-flash`、
+   `glm-5.4`、`hy4flash-free`）；INTL 声明 pin 为 `deepseek-v4.1-flash-sg`
+   （关闭暗置）。
    它们用于收窄候选目录，不能把相同的
    `deepseek-v4.1-flash` 变成 realm-aware 账号选择器。
 
@@ -231,7 +233,9 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
    `plugins.configs.workbuddy-ai-provider.enabled: true`**（config reload 即
    回归）。`hy4flash-free`（x0.00 免费档，曾以过渡别名 `hy4free` 服役）
    则为**退役删除**：pin/settings/zero_cost/目录全撤 + 排除表墓碑，doctor
-   目录门 fail-closed 拦截复现。`6008` 按请求的 admission lane
+   目录门 fail-closed 拦截复现。2026-11-28（用户指令）该名在 CN lane 以
+   裸 pin 重新开放（`zero_cost_models` 随 lane 声明）；INTL 侧退役不变。
+   `6008` 按请求的 admission lane
    记录冷却，不新建持久账号 hold。`sg` 只在模型级信号（例如 6004）下独立冷却；
    它与 INTL alias 共用 INTL lane。CN 裸名免受 INTL lane 冷却，是 lane 拆分的作用，
    不代表按凭据 realm 绑定调度。
@@ -370,7 +374,7 @@ doctor 拦截缺失或非零值。投影后以 doctor 和插件重载回执确�
 | --- | --- |
 | `403 request illegal`、`11140`、官方客户端也提示账号受限 | 暂停当前调用任务并关闭调用端重试；保持凭据，不换账号、IP、设备或 token，不刷新 OAuth、不清冷却、不再用探针确认。保存时间、客户端/插件版本、模型、request ID 与脱敏错误，按官方支持渠道反馈。没有官方恢复信号前不要自动续打。 |
 | `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止调用端自动重试并保留 `Retry-After` / reset 信息；单请求只用一份凭据，不调用 cooldown-clear，不把同一请求换号续打。CN/INTL admission lane 分离不约束 WorkBuddy scheduler 的 auth 候选，不能把 lane 名当作“不得跨 realm 续打”的凭据保证。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。2026-10-21 晚实测（CPA v8.0.35）：6004 生产 wrapper 形状=HTTP 500+`server_error`/`internal_server_error` 信封（message 尾段内嵌转义的上游 JSON，raw 正文自带 reset 时间戳），admission 归冷却阶梯自恢复、无 hold，与官方频率限制自恢复语义一致，勿当缺陷或回归。 |
-| `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。INTL lane 曾有的零成本例外（`hy4free`/`hy4flash-free`）已随 2026-11-17 该模型退役而摘除，lane 现关闭暗置不产生流量。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
+| `6008 Credits exhausted` | 关闭调用端自动重试，保留上游错误和 `Retry-After`。admission 将它作为可恢复时间窗，冷却请求对应的 CN 或 INTL lane；它不会再新增 `account_credits_exhausted` 持久 hold。INTL lane 曾有的零成本例外（`hy4free`/`hy4flash-free`）已随 2026-11-17 该模型退役而摘除，lane 现关闭暗置不产生流量；CN lane 自 2026-11-28 起由 `zero_cost_models: [hy4flash-free]` 承接同一语义——credits 型 hold/冷却不 gate 该免费档，账号型信号仍全 lane 生效。lane 隔离不定位具体 auth，也不证明其它 realm 凭据额度健康；不得换号、清状态或主动制造 6008 验证。 |
 | `14003` "模型繁忙"（官方归模型侧；2026-10-20 增补，同日策略更新） | 先分流：双账号同现且面板额度未耗尽支持模型/通道侧故障的判断，但不能单独排除共享出口或账号风控；单账号独现也不足以确认账号受限，须结合完整错误及官方账号状态。停止调用端连点重试（实测 Codex 客户端 5 连发会加深突发画像）。自 2026-10-20 起 admission 对模型侧 14003 **不再置 operator-review hold**：无 `Retry-After` 的 429 只落冷却阶梯首档（当前首档 60 秒，阶梯 60/120/240/480/900 秒；可信上游期限可延长窗口），窗后允许后续请求但不保证上游恢复；账号型信号（`rate_limit_error`/6003/6004/11140/认证类）仍照旧持锁。人工干预仅在整个阶梯走完仍失败时按 [cpa-gateway 人工恢复](cpa-gateway.md#oauth-持久化风险状态的人工恢复) 评估。实测窗口 2026-10-20 为 ~31 分钟自愈（[台账 §6](../change-evidence/20261020-bwg-cpa-v8035-canary.md)）；社区"按出口 IP 聚合"属非官方观测，不将换网络试探作为常规恢复动作。**2026-10-21 缺陷收口**：部署后首波 14003 经 CPA 包装信封（wrapper `type=rate_limit_error`）误置 durable hold——wrapper 标签击败 header 层阶梯改动（生产形状未被原钉住测试覆盖）；已修复并部署（[台账](../change-evidence/20261021-bwg-workbuddy-14003-wrapper-fix.md)，pin `19d64361`）：分类按 wrapper message 内嵌上游 code，wrapper-14003 归阶梯自恢复，裸 rate_limit_error/内嵌 6003/6004 仍持锁。 |
 | `11115 INPUT TOO LONG` | 按官方错误码说明缩短输入或压缩上下文，在本地检查请求大小；该码本身不是账号受限证据，不换号重发超长请求。 |
 | `11128`、超时或普通 5xx | 不循环重发原请求。保留一次脱敏错误上下文并停止自动化；若是请求格式错误，在本地修正后再按官方支持路径评估，不通过反复探测来确认账号状态。**2026-11-17 夜波根因（终态）=wb 上游开始拒绝 OpenAI `developer` 角色**：上游 11128 `Illegal API invocation from an unapproved channel`（HTTP 400）→ CPA 包装 500。判别实验钉死：`role=developer` 同内容必 11128、`role=system` 同内容 200（00:29+08 实测）；Codex Desktop 0.169.0-alpha 把桌面系统提示词作为 developer 角色输入项携带（17.7KB ITEM0），responses→chat 翻译原样透传，故仅 codex 流量中招（凭据、端点、流式、客户端头均被控制探针排除；首夜"按账户标记/客户端指纹"两个中间假设均被证伪）。**修复=`requests.payload.override` 的 `messages.#(role=="developer")#.role: system`**（与 zhipu 1214 修复 f2cad18 同模板，manifest `workbuddy_developer_role_override` 双侧派生，c00ee8e）；诊断期间注意 stream:true 的 curl 状态码不可信（错误在流内、HTTP 仍 200），判流内失败必须对日志或读流体。已知插件日志卫生缺陷：channel-level 行会把 bearer JWT 当 `auth=` 打进日志，向上游反馈时应一并报告。 |

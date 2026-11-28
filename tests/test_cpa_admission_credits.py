@@ -98,11 +98,11 @@ def test_neighbouring_codes_keep_their_existing_meaning(
     assert hold != "account_credits_exhausted"
 
 
-def test_zero_cost_models_are_absent_after_hy4flash_free_retirement(
+def test_zero_cost_models_carry_hy4flash_free_on_cn(
     admission: ModuleType,
 ) -> None:
-    """hy4flash-free retired 2026-11-17 (user directive): the INTL lane now
-    carries no zero-cost models — billing gates every remaining model.
+    """hy4flash-free re-opened 2026-11-28 (user directive): the CN lane
+    carries it as the zero-cost model — billing gates every remaining model.
 
     The list is lane configuration, not a code constant: which models are free
     is provider catalog data that moves without a code change. The zero-cost
@@ -114,7 +114,8 @@ def test_zero_cost_models_are_absent_after_hy4flash_free_retirement(
     )
     assert all(item["name"] != "workbuddy-intl-oauth" for item in loaded["lanes"])
     lane = next(item for item in loaded["lanes"] if item["name"] == "workbuddy-oauth")
-    assert not lane.get("zero_cost_models")
+    # load_config normalizes the lane list into a frozenset; assert by set.
+    assert lane.get("zero_cost_models") == frozenset({"hy4flash-free"})
 
 
 def test_zero_cost_models_default_to_empty_when_absent(admission: ModuleType) -> None:

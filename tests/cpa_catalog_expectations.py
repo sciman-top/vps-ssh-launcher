@@ -105,6 +105,7 @@ ADMISSION_LANE_MODELS = {
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
+        "hy4flash-free",
     ],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": [
@@ -120,14 +121,17 @@ ADMISSION_LANE_MODELS = {
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
     # 2026-11-26: workbuddy-ai-provider (INTL) is formally uninstalled/retired;
-    # only workbuddy-provider (CN) remains active.
-    "cn": ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4"],
+    # only workbuddy-provider (CN) remains active. 2026-11-28 (user
+    # directive): hy4flash-free re-opens as a bare CN pin (x0.00 promo free
+    # tier); the INTL retirement stays untouched.
+    "cn": ["deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.4", "hy4flash-free"],
 }
 WORKBUDDY_PLUGIN_ADMISSION_MODELS = {
     "cn": [
         "deepseek-v4.1-flash",
         "glm-5.3-flash-wb",
         "glm-5.4-wb",
+        "hy4flash-free",
     ],
 }
 

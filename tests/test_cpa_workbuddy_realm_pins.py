@@ -5,10 +5,11 @@ plugin. The client surface now has three cooperating layers, each pinned
 here: (1) the route manifest's plugin_routes declare the upstream ids each
 realm's dynamic catalog must keep narrowed to via oauth-excluded-models,
 (2) the oauth_model_aliases fork bridge maps them to their client names,
-and (3) hy4flash-free is RETIRED (2026-11-17, user directive) while
-deepseek-v4.1-flash-sg stays declared but closed dark — the INTL plugin is
-disabled in config.yaml, so re-enabling is one enabled-flag flip. The CN
-pool carries the paid primary and glm-5.4 (opened 2026-11-26, user directive).
+and (3) deepseek-v4.1-flash-sg stays declared but closed dark — the INTL
+plugin is disabled in config.yaml, so re-enabling is one enabled-flag flip.
+The CN pool carries the paid primary, the -wb aliased GLM pair (opened
+2026-11-26), and hy4flash-free (re-opened as a bare pin 2026-11-28, user
+directive; the x0.00 promo free tier).
 """
 
 from __future__ import annotations
@@ -39,17 +40,19 @@ def test_pin_scripts_reference_the_bridge_not_dead_plugin_keys() -> None:
     assert "models_intl" not in source
 
 
-def test_manifest_cn_plugin_pins_are_the_primary_and_glm54() -> None:
+def test_manifest_cn_plugin_pins_are_the_declared_set() -> None:
     routes = _manifest()["plugin_routes"]
     cn = [r for r in routes if r["realm"] == "cn"]
     assert len(cn) == 1
     assert cn[0]["provider"] == "workbuddy-provider"
-    # The paid primary, plus glm-5.4 opened as a second pin on the same lane
-    # and credential pool (2026-11-26, user directive).
+    # The paid primary, glm-5.4 opened as a second pin on the same lane and
+    # credential pool (2026-11-26, user directive), and hy4flash-free
+    # re-opened as a bare pin (2026-11-28, user directive).
     assert cn[0]["models"] == [
         "deepseek-v4.1-flash",
         "glm-5.3-flash",
         "glm-5.4",
+        "hy4flash-free",
     ]
     assert cn[0]["admission_lane"] == "workbuddy-oauth"
 
@@ -68,21 +71,29 @@ def test_fork_bridge_drops_intl_channel_and_keeps_cn_aliases() -> None:
     assert set(cn_aliases) == {"glm-5.3-flash-wb", "glm-5.4-wb"}
 
 
-def test_hy4flash_free_and_intl_are_retired() -> None:
-    """hy4flash-free and workbuddy-ai-provider (INTL) are retired."""
+def test_hy4free_never_returns_and_intl_stays_retired() -> None:
+    """hy4free's upstream id died with the 2026-11-17 rename and must never
+    resurface; the INTL lane stays retired; hy4flash-free serves on CN since
+    2026-11-28 (user directive)."""
 
     routes = _manifest()
-    assert "hy4flash-free" not in routes["pooled_aliases"]
     assert "hy4free" not in routes["pooled_aliases"]
-    assert "hy4flash-free" not in json.dumps(
-        [r["models"] for r in routes["plugin_routes"]]
-    )
+    assert "hy4flash-free" not in routes["pooled_aliases"]
+    cn_models = [
+        model
+        for route in routes["plugin_routes"]
+        if route["realm"] == "cn"
+        for model in route["models"]
+    ]
+    assert "hy4flash-free" in cn_models
+    assert "hy4free" not in cn_models
+    assert "hy4free" not in json.dumps(routes["plugin_routes"])
     models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_MODELS
     admission_models = cpa_catalog_expectations.WORKBUDDY_PLUGIN_ADMISSION_MODELS
     assert "intl" not in models
     assert "intl" not in admission_models
-    assert "hy4flash-free" not in models["cn"]
-    assert "hy4flash-free" not in admission_models["cn"]
+    assert models["cn"][-1] == "hy4flash-free"
+    assert admission_models["cn"][-1] == "hy4flash-free"
 
 
 def test_legacy_workbuddy_provider_route_is_gone() -> None:
