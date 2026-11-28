@@ -72,6 +72,17 @@
   代同值，缓存行为零回退）；换芯前 12h 自然流量清洗审计 `agent_identity_neutralized=92`、
   `protocol_normalized=94`、`lane_holds=0`。
 
+## doctor 姿态回执（2026-11-28T00:35Z，strict 只读）
+
+- **换代面全绿**：`runtime_binary_hash=MATCH`（repo pin `17dc3d9c` ↔ 容器内 binary）、
+  container/image/listeners/nginx guardrails/syntax 全 OK、七类封号信号 7d=0、
+  `zcode-sidecar-service=enabled-active`（credential-age 6d，observation_only）。
+- **FAIL 仅 `admission-integrity` / `admission-health`**：并行会话提交 `3a17341`
+  （admission 3012/zcode-suspension 加固，10 文件，本地未推送）领先主机一个
+  admission 代际（主机仍 2bc34f73，服务 ActiveEnter=2026-11-27T14:07:06Z，当日无
+  新 guardrails 备份）——即"本地 HEAD 领先主机"的文档化预期姿势。该代际的部署
+  （-Apply/主机级模拟/受控实战/推送）属其收口链，本台账不代执行。
+
 ## 回滚
 
 镜像回 `cli-proxy-api-fork:v8.1.7-gemini-raw-daily-cap-authiso-sigiso`
