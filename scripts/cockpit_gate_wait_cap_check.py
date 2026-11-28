@@ -282,16 +282,32 @@ def run_case(
         for thread in threads:
             thread.join(timeout=1.0)
         missing_holders = [i for i in range(HOLDERS) if i not in results]
+        waiter_result = results.get(99)
         if missing_holders:
-            # The cap verdict is only meaningful when every holder actually
-            # occupied its slot; a silent [None, None, None] made a run with no
-            # real saturation look like a passing measurement.
-            outcome["error"] = (
-                "holders produced no result before the observe limit: "
-                + ",".join(str(i) for i in missing_holders)
-            )
+            # A holder still blocked inside the proxy means its slot stays
+            # occupied; sidecars in the 1.4.x generation never emit bytes to
+            # those sockets, so the threads stay pending past the observe
+            # limit. That is the expected saturation signature when the
+            # waiter actually received the 429 cap response: had any slot
+            # been free, the waiter would have been forwarded to the never-
+            # replying stub and would have no result either. Only treat
+            # missing holders as a failure when the cap verdict is missing.
+            cap_seen = waiter_result is not None and waiter_result.get("status") == 429
+            if cap_seen:
+                outcome["holders_occupied"] = (
+                    "blocked_no_response (waiter 429 proves all slots were held)"
+                )
+            else:
+                # The cap verdict is only meaningful when every holder actually
+                # occupied its slot; a silent [None, None, None] made a run with
+                # no real saturation look like a passing measurement.
+                outcome["error"] = (
+                    "holders produced no result before the observe limit and "
+                    "the waiter never saw the cap: "
+                    + ",".join(str(i) for i in missing_holders)
+                )
         outcome["holders"] = [results.get(i) for i in range(HOLDERS)]
-        outcome["waiter"] = results.get(99)
+        outcome["waiter"] = waiter_result
         capture_diagnostics(outcome, proc, log)
         return outcome
     finally:
