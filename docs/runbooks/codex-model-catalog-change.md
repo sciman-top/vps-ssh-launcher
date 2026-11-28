@@ -134,6 +134,38 @@ experimental context management."）+「模型管理」实例自管目录后，�
   回归清单时自动生效。
 - 勘误：sol 500K/450K 为用户在实例目录手动输入，非任何补丁种子。
 
+### 2026-11-28 钉值丢失事件与修复链
+
+上文「`gpt-6.1-sol` 在 11-28 漂移至 450K」与 glm/deepseek/gemini 回落 128000/115200
+同源于一次钉值丢失：`verify-codex-model-context.ps1` 全量 `CONTEXT_MISMATCH`，
+`cockpit_model_catalog_context.py` 报 `EDITOR_MODEL_COUNT=0`。
+
+- **根因**：Cockpit 1.5.3 的 `write_quick_config_to_config_toml_with_default_mode` 在
+  「当前 Codex 配置」里关闭「实验性模型管理」时，会删除编辑器配置、策略开关
+  `.cockpit-experimental-model-catalog-enabled`、用户自定义标记与受管目录，并移除
+  `model_catalog_json`（源码注释：显式关闭即用户要求回到官方目录）。此后受管目录
+  重建（17:21 产物）已无编辑器可用，只能回落官方默认值。自定义与第三方模型的钉值
+  只存在于模型管理内；要保留 200000/320000 就不能关闭该开关。当次关闭发生在
+  11-28 00:28（编辑器仍在）之后、17:21 重建之前。
+- **取证要点**：同目录 `*.bak` 是 Cockpit 写入时留下的快照（创建时间即写入时间），
+  不是被归档的原件；被删文件的时刻无法由它们的 mtime 推断。
+- **修复链**：正常退出 Cockpit → 恢复两枚标记文件 → 按本仓契约重写编辑器配置
+  （`version` 须为 4，并保留 `migrations` 标记，否则 `gpt-6.1-terra` 可能被迁移
+  逻辑加回）→ `cockpit_model_catalog_context.py --apply` → 重启 Cockpit → 两个
+  校验脚本 PASS。
+- **`--apply` 的边界**：只对齐窗口与压缩阈值，不覆盖默认推理档与展示名；丢失后
+  `gpt-6-luna` 与 `glm-5.3-flash` 的默认推理档均停在 `medium`。关闭 Cockpit 后移走
+  `cockpit-model-catalog.meta.json`（版本戳），下次启动即按「现有清单 + 当前生成
+  逻辑」重建并重新盖章，默认推理档随编辑器恢复（实测仅这两个字段变化）；
+  展示名沿用旧目录，需在界面改。
+- **验收**：修复后真实会话 `deepseek-v4.1-flash` 窗口 950000、两次自动压缩
+  318564 / 318769；真实重建后 `CONTEXT_VERIFY=PASS`。运行中的 Codex 会话仍持
+  旧目录，下次启动才加载。
+- **附带观测**：`gpt-6.2-astra` 单步大输出使输入从 184K 跳到 278063，上游照收，
+  随即压缩——200000 阈值挡不住单步过冲，兜底的是上游实际承载大于 272K 钉值。
+  官方目录中 gpt 族 `context_window` 为 272000/500000（默认工作窗口），
+  `max_context_window` 标称 872000。
+
 ### gpt-6.1-terra 上下文定案（2026-10-27）
 
 **采纳窗口为 272000，日常自动压缩阈值自 2026-11-19 起由 244800 收紧为 200000。** 272000 用于 OAuth 线路的硬容量兼容，200000 预留单轮长工具输出余量并降低 200K+ 区间首字延迟。
