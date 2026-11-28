@@ -859,6 +859,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 "You are a coding assistant.",
                 "Assistant Framework",
                 "You are a coding assistant",
+                "You are a coding agent.",
             ],
         )
         for bad in (

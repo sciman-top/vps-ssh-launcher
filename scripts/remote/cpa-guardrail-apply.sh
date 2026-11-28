@@ -1883,6 +1883,13 @@ antigravity_provider_after["sensitive-patterns-replace"] = [
         "pattern": r"(?i)\byou are (?:an? )?(?:zcode|codebuddy|workbuddy)\b",
         "replacement": "You are a coding assistant",
     },
+    {
+        "pattern": (
+            r"(?i)\byou are a coding agent running in (?:the )?codex cli\b[^.\r\n]*\."
+            r"(?:\s*(?:the )?codex cli is an open[- ]source project led by openai\.)?"
+        ),
+        "replacement": "You are a coding agent.",
+    },
 ]
 oauth_exclusions = oauth_block_after.get("excluded-models")
 if oauth_exclusions is None:

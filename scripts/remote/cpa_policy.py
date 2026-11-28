@@ -218,6 +218,13 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
             "pattern": r"(?i)\byou are (?:an? )?(?:zcode|codebuddy|workbuddy)\b",
             "replacement": "You are a coding assistant",
         },
+        {
+            "pattern": (
+                r"(?i)\byou are a coding agent running in (?:the )?codex cli\b[^.\r\n]*\."
+                r"(?:\s*(?:the )?codex cli is an open[- ]source project led by openai\.)?"
+            ),
+            "replacement": "You are a coding agent.",
+        },
     ],
     # Stabilized device profile: confirmed Claude Code callers contribute their
     # real software profile, persisted per credential (KV 7d TTL), avoiding

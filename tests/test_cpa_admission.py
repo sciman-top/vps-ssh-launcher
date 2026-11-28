@@ -5293,6 +5293,20 @@ def test_neutralize_agent_identity_sentences_keeps_paths_and_product_mentions() 
         neutralize_sentences("You are Codex, an agent based on GPT-6.1-sol, running.")
         == "You are a coding agent, running."
     )
+    assert (
+        neutralize_sentences(
+            "You are a coding agent running in the Codex CLI, a terminal-based "
+            "coding assistant. Codex CLI is an open source project led by OpenAI. "
+            "Keep changes minimal."
+        )
+        == "You are a coding agent. Keep changes minimal."
+    )
+    assert (
+        neutralize_sentences(
+            "you are a coding agent running in Codex CLI, a terminal assistant."
+        )
+        == "you are a coding agent."
+    )
     unchanged = (
         r"Read C:\x\.zcode\skills\a.md and ~/.codex/config.toml; "
         "GPT-5, OpenAI, ChatGPT, ZCode and the Codex CLI"
@@ -5495,6 +5509,215 @@ def test_neutralize_agent_identity_text_covers_workbuddy_and_start_plan_lanes() 
     assert neutralize("/v1/responses", chat, "zhipu-coding-plan") == (chat, {})
     assert neutralize("/v1/responses", chat, None) == (chat, {})
     assert neutralize("/v1/models", chat, "workbuddy-oauth") == (chat, {})
+
+
+def test_neutralize_agent_identity_text_scopes_antigravity_and_billing_attribution() -> (
+    None
+):
+    neutralize = MODULE["neutralize_agent_identity_text"]
+    agy_prompt = (
+        "You are Antigravity, a powerful agentic AI coding assistant designed by "
+        "the Google Deepmind team.\nFollow repository instructions."
+    )
+    agy_chat = json.dumps(
+        {
+            "model": "glm-5.3-flash-wb",
+            "messages": [
+                {"role": "system", "content": agy_prompt},
+                {"role": "user", "content": agy_prompt},
+            ],
+        },
+        ensure_ascii=False,
+    ).encode()
+
+    wb_out, wb_stats = neutralize("/v1/chat/completions", agy_chat, "workbuddy-oauth")
+    wb_parsed = json.loads(wb_out)
+    assert wb_stats == {"system_parts": 1, "user_parts": 1}
+    assert (
+        wb_parsed["messages"][0]["content"]
+        == "You are a coding assistant.\nFollow repository instructions."
+    )
+    assert (
+        wb_parsed["messages"][1]["content"]
+        == "You are a coding assistant.\nFollow repository instructions."
+    )
+
+    zcode_out, zcode_stats = neutralize(
+        "/v1/chat/completions", agy_chat, "zcode-start-plan"
+    )
+    assert zcode_stats == {"system_parts": 1, "user_parts": 1}
+    assert zcode_out == wb_out
+
+    # Antigravity is the native client on `antigravity-oauth`, so its own
+    # identity line stays untouched there.
+    assert neutralize("/v1/chat/completions", agy_chat, "antigravity-oauth") == (
+        agy_chat,
+        {},
+    )
+
+    # Claude Code's per-turn `cch=` billing header is stripped on non-Claude
+    # coding-plan lanes so two turns with different `cch=` hashes serialize to
+    # identical cacheable prefixes without leaving an empty text block.
+    def make_claude_messages(cch: str) -> bytes:
+        return json.dumps(
+            {
+                "model": "glm-5.3-flash-start",
+                "system": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "x-anthropic-billing-header: cc_version=2.1.321.abc; "
+                            f"cc_entrypoint=cli; cch={cch};"
+                        ),
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "You are Claude Code, Anthropic's official CLI for Claude."
+                        ),
+                    },
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Explain x-anthropic-billing-header behavior.",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ).encode()
+
+    turn1_out, turn1_stats = neutralize(
+        "/v1/messages", make_claude_messages("1111aaaa"), "zcode-start-plan"
+    )
+    turn2_out, turn2_stats = neutralize(
+        "/v1/messages", make_claude_messages("2222bbbb"), "zcode-start-plan"
+    )
+    assert turn1_stats == {"system_parts": 2}
+    assert turn2_stats == {"system_parts": 2}
+    assert turn1_out == turn2_out
+    parsed_turn = json.loads(turn1_out)
+    assert parsed_turn["system"] == [
+        {"type": "text", "text": "You are a coding assistant."}
+    ]
+    assert (
+        parsed_turn["messages"][0]["content"]
+        == "Explain x-anthropic-billing-header behavior."
+    )
+
+
+def test_chatgpt_oauth_strips_foreign_client_headers_and_preserves_codex_headers() -> (
+    None
+):
+    filter_headers = MODULE["filter_upstream_request_headers"]
+    foreign_raw = {
+        "Authorization": "Bearer local-cpa-key",
+        "x-api-key": "local-cpa-key",
+        "User-Agent": "claude-cli/2.1.321 (external, cli)",
+        "Originator": "antigravity",
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+        "anthropic-version": "2023-06-01",
+        "x-claude-code-session-id": "sess-1",
+        "x-stainless-lang": "js",
+        "x-zcode-session": "z-1",
+        "Accept-Encoding": "gzip, zstd",
+        "Content-Type": "application/json",
+    }
+    filtered_chatgpt = filter_headers(foreign_raw, "chatgpt-oauth")
+    assert filtered_chatgpt == {
+        "Authorization": "Bearer local-cpa-key",
+        "x-api-key": "local-cpa-key",
+        "Content-Type": "application/json",
+    }
+
+    # Other lanes keep caller User-Agent / SDK headers (except Accept-Encoding).
+    filtered_wb = filter_headers(foreign_raw, "workbuddy-oauth")
+    assert filtered_wb["User-Agent"] == "claude-cli/2.1.321 (external, cli)"
+    assert filtered_wb["anthropic-version"] == "2023-06-01"
+    assert "Accept-Encoding" not in filtered_wb
+
+    # Official Codex Desktop / CLI headers pass through verbatim on chatgpt-oauth.
+    codex_raw = {
+        "Authorization": "Bearer local-cpa-key",
+        "Originator": "Codex Desktop",
+        "User-Agent": "Codex Desktop/0.116.0 (Windows 10.0.26100; x86_64)",
+        "Session_id": "019a0000-0000-7000-8000-000000000001",
+    }
+    assert filter_headers(codex_raw, "chatgpt-oauth") == codex_raw
+
+    captured_headers: list[dict[str, str]] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            _ = self.rfile.read(int(self.headers["Content-Length"]))
+            captured_headers.append({k.lower(): v for k, v in self.headers.items()})
+            data = b'{"status":"completed","output":[]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    body = json.dumps(
+        {
+            "model": "gpt-6-luna",
+            "store": False,
+            "stream": False,
+            "input": [{"role": "user", "content": "ping"}],
+        }
+    ).encode()
+    upstream, _ = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, _ = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    try:
+        conn1 = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        conn1.request(
+            "POST",
+            "/v1/responses",
+            body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "claude-cli/2.1.321 (external, cli)",
+                "anthropic-beta": "claude-code-20250219",
+                "x-stainless-runtime": "node",
+            },
+        )
+        resp1 = conn1.getresponse()
+        resp1.read()
+        conn1.close()
+        assert resp1.status == 200
+
+        conn2 = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        conn2.request(
+            "POST",
+            "/v1/responses",
+            body,
+            headers={
+                "Content-Type": "application/json",
+                "Originator": "codex_cli_rs",
+                "User-Agent": "codex_cli_rs/0.116.0 (Windows 10.0.26100; x86_64)",
+            },
+        )
+        resp2 = conn2.getresponse()
+        resp2.read()
+        conn2.close()
+        assert resp2.status == 200
+
+        assert len(captured_headers) == 2
+        assert "user-agent" not in captured_headers[0]
+        assert "anthropic-beta" not in captured_headers[0]
+        assert "x-stainless-runtime" not in captured_headers[0]
+        assert captured_headers[1]["originator"] == "codex_cli_rs"
+        assert captured_headers[1]["user-agent"].startswith("codex_cli_rs/0.116.0")
+    finally:
+        for service in (server, upstream):
+            service.shutdown()
 
 
 @pytest.mark.parametrize(

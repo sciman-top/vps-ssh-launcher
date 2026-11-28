@@ -65,6 +65,52 @@ CPA_TRACE_HEADERS = {"x-cpa-request-id", "x-cpa-admission-reason"}
 # "Stream ended without finish_reason"/"missing_terminal" while curl and codex
 # passed). Strip it before CPA instead of forwarding it.
 STRIPPED_REQUEST_HEADERS = {"accept-encoding"}
+_CHATGPT_OAUTH_STRIPPED_HEADER_PREFIXES = (
+    "anthropic-",
+    "x-claude-",
+    "x-stainless-",
+    "x-zcode-",
+)
+
+
+def _is_official_codex_header_value(value: str) -> bool:
+    return "codex" in value.lower()
+
+
+def filter_upstream_request_headers(
+    raw_headers: Any, lane_name: str | None
+) -> dict[str, str]:
+    """Filter downstream request headers before forwarding to loopback CPA.
+
+    On `chatgpt-oauth`, `upstream.codex.disable-codex-cloaking=true` lets
+    official Codex clients keep their native `Originator` and `User-Agent`,
+    which means CPA's `ensureHeaderWithConfigPrecedence` copies any non-empty
+    downstream `User-Agent` / `Originator` verbatim onto the ChatGPT Plus OAuth
+    request. Strip non-Codex `User-Agent` / `Originator` and cross-ecosystem
+    SDK headers on that lane so CPA falls back to its built-in Codex defaults
+    instead of leaking foreign agent identities (`claude-cli`, `antigravity`,
+    `curl`, `python-httpx`, `undici`) to `chatgpt.com/backend-api/codex`.
+    """
+    headers: dict[str, str] = {}
+    for key, value in raw_headers.items():
+        lower = key.lower()
+        if (
+            lower in HOP_BY_HOP_HEADERS
+            or lower in CPA_TRACE_HEADERS
+            or lower in STRIPPED_REQUEST_HEADERS
+            or lower in {"host", "content-length"}
+        ):
+            continue
+        if lane_name == "chatgpt-oauth":
+            if lower.startswith(_CHATGPT_OAUTH_STRIPPED_HEADER_PREFIXES):
+                continue
+            if lower in {
+                "user-agent",
+                "originator",
+            } and not _is_official_codex_header_value(value):
+                continue
+        headers[key] = value
+    return headers
 
 
 def diagnostic_hash(value: str | None) -> str:
@@ -3531,6 +3577,19 @@ AGENT_IDENTITY_SENTENCES = (
         "You are a coding assistant",
     ),
     (
+        # `openai/codex` non-GPT fallback template (`codex-rs/core/prompt.md`),
+        # selected by Codex CLI whenever the target model is non-GPT (`gemini-*`,
+        # `glm-*`, `deepseek-*`). Confirmed 11128 / 405-3012 / Antigravity
+        # attribution trigger; swallowing the optional OpenAI second sentence
+        # keeps punctuation whole.
+        re.compile(
+            r"\byou are a coding agent running in (?:the )?codex cli\b[^.\r\n]*\."
+            r"(?:\s*(?:the )?codex cli is an open[- ]source project led by openai\.)?",
+            re.IGNORECASE,
+        ),
+        "You are a coding agent.",
+    ),
+    (
         # The optional model marker is a whole model id ("GPT-5.6-terra",
         # "GPT-5.1-codex-max"): stopping at the digits left a dangling
         # "-terra," after the replacement.
@@ -3541,6 +3600,32 @@ AGENT_IDENTITY_SENTENCES = (
         ),
         "You are a coding agent",
     ),
+)
+# Antigravity is the native client on `antigravity-oauth`, so its self-intro is
+# rewritten only when routed onto non-Antigravity coding-plan lanes (neither
+# `workbuddy-provider` nor `zcode-proxy` matches "designed by the Google
+# Deepmind team").
+_NON_ANTIGRAVITY_CODING_PLAN_LANES = frozenset(
+    {"workbuddy-oauth", "workbuddy-intl-oauth", "zcode-start-plan"}
+)
+_ANTIGRAVITY_SELF_INTRO_SENTENCES = (
+    (
+        re.compile(
+            r"\byou are antigravity,\s*a powerful agentic ai (?:coding )?assistant"
+            r" designed by the google deepmind team\b[^.\r\n]*",
+            re.IGNORECASE,
+        ),
+        "You are a coding assistant",
+    ),
+)
+# Claude Code injects `x-anthropic-billing-header: cc_version=...; cch=<hash>;`
+# at the front of `system`. On non-Claude lanes translated via OpenAICompat
+# (`zcode-start-plan`) or user/developer blocks, CPA does not run
+# `StripClaudeCodeAttributionSystem`, leaking Anthropic billing metadata and
+# busting upstream prompt caches on every turn via the per-request `cch=` hash.
+_CLAUDE_BILLING_HEADER_LINE = re.compile(
+    r"(?m)^[ \t]*x-anthropic-billing-header:\s*cc_version=[^\r\n]*(?:\r?\n)?",
+    re.IGNORECASE,
 )
 _ANTIGRAVITY_HANDOFF_PREAMBLE = "another language model started to solve this problem"
 # Lane -> message roles whose text gets the identity sentence rewritten.
@@ -3569,6 +3654,19 @@ def neutralize_agent_identity_sentences(text: str) -> str:
     return text
 
 
+def _neutralize_lane_identity_sentences(text: str, lane_name: str) -> str:
+    text = _CLAUDE_BILLING_HEADER_LINE.sub("", text)
+    if lane_name in _NON_ANTIGRAVITY_CODING_PLAN_LANES:
+        for pattern, replacement in _ANTIGRAVITY_SELF_INTRO_SENTENCES:
+            text = pattern.sub(
+                lambda match, target=replacement: _as_matched_case(
+                    match.group(0), target
+                ),
+                text,
+            )
+    return neutralize_agent_identity_sentences(text)
+
+
 def neutralize_agent_identity_text(
     path: str, body: bytes, lane_name: str | None
 ) -> tuple[bytes, dict[str, int]]:
@@ -3579,7 +3677,8 @@ def neutralize_agent_identity_text(
     identity sentence inside it; tool output, assistant turns, and every other
     lane keep their bytes. A part that does not change is not counted.
     """
-    roles = _AGENT_IDENTITY_TEXT_ROLES.get(lane_name or "")
+    lane = lane_name or ""
+    roles = _AGENT_IDENTITY_TEXT_ROLES.get(lane)
     if not roles:
         return body, {}
     payload = parsed_json_body(body)
@@ -3588,7 +3687,7 @@ def neutralize_agent_identity_text(
     stats: dict[str, int] = {}
 
     def swap(text: str, role: str) -> str:
-        replaced = neutralize_agent_identity_sentences(text)
+        replaced = _neutralize_lane_identity_sentences(text, lane)
         if replaced != text:
             handoff = role == "user" and text.lstrip().lower().startswith(
                 _ANTIGRAVITY_HANDOFF_PREAMBLE
@@ -3601,13 +3700,24 @@ def neutralize_agent_identity_text(
         if isinstance(content, str):
             return swap(content, role)
         if isinstance(content, list):
+            kept_parts: list[Any] = []
+            dropped_last_part: dict[str, Any] | None = None
             for part in content:
                 if (
                     isinstance(part, dict)
                     and isinstance(part.get("text"), str)
                     and part.get("type") in (None, "text", "input_text")
                 ):
-                    part["text"] = swap(part["text"], role)
+                    original_text = part["text"]
+                    updated_text = swap(original_text, role)
+                    part["text"] = updated_text
+                    if original_text and updated_text == "":
+                        dropped_last_part = part
+                        continue
+                kept_parts.append(part)
+            if not kept_parts and dropped_last_part is not None and role != "system":
+                kept_parts.append(dropped_last_part)
+            content[:] = kept_parts
         return content
 
     def rewrite_message(message: Any) -> None:
@@ -3638,8 +3748,12 @@ def neutralize_agent_identity_text(
         for message in messages:
             rewrite_message(message)
     elif route.endswith("/messages"):
-        if "system" in roles:
-            payload["system"] = rewrite_content(payload.get("system"), "system")
+        if "system" in roles and "system" in payload:
+            rewritten_system = rewrite_content(payload.get("system"), "system")
+            if rewritten_system in ("", []):
+                payload.pop("system", None)
+            else:
+                payload["system"] = rewritten_system
         messages = payload.get("messages")
         if not isinstance(messages, list):
             return body, {}
@@ -6059,14 +6173,7 @@ class Handler(BaseHTTPRequestHandler):
             conn = http.client.HTTPConnection(
                 config["upstream_host"], config["upstream_port"], timeout=300
             )
-            headers = {
-                key: value
-                for key, value in self.headers.items()
-                if key.lower() not in HOP_BY_HOP_HEADERS
-                and key.lower() not in CPA_TRACE_HEADERS
-                and key.lower() not in STRIPPED_REQUEST_HEADERS
-                and key.lower() not in {"host", "content-length"}
-            }
+            headers = filter_upstream_request_headers(self.headers, lane_name)
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
             # The body may have been rewritten above (identity neutralisation,
             # agent-payload mapping), so the client's own length is stale and
